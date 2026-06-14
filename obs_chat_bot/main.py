@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from . import __version__
-
-
-DATA_DIR = Path("data")
+from .config import ConfigError, load_config
 
 
 def configure_logging() -> None:
@@ -20,11 +17,20 @@ def main() -> int:
     configure_logging()
     logger = logging.getLogger("obs_chat_bot")
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     logger.info("Starting obsChatBot %s", __version__)
-    logger.info("Data directory: %s", DATA_DIR.resolve())
-    logger.info("Minimal Python project structure is ready")
+
+    try:
+        config = load_config()
+    except ConfigError as error:
+        logger.error("Configuration error: %s", error)
+        return 2
+
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+
+    for key, value in config.safe_summary().items():
+        logger.info("Config %s: %s", key, value)
+
+    logger.info("Data directory: %s", config.data_dir.resolve())
+    logger.info("Configuration is ready")
 
     return 0
-
