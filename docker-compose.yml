@@ -1,0 +1,9 @@
+services:
+  bot:
+    build:
+      context: .
+    image: obs-chat-bot:dev
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
