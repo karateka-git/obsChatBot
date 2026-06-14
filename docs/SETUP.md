@@ -9,12 +9,15 @@
 - GitHub account и доступ к репозиторию проекта.
 - Python 3.11 или 3.12 для проекта.
 
+Для Windows и Docker Desktop нужен WSL2, чтобы запускать Linux-контейнеры вроде `python:3.12-slim`.
+
 Python 3.14 может быть установлен параллельно, но проектную среду лучше держать на 3.12, пока ключевые зависимости не подтверждены на 3.14.
 
 Проверка после установки:
 
 - `docker --version`;
 - `docker compose version`;
+- `wsl --status` на Windows;
 - `git --version`;
 - `python --version` или `py --version`.
 - `py -3.12 --version`, если на машине установлено несколько версий Python.
