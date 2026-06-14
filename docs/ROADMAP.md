@@ -440,6 +440,8 @@
 
 Этап 1 завершён: матрица исследования обновлена в `docs/STACK_RESEARCH.md`, решение Python-first и Telegram-only MVP записано в `docs/DECISIONS.md`.
 
-Этап 2.1 в основном завершён: Git, GitHub CLI, Python 3.12, Docker Desktop и Docker Compose установлены; GitHub remote подключён к приватному репозиторию `karateka-git/obsChatBot`.
+Этап 2.1 завершён: Git, GitHub CLI, Python 3.12, Docker Desktop и Docker Compose установлены; GitHub remote подключён к публичному репозиторию `karateka-git/obsChatBot`.
 
-Следующий шаг: начать Этап 2.2 и создать минимальную структуру Python-проекта.
+Этап 2.2 завершён: добавлены пакет приложения, минимальная точка входа, файл зависимостей, `.gitignore` и папка `data/`.
+
+Следующий шаг: начать Этап 2.3 и добавить конфигурацию приложения с `.env.example`.
