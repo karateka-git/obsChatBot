@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sqlite3
 import tempfile
 from pathlib import Path
 
 from . import __version__
 from .config import ConfigError, load_config
+from .database import connect_database
 
 
 def configure_logging() -> None:
@@ -42,24 +44,47 @@ def main() -> int:
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
     if args.healthcheck:
-        return run_healthcheck(config.data_dir, logger)
+        return run_healthcheck(config.database_path, logger)
 
     for key, value in config.safe_summary().items():
         logger.info("Config %s: %s", key, value)
 
     logger.info("Data directory: %s", config.data_dir.resolve())
+
+    if not check_database(config.database_path, logger):
+        return 1
+
     logger.info("Configuration is ready")
 
     return 0
 
 
-def run_healthcheck(data_dir: Path, logger: logging.Logger) -> int:
+def run_healthcheck(database_path: Path, logger: logging.Logger) -> int:
     try:
-        with tempfile.NamedTemporaryFile(dir=data_dir, prefix="health-", delete=True):
+        with tempfile.NamedTemporaryFile(
+            dir=database_path.parent,
+            prefix="health-",
+            delete=True,
+        ):
             pass
     except OSError as error:
         logger.error("Health check failed: data directory is not writable: %s", error)
         return 1
 
+    if not check_database(database_path, logger):
+        return 1
+
     logger.info("Health check passed")
     return 0
+
+
+def check_database(database_path: Path, logger: logging.Logger) -> bool:
+    try:
+        with connect_database(database_path):
+            pass
+    except (OSError, sqlite3.Error) as error:
+        logger.error("Database connection failed: %s", error)
+        return False
+
+    logger.info("Database connection is ready")
+    return True
