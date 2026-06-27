@@ -1,0 +1,17 @@
+"""Тесты постоянного SQLite smoke-сценария."""
+
+import unittest
+
+from obs_chat_bot.smoke import run_sqlite_smoke
+
+
+class SQLiteSmokeTest(unittest.TestCase):
+    """Проверяет SQLite-контур на временной базе."""
+
+    def test_sqlite_smoke_succeeds(self) -> None:
+        """Smoke-сценарий завершается без ошибок."""
+        run_sqlite_smoke()
+
+
+if __name__ == "__main__":
+    unittest.main()

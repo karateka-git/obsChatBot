@@ -80,3 +80,11 @@ docker compose run --rm catcher python -m obs_chat_bot --healthcheck
 ```
 
 Команда проверяет конфигурацию, доступность папки `data/` для записи и подключение к SQLite с обязательными настройками. После проверки временный контейнер удаляется.
+
+## 7. Проверить SQLite-контур
+
+```powershell
+docker compose run --rm catcher python -m obs_chat_bot --sqlite-smoke
+```
+
+Команда создаёт временную базу, применяет миграции, повторно проверяет их идемпотентность, записывает тестовую статью через `ArticleRepository` и читает её обратно. Рабочая база `data/app.db` не изменяется.
