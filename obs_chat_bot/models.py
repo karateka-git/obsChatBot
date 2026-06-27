@@ -6,6 +6,8 @@ from enum import StrEnum
 
 
 class ArticleStatus(StrEnum):
+    """Описывает этап обработки сохранённой статьи."""
+
     # Запись создана, обработка ещё не началась.
     NEW = "new"
     # Страница загружается по исходному URL.
@@ -26,6 +28,8 @@ class ArticleStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Article:
+    """Представляет статью независимо от способа её хранения."""
+
     source_url: str
     normalized_url: str
     id: int | None = None
