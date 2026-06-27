@@ -1,7 +1,7 @@
 CREATE TABLE articles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_url TEXT NOT NULL,
-    url_hash TEXT NOT NULL UNIQUE,
+    normalized_url TEXT NOT NULL UNIQUE,
     title TEXT,
     cleaned_text TEXT,
     text_hash TEXT,
