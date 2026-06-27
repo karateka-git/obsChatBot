@@ -9,6 +9,7 @@ from pathlib import Path
 from . import __version__
 from .config import ConfigError, load_config
 from .database import connect_database
+from .migration_runner import MigrationError, apply_migrations
 
 
 def configure_logging() -> None:
@@ -51,7 +52,7 @@ def main() -> int:
 
     logger.info("Data directory: %s", config.data_dir.resolve())
 
-    if not check_database(config.database_path, logger):
+    if not initialize_database(config.database_path, logger):
         return 1
 
     logger.info("Configuration is ready")
@@ -85,6 +86,24 @@ def check_database(database_path: Path, logger: logging.Logger) -> bool:
     except (OSError, sqlite3.Error) as error:
         logger.error("Database connection failed: %s", error)
         return False
+
+    logger.info("Database connection is ready")
+    return True
+
+
+def initialize_database(database_path: Path, logger: logging.Logger) -> bool:
+    try:
+        with connect_database(database_path) as connection:
+            applied = apply_migrations(connection)
+    except (MigrationError, OSError, sqlite3.Error) as error:
+        logger.error("Database initialization failed: %s", error)
+        return False
+
+    for migration in applied:
+        logger.info("Applied database migration: %s", migration.name)
+
+    if not applied:
+        logger.info("Database schema is up to date")
 
     logger.info("Database connection is ready")
     return True
