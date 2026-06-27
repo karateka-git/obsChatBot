@@ -45,14 +45,14 @@ docker compose up --build
 Image obs-chat-bot:dev Built
 Network ... Created
 Container ... Created
-Attaching to bot-1
+Attaching to catcher-1
 ```
 
-Строки с префиксом `bot-1 |` и именем `obs_chat_bot` выводит уже наше Python-приложение:
+Строки с префиксом `catcher-1 |` и именем `obs_chat_bot` выводит уже наше Python-приложение:
 
 ```text
-bot-1 | ... INFO obs_chat_bot: Starting obsChatBot 0.1.0
-bot-1 | ... INFO obs_chat_bot: Configuration is ready
+catcher-1 | ... INFO obs_chat_bot: Starting obsChatBot 0.1.0
+catcher-1 | ... INFO obs_chat_bot: Configuration is ready
 ```
 
 Сообщение `exited with code 0` означает, что приложение завершилось без ошибки.
@@ -76,7 +76,7 @@ docker compose ps -a
 ## 6. Выполнить healthcheck
 
 ```powershell
-docker compose run --rm bot python -m obs_chat_bot --healthcheck
+docker compose run --rm catcher python -m obs_chat_bot --healthcheck
 ```
 
 Команда запускает проверку конфигурации и доступности папки `data/` для записи. После проверки временный контейнер удаляется.

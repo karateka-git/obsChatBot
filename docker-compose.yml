@@ -1,5 +1,5 @@
 services:
-  bot:
+  catcher:
     build:
       context: .
     image: obs-chat-bot:dev
