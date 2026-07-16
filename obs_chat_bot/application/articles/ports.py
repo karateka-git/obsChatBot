@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from obs_chat_bot.application.articles.extracted import ExtractedArticle
 from obs_chat_bot.application.articles.html import ArticleHtml
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
@@ -62,4 +63,21 @@ class ArticleHtmlFetcher(Protocol):
 
         Raises:
             ArticleFetchError: Если страницу не удалось загрузить.
+        """
+
+
+class ArticleTextExtractor(Protocol):
+    """Описывает извлечение чистого текста статьи из HTML."""
+
+    def extract(self, html: ArticleHtml) -> ExtractedArticle:
+        """Извлекает содержательный текст статьи.
+
+        Args:
+            html: HTML страницы статьи.
+
+        Returns:
+            Очищенный текст статьи и найденные метаданные.
+
+        Raises:
+            ArticleExtractionError: Если текст статьи извлечь не удалось.
         """
