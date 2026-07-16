@@ -95,6 +95,7 @@ class ProcessingErrorRecorder(Protocol):
         self,
         *,
         article_id: int | None,
+        incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error_type: str,
         error_message: str,
@@ -103,6 +104,8 @@ class ProcessingErrorRecorder(Protocol):
 
         Args:
             article_id: ID статьи, если она уже была создана.
+            incoming_message_id: ID входящего сообщения, если ошибка связана
+                с конкретным сообщением пользователя.
             stage: Этап обработки, на котором произошла ошибка.
             error_type: Имя класса ошибки.
             error_message: Текст ошибки.

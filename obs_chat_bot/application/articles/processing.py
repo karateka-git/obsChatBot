@@ -24,6 +24,7 @@ class ProcessArticleUrlCommand:
     """Команда обработки одной ссылки на статью."""
 
     source_url: str
+    incoming_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +84,7 @@ class ProcessArticleUrlUseCase:
         except ValueError as error:
             self._record_error(
                 article_id=None,
+                incoming_message_id=command.incoming_message_id,
                 stage=ProcessingStage.NORMALIZATION,
                 error=error,
             )
@@ -96,7 +98,11 @@ class ProcessArticleUrlUseCase:
                 extracted=False,
             )
 
-        article = existing or self._create_article(command.source_url, normalized_url)
+        article = existing or self._create_article(
+            command.source_url,
+            normalized_url,
+            command.incoming_message_id,
+        )
         created = existing is None
         article_id = _require_article_id(article)
 
@@ -104,13 +110,23 @@ class ProcessArticleUrlUseCase:
             self._article_repository.update_status(article_id, ArticleStatus.FETCHING)
             html = self._html_fetcher.fetch(article.source_url)
         except ArticleFetchError as error:
-            self._mark_failed_and_record(article_id, ProcessingStage.FETCHING, error)
+            self._mark_failed_and_record(
+                article_id,
+                command.incoming_message_id,
+                ProcessingStage.FETCHING,
+                error,
+            )
             raise ProcessArticleUrlError(f"Could not fetch article HTML: {error}") from error
 
         try:
             extracted = self._text_extractor.extract(html)
         except ArticleExtractionError as error:
-            self._mark_failed_and_record(article_id, ProcessingStage.EXTRACTION, error)
+            self._mark_failed_and_record(
+                article_id,
+                command.incoming_message_id,
+                ProcessingStage.EXTRACTION,
+                error,
+            )
             raise ProcessArticleUrlError(f"Could not extract article text: {error}") from error
 
         text_hash = _build_text_hash(extracted.cleaned_text)
@@ -127,6 +143,7 @@ class ProcessArticleUrlUseCase:
             )
             self._record_error(
                 article_id=article_id,
+                incoming_message_id=command.incoming_message_id,
                 stage=ProcessingStage.STORAGE,
                 error=error,
             )
@@ -138,7 +155,12 @@ class ProcessArticleUrlUseCase:
             extracted=True,
         )
 
-    def _create_article(self, source_url: str, normalized_url: str) -> Article:
+    def _create_article(
+        self,
+        source_url: str,
+        normalized_url: str,
+        incoming_message_id: int | None,
+    ) -> Article:
         """Создаёт новую статью в статусе `new`."""
         try:
             return self._article_repository.create(
@@ -147,6 +169,7 @@ class ProcessArticleUrlUseCase:
         except Exception as error:
             self._record_error(
                 article_id=None,
+                incoming_message_id=incoming_message_id,
                 stage=ProcessingStage.STORAGE,
                 error=error,
             )
@@ -155,17 +178,24 @@ class ProcessArticleUrlUseCase:
     def _mark_failed_and_record(
         self,
         article_id: int,
+        incoming_message_id: int | None,
         stage: ProcessingStage,
         error: Exception,
     ) -> None:
         """Переводит статью в `failed` и сохраняет диагностическую ошибку."""
         self._article_repository.update_status(article_id, ArticleStatus.FAILED)
-        self._record_error(article_id=article_id, stage=stage, error=error)
+        self._record_error(
+            article_id=article_id,
+            incoming_message_id=incoming_message_id,
+            stage=stage,
+            error=error,
+        )
 
     def _record_error(
         self,
         *,
         article_id: int | None,
+        incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error: Exception,
     ) -> None:
@@ -175,6 +205,7 @@ class ProcessArticleUrlUseCase:
 
         self._error_recorder.record(
             article_id=article_id,
+            incoming_message_id=incoming_message_id,
             stage=stage,
             error_type=type(error).__name__,
             error_message=str(error),

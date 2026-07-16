@@ -142,6 +142,7 @@ class TelegramMessageProcessingTest(unittest.TestCase):
             use_case.commands[0].source_url,
             "https://example.com/article?utm_source=tg",
         )
+        self.assertEqual(use_case.commands[0].incoming_message_id, 1)
 
     def test_process_incoming_message_reports_existing_article(self) -> None:
         """Повторная ссылка получает отдельный текст ответа."""

@@ -146,7 +146,14 @@ def process_incoming_message(
         saved_message = incoming_message_repository.save(incoming_message)
 
     try:
-        result = article_url_use_case.execute(ProcessArticleUrlCommand(source_url=url))
+        result = article_url_use_case.execute(
+            ProcessArticleUrlCommand(
+                source_url=url,
+                incoming_message_id=(
+                    saved_message.id if saved_message is not None else None
+                ),
+            )
+        )
     except ProcessArticleUrlError as error:
         logger.error("Telegram article processing failed: %s", error)
         return "Не удалось обработать ссылку. Я сохранил ошибку для диагностики."

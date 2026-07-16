@@ -145,18 +145,21 @@ class FakeProcessingErrorRecorder:
     """In-memory recorder ошибок pipeline."""
 
     def __init__(self) -> None:
-        self.records: list[tuple[int | None, ProcessingStage, str, str]] = []
+        self.records: list[tuple[int | None, int | None, ProcessingStage, str, str]] = []
 
     def record(
         self,
         *,
         article_id: int | None,
+        incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error_type: str,
         error_message: str,
     ) -> None:
         """Сохраняет ошибку в памяти."""
-        self.records.append((article_id, stage, error_type, error_message))
+        self.records.append(
+            (article_id, incoming_message_id, stage, error_type, error_message)
+        )
 
 
 class ProcessArticleUrlUseCaseTest(unittest.TestCase):
@@ -236,8 +239,8 @@ class ProcessArticleUrlUseCaseTest(unittest.TestCase):
         article = repository.find_by_normalized_url("https://example.com/post")
         self.assertIsNotNone(article)
         self.assertEqual(article.status, ArticleStatus.FAILED)
-        self.assertEqual(recorder.records[0][1], ProcessingStage.FETCHING)
-        self.assertEqual(recorder.records[0][2], "ArticleFetchError")
+        self.assertEqual(recorder.records[0][2], ProcessingStage.FETCHING)
+        self.assertEqual(recorder.records[0][3], "ArticleFetchError")
 
     def test_execute_marks_failed_when_extraction_fails(self) -> None:
         """Ошибка извлечения переводит статью в failed и записывает диагностику."""
@@ -256,8 +259,8 @@ class ProcessArticleUrlUseCaseTest(unittest.TestCase):
         article = repository.find_by_normalized_url("https://example.com/post")
         self.assertIsNotNone(article)
         self.assertEqual(article.status, ArticleStatus.FAILED)
-        self.assertEqual(recorder.records[0][1], ProcessingStage.EXTRACTION)
-        self.assertEqual(recorder.records[0][2], "ArticleExtractionError")
+        self.assertEqual(recorder.records[0][2], ProcessingStage.EXTRACTION)
+        self.assertEqual(recorder.records[0][3], "ArticleExtractionError")
 
     def test_execute_records_normalization_error(self) -> None:
         """Некорректный URL не создаёт статью и записывает ошибку нормализации."""
@@ -275,7 +278,28 @@ class ProcessArticleUrlUseCaseTest(unittest.TestCase):
 
         self.assertEqual(repository.find_by_text_hash("anything"), [])
         self.assertEqual(recorder.records[0][0], None)
-        self.assertEqual(recorder.records[0][1], ProcessingStage.NORMALIZATION)
+        self.assertEqual(recorder.records[0][2], ProcessingStage.NORMALIZATION)
+
+    def test_execute_records_incoming_message_id_on_error(self) -> None:
+        """Ошибка pipeline сохраняет ID входящего сообщения для диагностики."""
+        repository = FakeArticleRepository()
+        recorder = FakeProcessingErrorRecorder()
+        use_case = ProcessArticleUrlUseCase(
+            article_repository=repository,
+            html_fetcher=FakeHtmlFetcher(ArticleFetchError("offline")),
+            text_extractor=FakeTextExtractor(),
+            error_recorder=recorder,
+        )
+
+        with self.assertRaises(ProcessArticleUrlError):
+            use_case.execute(
+                ProcessArticleUrlCommand(
+                    source_url="https://example.com/post",
+                    incoming_message_id=42,
+                )
+            )
+
+        self.assertEqual(recorder.records[0][1], 42)
 
 
 if __name__ == "__main__":
