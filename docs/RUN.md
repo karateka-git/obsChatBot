@@ -22,6 +22,12 @@
 .\scripts\open-process-url.cmd "https://habr.com/ru/articles/198682/"
 ```
 
+Запустить Telegram-бота:
+
+```powershell
+.\scripts\open-telegram-bot.cmd
+```
+
 Если отдельное окно не нужно, можно запускать `.ps1`-версии в текущей консоли:
 
 ```powershell
@@ -36,19 +42,11 @@
 - `проверь healthcheck`;
 - `проверь pipeline`;
 - `проверь всё`;
-- `проверь ссылку`;
-- `проверь ссылку https://habr.com/ru/articles/198682/`.
+- `проверь ссылку` (если URL не указан, используется `https://habr.com/ru/articles/198682/`);
+- `проверь ссылку https://habr.com/ru/articles/198682/`;
 - `запусти telegram`.
 
-Если в команде `проверь ссылку` не указать URL, используется ссылка по умолчанию: `https://habr.com/ru/articles/198682/`.
-
 Окно PowerShell останется открытым после завершения команды.
-
-Запустить Telegram-бота напрямую:
-
-```powershell
-.\scripts\open-telegram-bot.cmd
-```
 
 ## 1. Перейти в папку проекта
 
