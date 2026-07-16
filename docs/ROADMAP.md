@@ -625,4 +625,6 @@
 
 Этап 4 завершён: общий article pipeline готов к подключению Telegram adapter.
 
-Следующий шаг: начать Этап 5 и подключить Telegram adapter.
+Этап 5.1 завершён: добавлен пакет `presentation.telegram`, минимальный Telegram polling adapter через `aiogram`, CLI-команда `--telegram-bot` и скрипт запуска Telegram-бота в отдельном окне PowerShell.
+
+Следующий шаг: начать Этап 5.2 и добавить модель входящего сообщения с извлечением URL из текста.

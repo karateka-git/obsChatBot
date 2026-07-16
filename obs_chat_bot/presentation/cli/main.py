@@ -24,6 +24,7 @@ from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migr
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
+from obs_chat_bot.presentation.telegram.bot import TelegramBotError, run_telegram_bot
 from obs_chat_bot.presentation.cli.smoke import SQLiteSmokeError, run_sqlite_smoke
 from obs_chat_bot.presentation.cli.smoke import PipelineSmokeError, run_pipeline_smoke
 
@@ -65,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         metavar="URL",
         help="Run article pipeline for one URL, then exit.",
     )
+    mode.add_argument(
+        "--telegram-bot",
+        action="store_true",
+        help="Start Telegram bot polling.",
+    )
     return parser.parse_args()
 
 
@@ -105,6 +111,12 @@ def main() -> int:
         return run_process_url_command(
             database_path=config.database_path,
             source_url=args.process_url,
+            logger=logger,
+        )
+
+    if args.telegram_bot:
+        return run_telegram_bot_command(
+            token=config.telegram_bot_token,
             logger=logger,
         )
 
@@ -290,3 +302,29 @@ def create_process_article_url_use_case(
         text_extractor=TrafilaturaArticleTextExtractor(),
         error_recorder=SQLiteProcessingErrorRecorder(connection),
     )
+
+
+def run_telegram_bot_command(
+    *,
+    token: str,
+    logger: logging.Logger,
+) -> int:
+    """Запускает Telegram adapter как CLI-команду.
+
+    Args:
+        token: Telegram Bot API token.
+        logger: Logger для результата запуска.
+
+    Returns:
+        Ноль при штатной остановке, иначе единицу.
+    """
+    try:
+        run_telegram_bot(token=token, logger=logger)
+    except KeyboardInterrupt:
+        logger.info("Telegram bot stopped")
+        return 0
+    except TelegramBotError as error:
+        logger.error("%s", error)
+        return 1
+
+    return 0

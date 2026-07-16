@@ -13,6 +13,8 @@ from obs_chat_bot.application.articles.processing import (
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.presentation.cli.main import parse_args, run_process_url_command
+from obs_chat_bot.presentation.cli.main import run_telegram_bot_command
+from obs_chat_bot.presentation.telegram.bot import TelegramBotError
 
 
 class SilentLogger:
@@ -78,6 +80,16 @@ class ProcessUrlCliTest(unittest.TestCase):
         self.assertFalse(args.sqlite_smoke)
         self.assertIsNone(args.process_url)
 
+    def test_parse_args_reads_telegram_bot(self) -> None:
+        """CLI принимает запуск Telegram-бота как отдельный режим."""
+        with patch("sys.argv", ["obs-chat-bot", "--telegram-bot"]):
+            args = parse_args()
+
+        self.assertTrue(args.telegram_bot)
+        self.assertFalse(args.healthcheck)
+        self.assertFalse(args.sqlite_smoke)
+        self.assertIsNone(args.process_url)
+
     def test_run_process_url_command_returns_zero_on_success(self) -> None:
         """Успешный pipeline возвращает нулевой exit code."""
         fake_use_case = FakeProcessArticleUrlUseCase()
@@ -105,6 +117,30 @@ class ProcessUrlCliTest(unittest.TestCase):
                 source_url="https://example.com/article",
                 logger=SilentLogger(),
                 use_case_factory=lambda _connection: fake_use_case,
+            )
+
+        self.assertEqual(exit_code, 1)
+
+    def test_run_telegram_bot_command_returns_zero_on_stop(self) -> None:
+        """Штатное завершение Telegram adapter возвращает нулевой exit code."""
+        with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot") as runner:
+            exit_code = run_telegram_bot_command(
+                token="token",
+                logger=SilentLogger(),
+            )
+
+        runner.assert_called_once()
+        self.assertEqual(exit_code, 0)
+
+    def test_run_telegram_bot_command_returns_one_on_adapter_error(self) -> None:
+        """Ошибка Telegram adapter превращается в ненулевой exit code."""
+        with patch(
+            "obs_chat_bot.presentation.cli.main.run_telegram_bot",
+            side_effect=TelegramBotError("failed"),
+        ):
+            exit_code = run_telegram_bot_command(
+                token="token",
+                logger=SilentLogger(),
             )
 
         self.assertEqual(exit_code, 1)
