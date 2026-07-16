@@ -6,11 +6,11 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from . import __version__
-from .config import ConfigError, load_config
-from .database import connect_database
-from .migration_runner import MigrationError, apply_migrations
-from .smoke import SQLiteSmokeError, run_sqlite_smoke
+from obs_chat_bot import __version__
+from obs_chat_bot.data.config import ConfigError, load_config
+from obs_chat_bot.data.sqlite.connection import connect_database
+from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
+from obs_chat_bot.presentation.cli.smoke import SQLiteSmokeError, run_sqlite_smoke
 
 
 def configure_logging() -> None:

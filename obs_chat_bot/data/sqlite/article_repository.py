@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
 
-from .models import Article, ArticleStatus
+from obs_chat_bot.data.sqlite.article_mappers import (
+    article_dto_from_article,
+    article_from_row,
+)
+from obs_chat_bot.domain.articles.entities import Article
+from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
 
 ARTICLE_COLUMNS = """
@@ -40,7 +44,7 @@ class ArticleAlreadyExistsError(ArticleRepositoryError):
         )
 
 
-class ArticleRepository:
+class SQLiteArticleRepository:
     """Изолирует SQL-операции с таблицей `articles`.
 
     Args:
@@ -67,6 +71,8 @@ class ArticleRepository:
         if article.id is not None:
             raise ValueError("A new article must not have an id")
 
+        dto = article_dto_from_article(article)
+
         try:
             with self._connection:
                 cursor = self._connection.execute(
@@ -82,12 +88,12 @@ class ArticleRepository:
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        article.source_url,
-                        article.normalized_url,
-                        article.title,
-                        article.cleaned_text,
-                        article.text_hash,
-                        article.status.value,
+                        dto.source_url,
+                        dto.normalized_url,
+                        dto.title,
+                        dto.cleaned_text,
+                        dto.text_hash,
+                        dto.status,
                     ),
                 )
         except sqlite3.IntegrityError:
@@ -120,7 +126,7 @@ class ArticleRepository:
             f"SELECT {ARTICLE_COLUMNS} FROM articles WHERE id = ?",
             (article_id,),
         ).fetchone()
-        return _row_to_article(row) if row is not None else None
+        return article_from_row(row) if row is not None else None
 
     def find_by_normalized_url(self, normalized_url: str) -> Article | None:
         """Ищет статью по нормализованному URL.
@@ -141,7 +147,7 @@ class ArticleRepository:
             f"SELECT {ARTICLE_COLUMNS} FROM articles WHERE normalized_url = ?",
             (normalized_url,),
         ).fetchone()
-        return _row_to_article(row) if row is not None else None
+        return article_from_row(row) if row is not None else None
 
     def find_by_text_hash(self, text_hash: str) -> list[Article]:
         """Возвращает все статьи с одинаковым хешем очищенного текста.
@@ -167,7 +173,7 @@ class ArticleRepository:
             """,
             (text_hash,),
         ).fetchall()
-        return [_row_to_article(row) for row in rows]
+        return [article_from_row(row) for row in rows]
 
     def update_status(
         self,
@@ -246,26 +252,3 @@ class ArticleRepository:
             )
 
         return self.get_by_id(article_id) if cursor.rowcount else None
-
-
-def _row_to_article(row: sqlite3.Row) -> Article:
-    """Преобразует строку SQLite во внутреннюю модель статьи."""
-    return Article(
-        id=row["id"],
-        source_url=row["source_url"],
-        normalized_url=row["normalized_url"],
-        title=row["title"],
-        cleaned_text=row["cleaned_text"],
-        text_hash=row["text_hash"],
-        status=ArticleStatus(row["status"]),
-        created_at=_parse_utc_timestamp(row["created_at"]),
-        updated_at=_parse_utc_timestamp(row["updated_at"]),
-    )
-
-
-def _parse_utc_timestamp(value: str) -> datetime:
-    """Преобразует SQLite timestamp в timezone-aware UTC datetime."""
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)

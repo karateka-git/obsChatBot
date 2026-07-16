@@ -6,10 +6,13 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .database import connect_database
-from .migration_runner import MigrationError, apply_migrations
-from .models import Article
-from .repositories import ArticleRepository, ArticleRepositoryError
+from obs_chat_bot.data.sqlite.article_repository import (
+    ArticleRepositoryError,
+    SQLiteArticleRepository,
+)
+from obs_chat_bot.data.sqlite.connection import connect_database
+from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
+from obs_chat_bot.domain.articles.entities import Article
 
 
 class SQLiteSmokeError(RuntimeError):
@@ -41,7 +44,7 @@ def _run_sqlite_scenario(database_path: Path) -> None:
         if second_run:
             raise SQLiteSmokeError("Migrations were applied more than once")
 
-        repository = ArticleRepository(connection)
+        repository = SQLiteArticleRepository(connection)
         expected = Article(
             source_url="https://example.com/article?utm_source=smoke",
             normalized_url="https://example.com/article",
