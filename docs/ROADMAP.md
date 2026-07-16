@@ -621,4 +621,8 @@
 
 Этап 4.5 завершён: добавлена CLI-команда `--process-url` для ручной проверки article pipeline по одной ссылке без Telegram, включая сборку concrete dependencies и понятный лог результата.
 
-Следующий шаг: начать Этап 4.6 и добавить smoke-проверку pipeline без реального интернета.
+Этап 4.6 завершён: добавлена постоянная smoke-проверка article pipeline на временной SQLite-базе с fake HTML-загрузчиком и fake extractor без реального интернета и без вызова `trafilatura`.
+
+Этап 4 завершён: общий article pipeline готов к подключению Telegram adapter.
+
+Следующий шаг: начать Этап 5 и подключить Telegram adapter.

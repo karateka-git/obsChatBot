@@ -25,6 +25,7 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
 from obs_chat_bot.presentation.cli.smoke import SQLiteSmokeError, run_sqlite_smoke
+from obs_chat_bot.presentation.cli.smoke import PipelineSmokeError, run_pipeline_smoke
 
 ProcessArticleUrlUseCaseFactory = Callable[
     [sqlite3.Connection],
@@ -55,6 +56,11 @@ def parse_args() -> argparse.Namespace:
         help="Run SQLite migrations and repository smoke scenario, then exit.",
     )
     mode.add_argument(
+        "--pipeline-smoke",
+        action="store_true",
+        help="Run article pipeline smoke scenario without network, then exit.",
+    )
+    mode.add_argument(
         "--process-url",
         metavar="URL",
         help="Run article pipeline for one URL, then exit.",
@@ -72,6 +78,9 @@ def main() -> int:
 
     if args.sqlite_smoke:
         return run_sqlite_smoke_command(logger)
+
+    if args.pipeline_smoke:
+        return run_pipeline_smoke_command(logger)
 
     try:
         config = load_config()
@@ -196,6 +205,25 @@ def run_sqlite_smoke_command(logger: logging.Logger) -> int:
         return 1
 
     logger.info("SQLite smoke scenario passed")
+    return 0
+
+
+def run_pipeline_smoke_command(logger: logging.Logger) -> int:
+    """Запускает smoke-сценарий article pipeline как команду приложения.
+
+    Args:
+        logger: Logger для результата проверки.
+
+    Returns:
+        Ноль при успехе, иначе единицу.
+    """
+    try:
+        run_pipeline_smoke()
+    except PipelineSmokeError as error:
+        logger.error("%s", error)
+        return 1
+
+    logger.info("Pipeline smoke scenario passed")
     return 0
 
 

@@ -68,6 +68,16 @@ class ProcessUrlCliTest(unittest.TestCase):
         self.assertFalse(args.healthcheck)
         self.assertFalse(args.sqlite_smoke)
 
+    def test_parse_args_reads_pipeline_smoke(self) -> None:
+        """CLI принимает pipeline smoke как отдельный режим запуска."""
+        with patch("sys.argv", ["obs-chat-bot", "--pipeline-smoke"]):
+            args = parse_args()
+
+        self.assertTrue(args.pipeline_smoke)
+        self.assertFalse(args.healthcheck)
+        self.assertFalse(args.sqlite_smoke)
+        self.assertIsNone(args.process_url)
+
     def test_run_process_url_command_returns_zero_on_success(self) -> None:
         """Успешный pipeline возвращает нулевой exit code."""
         fake_use_case = FakeProcessArticleUrlUseCase()

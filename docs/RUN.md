@@ -96,3 +96,11 @@ docker compose run --rm catcher python -m obs_chat_bot --process-url "https://ex
 ```
 
 Команда запускает текущий article pipeline: нормализует URL, создаёт или переиспользует статью в SQLite, загружает HTML, извлекает чистый текст и сохраняет результат в `data/app.db`.
+
+## 9. Проверить pipeline без интернета
+
+```powershell
+docker compose run --rm catcher python -m obs_chat_bot --pipeline-smoke
+```
+
+Команда создаёт временную базу, применяет миграции и проверяет article pipeline на fake HTML-загрузчике и fake extractor. Рабочая база `data/app.db` не изменяется.
