@@ -53,12 +53,34 @@ class FakeArticleUrlUseCase:
         return self._result
 
 
+class FakeIncomingMessageRepository:
+    """Fake repository входящих сообщений для Telegram-тестов."""
+
+    def __init__(self) -> None:
+        self.messages: list[IncomingMessage] = []
+
+    def save(self, message: IncomingMessage) -> object:
+        """Запоминает сообщение в памяти."""
+        self.messages.append(message)
+        return object()
+
+    def link_to_article(
+        self,
+        *,
+        incoming_message_id: int,
+        article_id: int,
+    ) -> object | None:
+        """Не используется в тестах сохранения сообщения."""
+        return None
+
+
 class TelegramMessageProcessingTest(unittest.TestCase):
     """Проверяет presentation-логику Telegram handler."""
 
     def test_process_incoming_message_asks_for_link_without_url(self) -> None:
         """Сообщение без URL получает просьбу отправить ссылку."""
         use_case = FakeArticleUrlUseCase()
+        message_repository = FakeIncomingMessageRepository()
 
         reply = process_incoming_message(
             IncomingMessage(
@@ -68,15 +90,18 @@ class TelegramMessageProcessingTest(unittest.TestCase):
                 text="привет",
             ),
             article_url_use_case=use_case,
+            incoming_message_repository=message_repository,
             logger=SilentLogger(),
         )
 
         self.assertIn("Пришли ссылку", reply)
         self.assertEqual(use_case.commands, [])
+        self.assertEqual(message_repository.messages, [])
 
     def test_process_incoming_message_runs_pipeline_for_url(self) -> None:
         """Сообщение со ссылкой запускает article pipeline."""
         use_case = FakeArticleUrlUseCase()
+        message_repository = FakeIncomingMessageRepository()
 
         reply = process_incoming_message(
             IncomingMessage(
@@ -86,11 +111,13 @@ class TelegramMessageProcessingTest(unittest.TestCase):
                 text="https://example.com/article?utm_source=tg",
             ),
             article_url_use_case=use_case,
+            incoming_message_repository=message_repository,
             logger=SilentLogger(),
         )
 
         self.assertIn("Готово: статья сохранена.", reply)
         self.assertIn("Article title", reply)
+        self.assertEqual(message_repository.messages[0].message_id, "10")
         self.assertEqual(
             use_case.commands[0].source_url,
             "https://example.com/article?utm_source=tg",

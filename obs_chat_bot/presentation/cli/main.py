@@ -20,6 +20,9 @@ from obs_chat_bot.data.config import ConfigError, load_config
 from obs_chat_bot.data.http.article_html_fetcher import UrllibArticleHtmlFetcher
 from obs_chat_bot.data.sqlite.article_repository import SQLiteArticleRepository
 from obs_chat_bot.data.sqlite.connection import connect_database
+from obs_chat_bot.data.sqlite.incoming_message_repository import (
+    SQLiteIncomingMessageRepository,
+)
 from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
@@ -331,6 +334,7 @@ def run_telegram_bot_command(
             run_telegram_bot(
                 token=token,
                 article_url_use_case=use_case,
+                incoming_message_repository=SQLiteIncomingMessageRepository(connection),
                 logger=logger,
             )
     except KeyboardInterrupt:

@@ -10,6 +10,7 @@ from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlError,
     ProcessArticleUrlUseCase,
 )
+from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.presentation.telegram.responses import (
     format_article_processing_result,
@@ -24,6 +25,7 @@ def run_telegram_bot(
     *,
     token: str,
     article_url_use_case: ProcessArticleUrlUseCase,
+    incoming_message_repository: IncomingMessageRepository | None = None,
     logger: logging.Logger,
 ) -> None:
     """Запускает Telegram-бота в polling-режиме.
@@ -31,6 +33,7 @@ def run_telegram_bot(
     Args:
         token: Telegram Bot API token.
         article_url_use_case: Use case обработки найденной ссылки.
+        incoming_message_repository: Optional port сохранения входящих сообщений.
         logger: Logger для сообщений adapter.
 
     Raises:
@@ -41,6 +44,7 @@ def run_telegram_bot(
             _run_telegram_bot(
                 token=token,
                 article_url_use_case=article_url_use_case,
+                incoming_message_repository=incoming_message_repository,
                 logger=logger,
             )
         )
@@ -54,6 +58,7 @@ async def _run_telegram_bot(
     *,
     token: str,
     article_url_use_case: ProcessArticleUrlUseCase,
+    incoming_message_repository: IncomingMessageRepository | None,
     logger: logging.Logger,
 ) -> None:
     """Асинхронно запускает polling Telegram-бота."""
@@ -65,6 +70,7 @@ async def _run_telegram_bot(
         dispatcher,
         aiogram,
         article_url_use_case=article_url_use_case,
+        incoming_message_repository=incoming_message_repository,
         logger=logger,
     )
 
@@ -80,6 +86,7 @@ def _register_handlers(
     aiogram: Any,
     *,
     article_url_use_case: ProcessArticleUrlUseCase,
+    incoming_message_repository: IncomingMessageRepository | None,
     logger: logging.Logger,
 ) -> None:
     """Регистрирует минимальные handlers Telegram adapter."""
@@ -101,6 +108,7 @@ def _register_handlers(
         reply = process_incoming_message(
             incoming_message,
             article_url_use_case=article_url_use_case,
+            incoming_message_repository=incoming_message_repository,
             logger=logger,
         )
         await message.answer(reply)
@@ -112,6 +120,7 @@ def process_incoming_message(
     incoming_message: IncomingMessage,
     *,
     article_url_use_case: ProcessArticleUrlUseCase,
+    incoming_message_repository: IncomingMessageRepository | None = None,
     logger: logging.Logger,
 ) -> str:
     """Обрабатывает входящее сообщение Telegram adapter.
@@ -119,6 +128,7 @@ def process_incoming_message(
     Args:
         incoming_message: Сообщение в application-формате.
         article_url_use_case: Use case обработки найденного URL.
+        incoming_message_repository: Optional port сохранения сообщения со ссылкой.
         logger: Logger для диагностических сообщений.
 
     Returns:
@@ -127,6 +137,9 @@ def process_incoming_message(
     url = extract_first_supported_url(incoming_message.text)
     if url is None:
         return "Пришли ссылку на статью, и я попробую её сохранить."
+
+    if incoming_message_repository is not None:
+        incoming_message_repository.save(incoming_message)
 
     try:
         result = article_url_use_case.execute(ProcessArticleUrlCommand(source_url=url))
