@@ -8,10 +8,12 @@ from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
-    ProcessArticleUrlResult,
     ProcessArticleUrlUseCase,
 )
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
+from obs_chat_bot.presentation.telegram.responses import (
+    format_article_processing_result,
+)
 
 
 class TelegramBotError(RuntimeError):
@@ -132,7 +134,7 @@ def process_incoming_message(
         logger.error("Telegram article processing failed: %s", error)
         return "Не удалось обработать ссылку. Я сохранил ошибку для диагностики."
 
-    return _format_article_result(result)
+    return format_article_processing_result(result)
 
 
 def _incoming_message_from_telegram(message: Any) -> IncomingMessage:
@@ -142,26 +144,6 @@ def _incoming_message_from_telegram(message: Any) -> IncomingMessage:
         chat_id=str(message.chat.id),
         message_id=str(message.message_id),
         text=message.text or "",
-    )
-
-
-def _format_article_result(result: ProcessArticleUrlResult) -> str:
-    """Формирует короткий ответ Telegram-пользователю."""
-    article = result.article
-    title = article.title or "без заголовка"
-    text_length = len(article.cleaned_text or "")
-
-    if result.created:
-        prefix = "Статья сохранена"
-    elif result.extracted:
-        prefix = "Статья обновлена"
-    else:
-        prefix = "Эта статья уже была сохранена"
-
-    return (
-        f"{prefix}: {title}\n"
-        f"Статус: {article.status.value}\n"
-        f"Длина текста: {text_length}"
     )
 
 

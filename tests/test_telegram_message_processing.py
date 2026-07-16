@@ -89,7 +89,7 @@ class TelegramMessageProcessingTest(unittest.TestCase):
             logger=SilentLogger(),
         )
 
-        self.assertIn("Статья сохранена", reply)
+        self.assertIn("Готово: статья сохранена.", reply)
         self.assertIn("Article title", reply)
         self.assertEqual(
             use_case.commands[0].source_url,
