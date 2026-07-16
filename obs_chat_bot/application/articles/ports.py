@@ -4,6 +4,7 @@ from typing import Protocol
 
 from obs_chat_bot.application.articles.extracted import ExtractedArticle
 from obs_chat_bot.application.articles.html import ArticleHtml
+from obs_chat_bot.application.articles.stages import ProcessingStage
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
@@ -80,4 +81,25 @@ class ArticleTextExtractor(Protocol):
 
         Raises:
             ArticleExtractionError: Если текст статьи извлечь не удалось.
+        """
+
+
+class ProcessingErrorRecorder(Protocol):
+    """Описывает запись диагностических ошибок обработки статьи."""
+
+    def record(
+        self,
+        *,
+        article_id: int | None,
+        stage: ProcessingStage,
+        error_type: str,
+        error_message: str,
+    ) -> None:
+        """Сохраняет информацию об ошибке pipeline.
+
+        Args:
+            article_id: ID статьи, если она уже была создана.
+            stage: Этап обработки, на котором произошла ошибка.
+            error_type: Имя класса ошибки.
+            error_message: Текст ошибки.
         """
