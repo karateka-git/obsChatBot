@@ -14,3 +14,5 @@ class ProcessingStage(StrEnum):
     FETCHING = "fetching"
     # Извлечение чистого текста из HTML.
     EXTRACTION = "extraction"
+    # LLM-анализ очищенного текста статьи.
+    ANALYSIS = "analysis"

@@ -9,6 +9,7 @@ from obs_chat_bot.application.articles.incoming_messages import (
     SavedIncomingMessage,
 )
 from obs_chat_bot.application.articles.stages import ProcessingStage
+from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
@@ -85,6 +86,45 @@ class ArticleTextExtractor(Protocol):
 
         Raises:
             ArticleExtractionError: Если текст статьи извлечь не удалось.
+        """
+
+
+class ArticleAnalyzer(Protocol):
+    """Описывает LLM-анализ очищенного текста статьи."""
+
+    def analyze(self, article: Article) -> ArticleAnalysisResult:
+        """Анализирует статью и возвращает готовый результат.
+
+        Args:
+            article: Сохранённая статья с ID и очищенным текстом.
+
+        Returns:
+            Результат анализа в доменном формате.
+
+        Raises:
+            ArticleAnalysisError: Если LLM-анализ выполнить не удалось.
+            ValueError: Если статья не готова к анализу.
+        """
+
+
+class ArticleAnalysisResultRepository(Protocol):
+    """Описывает хранение результатов LLM-анализа статей."""
+
+    def save(self, result: ArticleAnalysisResult) -> ArticleAnalysisResult:
+        """Сохраняет результат анализа статьи.
+
+        Args:
+            result: Доменная модель результата анализа без ID.
+
+        Returns:
+            Сохранённый результат анализа с ID и временем создания.
+        """
+
+    def get_latest_for_article(self, article_id: int) -> ArticleAnalysisResult | None:
+        """Возвращает последний результат анализа статьи или `None`.
+
+        Args:
+            article_id: ID статьи, для которой нужен результат анализа.
         """
 
 

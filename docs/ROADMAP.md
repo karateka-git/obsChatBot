@@ -679,4 +679,6 @@
 
 Этап 6.1 завершён: формат результата анализа выбран как готовый Markdown-текст с краткой сводкой, основными идеями, практической пользой и темами статьи; добавлена доменная модель `ArticleAnalysisResult`.
 
-Следующий шаг: начать Этап 6.2 и добавить application ports для LLM-анализа и хранения результата анализа.
+Этап 6.2 завершён: добавлены application ports `ArticleAnalyzer` и `ArticleAnalysisResultRepository`, отдельная ошибка `ArticleAnalysisError` и stage `analysis` для будущей диагностики pipeline.
+
+Следующий шаг: начать Этап 6.3 и добавить SQLite DTO, mapper и repository для `analysis_results`.
