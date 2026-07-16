@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from obs_chat_bot.application.articles.html import ArticleHtml
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
@@ -45,3 +46,20 @@ class ArticleRepository(Protocol):
         status: ArticleStatus = ArticleStatus.EXTRACTED,
     ) -> Article | None:
         """Сохраняет извлечённый контент статьи."""
+
+
+class ArticleHtmlFetcher(Protocol):
+    """Описывает загрузчик HTML страницы статьи."""
+
+    def fetch(self, url: str) -> ArticleHtml:
+        """Загружает HTML по URL.
+
+        Args:
+            url: Поддерживаемый URL статьи.
+
+        Returns:
+            HTML страницы вместе с исходным и финальным URL.
+
+        Raises:
+            ArticleFetchError: Если страницу не удалось загрузить.
+        """
