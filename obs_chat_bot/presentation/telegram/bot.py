@@ -4,7 +4,10 @@ import asyncio
 import logging
 from typing import Any
 
-from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
+from obs_chat_bot.application.articles.incoming_messages import (
+    IncomingMessage,
+    SavedIncomingMessage,
+)
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
@@ -138,14 +141,25 @@ def process_incoming_message(
     if url is None:
         return "Пришли ссылку на статью, и я попробую её сохранить."
 
+    saved_message: SavedIncomingMessage | None = None
     if incoming_message_repository is not None:
-        incoming_message_repository.save(incoming_message)
+        saved_message = incoming_message_repository.save(incoming_message)
 
     try:
         result = article_url_use_case.execute(ProcessArticleUrlCommand(source_url=url))
     except ProcessArticleUrlError as error:
         logger.error("Telegram article processing failed: %s", error)
         return "Не удалось обработать ссылку. Я сохранил ошибку для диагностики."
+
+    if (
+        incoming_message_repository is not None
+        and saved_message is not None
+        and result.article.id is not None
+    ):
+        incoming_message_repository.link_to_article(
+            incoming_message_id=saved_message.id,
+            article_id=result.article.id,
+        )
 
     return format_article_processing_result(result)
 

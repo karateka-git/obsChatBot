@@ -3,7 +3,10 @@
 from dataclasses import replace
 import unittest
 
-from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
+from obs_chat_bot.application.articles.incoming_messages import (
+    IncomingMessage,
+    SavedIncomingMessage,
+)
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
@@ -58,20 +61,36 @@ class FakeIncomingMessageRepository:
 
     def __init__(self) -> None:
         self.messages: list[IncomingMessage] = []
+        self.links: list[tuple[int, int]] = []
 
-    def save(self, message: IncomingMessage) -> object:
+    def save(self, message: IncomingMessage) -> SavedIncomingMessage:
         """Запоминает сообщение в памяти."""
         self.messages.append(message)
-        return object()
+        return SavedIncomingMessage(
+            id=len(self.messages),
+            channel=message.channel,
+            chat_id=message.chat_id,
+            message_id=message.message_id,
+            text=message.text,
+        )
 
     def link_to_article(
         self,
         *,
         incoming_message_id: int,
         article_id: int,
-    ) -> object | None:
-        """Не используется в тестах сохранения сообщения."""
-        return None
+    ) -> SavedIncomingMessage | None:
+        """Запоминает связь входящего сообщения со статьёй."""
+        self.links.append((incoming_message_id, article_id))
+        message = self.messages[incoming_message_id - 1]
+        return SavedIncomingMessage(
+            id=incoming_message_id,
+            channel=message.channel,
+            chat_id=message.chat_id,
+            message_id=message.message_id,
+            text=message.text,
+            article_id=article_id,
+        )
 
 
 class TelegramMessageProcessingTest(unittest.TestCase):
@@ -118,6 +137,7 @@ class TelegramMessageProcessingTest(unittest.TestCase):
         self.assertIn("Готово: статья сохранена.", reply)
         self.assertIn("Article title", reply)
         self.assertEqual(message_repository.messages[0].message_id, "10")
+        self.assertEqual(message_repository.links, [(1, 1)])
         self.assertEqual(
             use_case.commands[0].source_url,
             "https://example.com/article?utm_source=tg",
@@ -152,6 +172,7 @@ class TelegramMessageProcessingTest(unittest.TestCase):
     def test_process_incoming_message_reports_pipeline_error(self) -> None:
         """Ошибка pipeline превращается в понятный ответ пользователю."""
         use_case = FakeArticleUrlUseCase(error=ProcessArticleUrlError("failed"))
+        message_repository = FakeIncomingMessageRepository()
 
         reply = process_incoming_message(
             IncomingMessage(
@@ -161,10 +182,13 @@ class TelegramMessageProcessingTest(unittest.TestCase):
                 text="https://example.com/article",
             ),
             article_url_use_case=use_case,
+            incoming_message_repository=message_repository,
             logger=SilentLogger(),
         )
 
         self.assertIn("Не удалось обработать ссылку", reply)
+        self.assertEqual(len(message_repository.messages), 1)
+        self.assertEqual(message_repository.links, [])
 
 
 if __name__ == "__main__":
