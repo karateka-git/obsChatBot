@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from obs_chat_bot.application.articles.ports import ArticleRepository
 from obs_chat_bot.data.sqlite.article_mappers import (
     article_dto_from_article,
     article_from_row,
@@ -44,7 +45,7 @@ class ArticleAlreadyExistsError(ArticleRepositoryError):
         )
 
 
-class SQLiteArticleRepository:
+class SQLiteArticleRepository(ArticleRepository):
     """Изолирует SQL-операции с таблицей `articles`.
 
     Args:

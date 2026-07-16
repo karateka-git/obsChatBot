@@ -5,9 +5,10 @@ from typing import Any
 from obs_chat_bot.application.articles.errors import ArticleExtractionError
 from obs_chat_bot.application.articles.extracted import ExtractedArticle
 from obs_chat_bot.application.articles.html import ArticleHtml
+from obs_chat_bot.application.articles.ports import ArticleTextExtractor
 
 
-class TrafilaturaArticleTextExtractor:
+class TrafilaturaArticleTextExtractor(ArticleTextExtractor):
     """Извлекает чистый текст статьи через библиотеку `trafilatura`."""
 
     def extract(self, html: ArticleHtml) -> ExtractedArticle:

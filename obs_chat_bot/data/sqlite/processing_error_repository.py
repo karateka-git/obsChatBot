@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 
+from obs_chat_bot.application.articles.ports import ProcessingErrorRecorder
 from obs_chat_bot.application.articles.stages import ProcessingStage
 from obs_chat_bot.data.sqlite.processing_error_dtos import ProcessingErrorDto
 
 
-class SQLiteProcessingErrorRecorder:
+class SQLiteProcessingErrorRecorder(ProcessingErrorRecorder):
     """Сохраняет диагностические ошибки article pipeline в SQLite.
 
     Args:

@@ -6,13 +6,14 @@ from urllib.request import Request, urlopen
 
 from obs_chat_bot.application.articles.errors import ArticleFetchError
 from obs_chat_bot.application.articles.html import ArticleHtml
+from obs_chat_bot.application.articles.ports import ArticleHtmlFetcher
 
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 DEFAULT_USER_AGENT = "obsChatBot/0.1"
 
 
-class UrllibArticleHtmlFetcher:
+class UrllibArticleHtmlFetcher(ArticleHtmlFetcher):
     """Загружает HTML страницы статьи через стандартный HTTP-клиент Python.
 
     Args:
