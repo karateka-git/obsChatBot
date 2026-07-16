@@ -681,4 +681,6 @@
 
 Этап 6.2 завершён: добавлены application ports `ArticleAnalyzer` и `ArticleAnalysisResultRepository`, отдельная ошибка `ArticleAnalysisError` и stage `analysis` для будущей диагностики pipeline.
 
-Следующий шаг: начать Этап 6.3 и добавить SQLite DTO, mapper и repository для `analysis_results`.
+Этап 6.3 завершён: добавлены SQLite DTO, mapper и repository для `analysis_results`, включая сохранение результата анализа, чтение по ID и получение последнего результата статьи.
+
+Следующий шаг: начать Этап 6.4 и добавить use case анализа статьи по `article_id`.
