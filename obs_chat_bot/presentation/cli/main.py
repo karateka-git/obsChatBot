@@ -116,6 +116,7 @@ def main() -> int:
 
     if args.telegram_bot:
         return run_telegram_bot_command(
+            database_path=config.database_path,
             token=config.telegram_bot_token,
             logger=logger,
         )
@@ -306,23 +307,38 @@ def create_process_article_url_use_case(
 
 def run_telegram_bot_command(
     *,
+    database_path: Path,
     token: str,
     logger: logging.Logger,
+    use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
 ) -> int:
     """Запускает Telegram adapter как CLI-команду.
 
     Args:
+        database_path: Путь к рабочему файлу SQLite.
         token: Telegram Bot API token.
         logger: Logger для результата запуска.
+        use_case_factory: Factory use case, полезная для тестов без polling.
 
     Returns:
         Ноль при штатной остановке, иначе единицу.
     """
     try:
-        run_telegram_bot(token=token, logger=logger)
+        factory = use_case_factory or create_process_article_url_use_case
+        with connect_database(database_path) as connection:
+            apply_migrations(connection)
+            use_case = factory(connection)
+            run_telegram_bot(
+                token=token,
+                article_url_use_case=use_case,
+                logger=logger,
+            )
     except KeyboardInterrupt:
         logger.info("Telegram bot stopped")
         return 0
+    except (MigrationError, OSError, sqlite3.Error) as error:
+        logger.error("Could not prepare Telegram bot: %s", error)
+        return 1
     except TelegramBotError as error:
         logger.error("%s", error)
         return 1

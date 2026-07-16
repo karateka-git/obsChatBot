@@ -123,27 +123,50 @@ class ProcessUrlCliTest(unittest.TestCase):
 
     def test_run_telegram_bot_command_returns_zero_on_stop(self) -> None:
         """Штатное завершение Telegram adapter возвращает нулевой exit code."""
+        fake_use_case = FakeProcessArticleUrlUseCase()
         with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot") as runner:
-            exit_code = run_telegram_bot_command(
-                token="token",
-                logger=SilentLogger(),
-            )
+            with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as temporary_directory:
+                exit_code = run_telegram_bot_command(
+                    database_path=Path(temporary_directory) / "test.db",
+                    token="token",
+                    logger=SilentLogger(),
+                    use_case_factory=lambda _connection: fake_use_case,
+                )
 
         runner.assert_called_once()
         self.assertEqual(exit_code, 0)
 
     def test_run_telegram_bot_command_returns_one_on_adapter_error(self) -> None:
         """Ошибка Telegram adapter превращается в ненулевой exit code."""
+        fake_use_case = FakeProcessArticleUrlUseCase()
         with patch(
             "obs_chat_bot.presentation.cli.main.run_telegram_bot",
             side_effect=TelegramBotError("failed"),
         ):
-            exit_code = run_telegram_bot_command(
-                token="token",
-                logger=SilentLogger(),
-            )
+            with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as temporary_directory:
+                exit_code = run_telegram_bot_command(
+                    database_path=Path(temporary_directory) / "test.db",
+                    token="token",
+                    logger=SilentLogger(),
+                    use_case_factory=lambda _connection: fake_use_case,
+                )
 
         self.assertEqual(exit_code, 1)
+
+    def test_run_telegram_bot_command_passes_use_case(self) -> None:
+        """Telegram adapter получает собранный use case."""
+        fake_use_case = FakeProcessArticleUrlUseCase()
+        with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot") as runner:
+            with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as temporary_directory:
+                exit_code = run_telegram_bot_command(
+                    database_path=Path(temporary_directory) / "test.db",
+                    token="token",
+                    logger=SilentLogger(),
+                    use_case_factory=lambda _connection: fake_use_case,
+                )
+
+        self.assertIs(runner.call_args.kwargs["article_url_use_case"], fake_use_case)
+        self.assertEqual(exit_code, 0)
 
 
 if __name__ == "__main__":
