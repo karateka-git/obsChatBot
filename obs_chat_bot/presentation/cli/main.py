@@ -5,12 +5,31 @@ import logging
 import sqlite3
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from obs_chat_bot import __version__
+from obs_chat_bot.application.articles.processing import (
+    ProcessArticleUrlCommand,
+    ProcessArticleUrlError,
+    ProcessArticleUrlUseCase,
+)
+from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
+    TrafilaturaArticleTextExtractor,
+)
 from obs_chat_bot.data.config import ConfigError, load_config
+from obs_chat_bot.data.http.article_html_fetcher import UrllibArticleHtmlFetcher
+from obs_chat_bot.data.sqlite.article_repository import SQLiteArticleRepository
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
+from obs_chat_bot.data.sqlite.processing_error_repository import (
+    SQLiteProcessingErrorRecorder,
+)
 from obs_chat_bot.presentation.cli.smoke import SQLiteSmokeError, run_sqlite_smoke
+
+ProcessArticleUrlUseCaseFactory = Callable[
+    [sqlite3.Connection],
+    ProcessArticleUrlUseCase,
+]
 
 
 def configure_logging() -> None:
@@ -34,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         "--sqlite-smoke",
         action="store_true",
         help="Run SQLite migrations and repository smoke scenario, then exit.",
+    )
+    mode.add_argument(
+        "--process-url",
+        metavar="URL",
+        help="Run article pipeline for one URL, then exit.",
     )
     return parser.parse_args()
 
@@ -67,6 +91,13 @@ def main() -> int:
 
     if not initialize_database(config.database_path, logger):
         return 1
+
+    if args.process_url:
+        return run_process_url_command(
+            database_path=config.database_path,
+            source_url=args.process_url,
+            logger=logger,
+        )
 
     logger.info("Configuration is ready")
 
@@ -166,3 +197,68 @@ def run_sqlite_smoke_command(logger: logging.Logger) -> int:
 
     logger.info("SQLite smoke scenario passed")
     return 0
+
+
+def run_process_url_command(
+    *,
+    database_path: Path,
+    source_url: str,
+    logger: logging.Logger,
+    use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
+) -> int:
+    """Запускает article pipeline для одного URL из CLI.
+
+    Args:
+        database_path: Путь к рабочему файлу SQLite.
+        source_url: URL статьи для обработки.
+        logger: Logger для результата проверки.
+        use_case_factory: Factory use case, полезная для тестов CLI без сети.
+
+    Returns:
+        Ноль при успешной обработке, иначе единицу.
+    """
+    try:
+        factory = use_case_factory or create_process_article_url_use_case
+        with connect_database(database_path) as connection:
+            apply_migrations(connection)
+            use_case = factory(connection)
+            result = use_case.execute(ProcessArticleUrlCommand(source_url=source_url))
+    except (MigrationError, OSError, sqlite3.Error) as error:
+        logger.error("Could not prepare article pipeline: %s", error)
+        return 1
+    except ProcessArticleUrlError as error:
+        logger.error("Article pipeline failed: %s", error)
+        return 1
+
+    article = result.article
+    logger.info("Article pipeline passed")
+    logger.info("Article id: %s", article.id)
+    logger.info("Article status: %s", article.status.value)
+    logger.info("Article created: %s", result.created)
+    logger.info("Article extracted: %s", result.extracted)
+    logger.info("Article title: %s", article.title or "missing")
+    logger.info(
+        "Article cleaned text length: %s",
+        len(article.cleaned_text or ""),
+    )
+
+    return 0
+
+
+def create_process_article_url_use_case(
+    connection: sqlite3.Connection,
+) -> ProcessArticleUrlUseCase:
+    """Собирает concrete dependencies для обработки URL статьи.
+
+    Args:
+        connection: Открытое соединение SQLite.
+
+    Returns:
+        Use case с SQLite, HTTP и trafilatura-реализациями ports.
+    """
+    return ProcessArticleUrlUseCase(
+        article_repository=SQLiteArticleRepository(connection),
+        html_fetcher=UrllibArticleHtmlFetcher(),
+        text_extractor=TrafilaturaArticleTextExtractor(),
+        error_recorder=SQLiteProcessingErrorRecorder(connection),
+    )

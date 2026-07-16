@@ -88,3 +88,11 @@ docker compose run --rm catcher python -m obs_chat_bot --sqlite-smoke
 ```
 
 Команда создаёт временную базу, применяет миграции, повторно проверяет их идемпотентность, записывает тестовую статью через `ArticleRepository` и читает её обратно. Рабочая база `data/app.db` не изменяется.
+
+## 8. Проверить обработку URL
+
+```powershell
+docker compose run --rm catcher python -m obs_chat_bot --process-url "https://example.com/article"
+```
+
+Команда запускает текущий article pipeline: нормализует URL, создаёт или переиспользует статью в SQLite, загружает HTML, извлекает чистый текст и сохраняет результат в `data/app.db`.
