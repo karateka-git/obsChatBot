@@ -171,7 +171,7 @@ def process_incoming_message(
         )
     except ProcessArticleUrlError as error:
         logger.error("Telegram article processing failed: %s", error)
-        return "Не удалось обработать ссылку. Я сохранил ошибку для диагностики."
+        return _format_processing_error(error)
 
     if (
         incoming_message_repository is not None
@@ -203,6 +203,24 @@ def process_incoming_message(
         )
 
     return format_article_analysis_result(result, analysis_result)
+
+
+def _format_processing_error(error: ProcessArticleUrlError) -> str:
+    """Формирует понятный ответ пользователю по ошибке article pipeline."""
+    message = str(error)
+    if "normalize" in message:
+        return "Не удалось разобрать ссылку. Проверь URL и пришли его ещё раз."
+    if "fetch" in message:
+        return (
+            "Не удалось загрузить страницу по ссылке. "
+            "Я сохранил ошибку для диагностики."
+        )
+    if "extract" in message:
+        return (
+            "Страница загрузилась, но текст статьи извлечь не получилось. "
+            "Я сохранил ошибку для диагностики."
+        )
+    return "Не удалось обработать ссылку. Я сохранил ошибку для диагностики."
 
 
 def _incoming_message_from_telegram(message: Any) -> IncomingMessage:

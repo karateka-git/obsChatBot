@@ -278,6 +278,44 @@ class TelegramMessageProcessingTest(unittest.TestCase):
         self.assertEqual(len(message_repository.messages), 1)
         self.assertEqual(message_repository.links, [])
 
+    def test_process_incoming_message_reports_fetch_error(self) -> None:
+        """Ошибка загрузки получает более точный пользовательский текст."""
+        use_case = FakeArticleUrlUseCase(
+            error=ProcessArticleUrlError("Could not fetch article HTML: failed")
+        )
+
+        reply = process_incoming_message(
+            IncomingMessage(
+                channel="telegram",
+                chat_id="1",
+                message_id="10",
+                text="https://example.com/article",
+            ),
+            article_url_use_case=use_case,
+            logger=SilentLogger(),
+        )
+
+        self.assertIn("Не удалось загрузить страницу", reply)
+
+    def test_process_incoming_message_reports_extraction_error(self) -> None:
+        """Ошибка извлечения получает более точный пользовательский текст."""
+        use_case = FakeArticleUrlUseCase(
+            error=ProcessArticleUrlError("Could not extract article text: failed")
+        )
+
+        reply = process_incoming_message(
+            IncomingMessage(
+                channel="telegram",
+                chat_id="1",
+                message_id="10",
+                text="https://example.com/article",
+            ),
+            article_url_use_case=use_case,
+            logger=SilentLogger(),
+        )
+
+        self.assertIn("текст статьи извлечь не получилось", reply)
+
 
 if __name__ == "__main__":
     unittest.main()
