@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from obs_chat_bot.application.articles.analysis import AnalyzeArticleResult
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlResult
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
@@ -38,6 +39,35 @@ def format_article_processing_result(result: ProcessArticleUrlResult) -> str:
         f"Статус: {status}\n"
         f"ID статьи: {article_id}\n"
         f"Текст: {text_length} символов"
+    )
+
+
+def format_article_analysis_result(
+    processing_result: ProcessArticleUrlResult,
+    analysis_result: AnalyzeArticleResult,
+) -> str:
+    """Формирует Telegram-ответ с полезной LLM-сводкой статьи.
+
+    Args:
+        processing_result: Результат обработки URL статьи.
+        analysis_result: Результат LLM-анализа статьи.
+
+    Returns:
+        Markdown-текст анализа с коротким техническим контекстом.
+    """
+    article = analysis_result.article
+    title = article.title or "без заголовка"
+    article_id = article.id if article.id is not None else "не сохранен"
+    analysis_action = (
+        "Анализ готов." if analysis_result.created else "Использую сохраненный анализ."
+    )
+
+    return (
+        f"{_article_action_text(processing_result)}\n"
+        f"{analysis_action}\n\n"
+        f"Название: {title}\n"
+        f"ID статьи: {article_id}\n\n"
+        f"{analysis_result.analysis.result_text}"
     )
 
 

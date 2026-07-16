@@ -3,6 +3,11 @@
 from dataclasses import replace
 import unittest
 
+from obs_chat_bot.application.articles.analysis import (
+    AnalyzeArticleCommand,
+    AnalyzeArticleError,
+    AnalyzeArticleResult,
+)
 from obs_chat_bot.application.articles.incoming_messages import (
     IncomingMessage,
     SavedIncomingMessage,
@@ -12,6 +17,7 @@ from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlError,
     ProcessArticleUrlResult,
 )
+from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.presentation.telegram.bot import process_incoming_message
@@ -93,6 +99,43 @@ class FakeIncomingMessageRepository:
         )
 
 
+class FakeArticleAnalysisUseCase:
+    """Fake use case анализа статьи для Telegram-тестов."""
+
+    def __init__(
+        self,
+        *,
+        error: AnalyzeArticleError | None = None,
+        created: bool = True,
+    ) -> None:
+        self.commands: list[AnalyzeArticleCommand] = []
+        self._error = error
+        self._created = created
+
+    def execute(self, command: AnalyzeArticleCommand) -> AnalyzeArticleResult:
+        """Возвращает результат анализа или заданную ошибку."""
+        self.commands.append(command)
+        if self._error is not None:
+            raise self._error
+
+        article = replace(
+            FakeArticleUrlUseCase()._result.article,
+            id=command.article_id,
+            status=ArticleStatus.ANALYZED,
+        )
+        return AnalyzeArticleResult(
+            article=article,
+            analysis=ArticleAnalysisResult(
+                id=1,
+                article_id=command.article_id,
+                llm_model="fake-llm",
+                prompt_version="article-summary-v1",
+                result_text="## Кратко\nГотовый анализ.",
+            ),
+            created=self._created,
+        )
+
+
 class TelegramMessageProcessingTest(unittest.TestCase):
     """Проверяет presentation-логику Telegram handler."""
 
@@ -143,6 +186,50 @@ class TelegramMessageProcessingTest(unittest.TestCase):
             "https://example.com/article?utm_source=tg",
         )
         self.assertEqual(use_case.commands[0].incoming_message_id, 1)
+
+    def test_process_incoming_message_runs_analysis_for_processed_article(self) -> None:
+        """После обработки URL Telegram handler запускает LLM-анализ."""
+        use_case = FakeArticleUrlUseCase()
+        analysis_use_case = FakeArticleAnalysisUseCase()
+        message_repository = FakeIncomingMessageRepository()
+
+        reply = process_incoming_message(
+            IncomingMessage(
+                channel="telegram",
+                chat_id="1",
+                message_id="10",
+                text="https://example.com/article",
+            ),
+            article_url_use_case=use_case,
+            article_analysis_use_case=analysis_use_case,
+            incoming_message_repository=message_repository,
+            logger=SilentLogger(),
+        )
+
+        self.assertIn("Анализ готов.", reply)
+        self.assertIn("## Кратко", reply)
+        self.assertEqual(analysis_use_case.commands[0].article_id, 1)
+        self.assertEqual(analysis_use_case.commands[0].incoming_message_id, 1)
+
+    def test_process_incoming_message_reports_analysis_error(self) -> None:
+        """Ошибка анализа превращается в понятный ответ пользователю."""
+        analysis_use_case = FakeArticleAnalysisUseCase(
+            error=AnalyzeArticleError("failed")
+        )
+
+        reply = process_incoming_message(
+            IncomingMessage(
+                channel="telegram",
+                chat_id="1",
+                message_id="10",
+                text="https://example.com/article",
+            ),
+            article_url_use_case=FakeArticleUrlUseCase(),
+            article_analysis_use_case=analysis_use_case,
+            logger=SilentLogger(),
+        )
+
+        self.assertIn("анализ пока не получился", reply)
 
     def test_process_incoming_message_reports_existing_article(self) -> None:
         """Повторная ссылка получает отдельный текст ответа."""

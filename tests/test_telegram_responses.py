@@ -3,10 +3,13 @@
 from dataclasses import replace
 import unittest
 
+from obs_chat_bot.application.articles.analysis import AnalyzeArticleResult
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlResult
+from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.presentation.telegram.responses import (
+    format_article_analysis_result,
     format_article_processing_result,
 )
 
@@ -67,6 +70,31 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("Название: без заголовка", reply)
         self.assertIn("ID статьи: не сохранен", reply)
         self.assertIn("Текст: 0 символов", reply)
+
+    def test_format_article_analysis_result_includes_markdown_analysis(self) -> None:
+        """Ответ с анализом содержит служебный контекст и Markdown LLM."""
+        processing_result = ProcessArticleUrlResult(
+            article=_article(),
+            created=True,
+            extracted=True,
+        )
+        analysis_result = AnalyzeArticleResult(
+            article=replace(_article(), status=ArticleStatus.ANALYZED),
+            analysis=ArticleAnalysisResult(
+                id=1,
+                article_id=1,
+                llm_model="fake-llm",
+                prompt_version="article-summary-v1",
+                result_text="## Кратко\nГотовый анализ.",
+            ),
+            created=True,
+        )
+
+        reply = format_article_analysis_result(processing_result, analysis_result)
+
+        self.assertIn("Готово: статья сохранена.", reply)
+        self.assertIn("Анализ готов.", reply)
+        self.assertIn("## Кратко", reply)
 
 
 def _article() -> Article:

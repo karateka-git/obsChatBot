@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from obs_chat_bot import __version__
+from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
@@ -18,6 +19,10 @@ from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
 )
 from obs_chat_bot.data.config import ConfigError, load_config
 from obs_chat_bot.data.http.article_html_fetcher import UrllibArticleHtmlFetcher
+from obs_chat_bot.data.llm.openai_article_analyzer import OpenAIArticleAnalyzer
+from obs_chat_bot.data.sqlite.analysis_result_repository import (
+    SQLiteArticleAnalysisResultRepository,
+)
 from obs_chat_bot.data.sqlite.article_repository import SQLiteArticleRepository
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.incoming_message_repository import (
@@ -28,12 +33,21 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
 from obs_chat_bot.presentation.telegram.bot import TelegramBotError, run_telegram_bot
-from obs_chat_bot.presentation.cli.smoke import SQLiteSmokeError, run_sqlite_smoke
+from obs_chat_bot.presentation.cli.smoke import (
+    AnalysisSmokeError,
+    SQLiteSmokeError,
+    run_analysis_smoke,
+    run_sqlite_smoke,
+)
 from obs_chat_bot.presentation.cli.smoke import PipelineSmokeError, run_pipeline_smoke
 
 ProcessArticleUrlUseCaseFactory = Callable[
     [sqlite3.Connection],
     ProcessArticleUrlUseCase,
+]
+AnalyzeArticleUseCaseFactory = Callable[
+    [sqlite3.Connection],
+    AnalyzeArticleUseCase,
 ]
 
 
@@ -65,6 +79,11 @@ def parse_args() -> argparse.Namespace:
         help="Run article pipeline smoke scenario without network, then exit.",
     )
     mode.add_argument(
+        "--analysis-smoke",
+        action="store_true",
+        help="Run article analysis smoke scenario without LLM, then exit.",
+    )
+    mode.add_argument(
         "--process-url",
         metavar="URL",
         help="Run article pipeline for one URL, then exit.",
@@ -90,6 +109,9 @@ def main() -> int:
 
     if args.pipeline_smoke:
         return run_pipeline_smoke_command(logger)
+
+    if args.analysis_smoke:
+        return run_analysis_smoke_command(logger)
 
     try:
         config = load_config()
@@ -121,6 +143,9 @@ def main() -> int:
         return run_telegram_bot_command(
             database_path=config.database_path,
             token=config.telegram_bot_token,
+            openai_base_url=config.openai_base_url,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
             logger=logger,
         )
 
@@ -243,6 +268,25 @@ def run_pipeline_smoke_command(logger: logging.Logger) -> int:
     return 0
 
 
+def run_analysis_smoke_command(logger: logging.Logger) -> int:
+    """Запускает smoke-сценарий LLM-анализа как команду приложения.
+
+    Args:
+        logger: Logger для результата проверки.
+
+    Returns:
+        Ноль при успехе, иначе единицу.
+    """
+    try:
+        run_analysis_smoke()
+    except AnalysisSmokeError as error:
+        logger.error("%s", error)
+        return 1
+
+    logger.info("Analysis smoke scenario passed")
+    return 0
+
+
 def run_process_url_command(
     *,
     database_path: Path,
@@ -308,32 +352,80 @@ def create_process_article_url_use_case(
     )
 
 
+def create_analyze_article_use_case(
+    connection: sqlite3.Connection,
+    *,
+    openai_base_url: str,
+    openai_api_key: str,
+    openai_model: str,
+) -> AnalyzeArticleUseCase:
+    """Собирает concrete dependencies для LLM-анализа статьи.
+
+    Args:
+        connection: Открытое соединение SQLite.
+        openai_base_url: Базовый URL OpenAI-compatible API.
+        openai_api_key: API key провайдера LLM.
+        openai_model: Имя модели для анализа статей.
+
+    Returns:
+        Use case с SQLite-хранилищем и OpenAI-compatible analyzer.
+    """
+    return AnalyzeArticleUseCase(
+        article_repository=SQLiteArticleRepository(connection),
+        analyzer=OpenAIArticleAnalyzer(
+            base_url=openai_base_url,
+            api_key=openai_api_key,
+            model=openai_model,
+        ),
+        analysis_result_repository=SQLiteArticleAnalysisResultRepository(connection),
+        error_recorder=SQLiteProcessingErrorRecorder(connection),
+    )
+
+
 def run_telegram_bot_command(
     *,
     database_path: Path,
     token: str,
+    openai_base_url: str = "",
+    openai_api_key: str = "",
+    openai_model: str = "",
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
+    analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
 ) -> int:
     """Запускает Telegram adapter как CLI-команду.
 
     Args:
         database_path: Путь к рабочему файлу SQLite.
         token: Telegram Bot API token.
+        openai_base_url: Базовый URL OpenAI-compatible API.
+        openai_api_key: API key провайдера LLM.
+        openai_model: Имя модели для анализа статей.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case, полезная для тестов без polling.
+        analysis_use_case_factory: Factory use case анализа, полезная для тестов.
 
     Returns:
         Ноль при штатной остановке, иначе единицу.
     """
     try:
         factory = use_case_factory or create_process_article_url_use_case
+        analysis_factory = analysis_use_case_factory or (
+            lambda connection: create_analyze_article_use_case(
+                connection,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
+                openai_model=openai_model,
+            )
+        )
         with connect_database(database_path) as connection:
             apply_migrations(connection)
             use_case = factory(connection)
+            analysis_use_case = analysis_factory(connection)
             run_telegram_bot(
                 token=token,
                 article_url_use_case=use_case,
+                article_analysis_use_case=analysis_use_case,
                 incoming_message_repository=SQLiteIncomingMessageRepository(connection),
                 logger=logger,
             )

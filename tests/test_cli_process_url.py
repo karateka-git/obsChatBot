@@ -80,6 +80,16 @@ class ProcessUrlCliTest(unittest.TestCase):
         self.assertFalse(args.sqlite_smoke)
         self.assertIsNone(args.process_url)
 
+    def test_parse_args_reads_analysis_smoke(self) -> None:
+        """CLI принимает analysis smoke как отдельный режим запуска."""
+        with patch("sys.argv", ["obs-chat-bot", "--analysis-smoke"]):
+            args = parse_args()
+
+        self.assertTrue(args.analysis_smoke)
+        self.assertFalse(args.healthcheck)
+        self.assertFalse(args.sqlite_smoke)
+        self.assertIsNone(args.process_url)
+
     def test_parse_args_reads_telegram_bot(self) -> None:
         """CLI принимает запуск Telegram-бота как отдельный режим."""
         with patch("sys.argv", ["obs-chat-bot", "--telegram-bot"]):
@@ -156,6 +166,7 @@ class ProcessUrlCliTest(unittest.TestCase):
     def test_run_telegram_bot_command_passes_use_case(self) -> None:
         """Telegram adapter получает собранный use case."""
         fake_use_case = FakeProcessArticleUrlUseCase()
+        fake_analysis_use_case = object()
         with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot") as runner:
             with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as temporary_directory:
                 exit_code = run_telegram_bot_command(
@@ -163,9 +174,14 @@ class ProcessUrlCliTest(unittest.TestCase):
                     token="token",
                     logger=SilentLogger(),
                     use_case_factory=lambda _connection: fake_use_case,
+                    analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
                 )
 
         self.assertIs(runner.call_args.kwargs["article_url_use_case"], fake_use_case)
+        self.assertIs(
+            runner.call_args.kwargs["article_analysis_use_case"],
+            fake_analysis_use_case,
+        )
         self.assertEqual(exit_code, 0)
 
 

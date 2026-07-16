@@ -120,6 +120,9 @@ class ArticleAnalysisResultRepository(Protocol):
             Сохранённый результат анализа с ID и временем создания.
         """
 
+    def get_by_id(self, result_id: int) -> ArticleAnalysisResult | None:
+        """Возвращает результат анализа по ID или `None`, если записи нет."""
+
     def get_latest_for_article(self, article_id: int) -> ArticleAnalysisResult | None:
         """Возвращает последний результат анализа статьи или `None`.
 

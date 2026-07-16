@@ -6,11 +6,19 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from obs_chat_bot.application.articles.analysis import (
+    AnalyzeArticleCommand,
+    AnalyzeArticleUseCase,
+)
 from obs_chat_bot.application.articles.extracted import ExtractedArticle
 from obs_chat_bot.application.articles.html import ArticleHtml
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlUseCase,
+)
+from obs_chat_bot.data.sqlite.analysis_result_repository import (
+    ArticleAnalysisResultRepositoryError,
+    SQLiteArticleAnalysisResultRepository,
 )
 from obs_chat_bot.data.sqlite.article_repository import (
     ArticleRepositoryError,
@@ -21,6 +29,7 @@ from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migr
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
+from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
@@ -31,6 +40,10 @@ class SQLiteSmokeError(RuntimeError):
 
 class PipelineSmokeError(RuntimeError):
     """Ошибка прохождения smoke-сценария article pipeline."""
+
+
+class AnalysisSmokeError(RuntimeError):
+    """Ошибка прохождения smoke-сценария LLM-анализа статьи."""
 
 
 def run_sqlite_smoke() -> None:
@@ -66,6 +79,28 @@ def run_pipeline_smoke() -> None:
         ValueError,
     ) as error:
         raise PipelineSmokeError(f"Pipeline smoke scenario failed: {error}") from error
+
+
+def run_analysis_smoke() -> None:
+    """Проверяет analysis pipeline на fake LLM без сетевых запросов.
+
+    Raises:
+        AnalysisSmokeError: Если анализ не сохранил результат или не обновил
+            статус статьи.
+    """
+    try:
+        with TemporaryDirectory(prefix="obs-chat-bot-analysis-smoke-") as directory:
+            database_path = Path(directory) / "analysis-smoke.db"
+            _run_analysis_scenario(database_path)
+    except (
+        MigrationError,
+        ArticleRepositoryError,
+        ArticleAnalysisResultRepositoryError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as error:
+        raise AnalysisSmokeError(f"Analysis smoke scenario failed: {error}") from error
 
 
 def _run_sqlite_scenario(database_path: Path) -> None:
@@ -142,6 +177,52 @@ def _run_pipeline_scenario(database_path: Path) -> None:
             raise PipelineSmokeError("Pipeline fetched HTML unexpected number of times")
 
 
+def _run_analysis_scenario(database_path: Path) -> None:
+    """Выполняет analysis pipeline на временной базе и fake LLM."""
+    with connect_database(database_path) as connection:
+        apply_migrations(connection)
+
+        article_repository = SQLiteArticleRepository(connection)
+        analysis_repository = SQLiteArticleAnalysisResultRepository(connection)
+        article = article_repository.create(
+            Article(
+                source_url="https://example.com/article",
+                normalized_url="https://example.com/article",
+            )
+        )
+        if article.id is None:
+            raise AnalysisSmokeError("Created article does not have an id")
+
+        updated = article_repository.update_content(
+            article.id,
+            title="Smoke article",
+            cleaned_text="Smoke article text",
+            text_hash="hash",
+        )
+        if updated is None:
+            raise AnalysisSmokeError("Article content was not saved")
+
+        use_case = AnalyzeArticleUseCase(
+            article_repository=article_repository,
+            analyzer=_FakeArticleAnalyzer(),
+            analysis_result_repository=analysis_repository,
+            error_recorder=SQLiteProcessingErrorRecorder(connection),
+        )
+
+        result = use_case.execute(AnalyzeArticleCommand(article_id=article.id))
+
+        if not result.created:
+            raise AnalysisSmokeError("Analysis smoke did not create a result")
+        if result.article.status != ArticleStatus.ANALYZED:
+            raise AnalysisSmokeError("Article was not marked as analyzed")
+        if "Smoke summary" not in result.analysis.result_text:
+            raise AnalysisSmokeError("Analysis result contains unexpected text")
+
+        repeated = use_case.execute(AnalyzeArticleCommand(article_id=article.id))
+        if repeated.created:
+            raise AnalysisSmokeError("Analysis smoke created duplicate result")
+
+
 class _FakeArticleHtmlFetcher:
     """Fake HTML-загрузчик для smoke-проверки pipeline."""
 
@@ -171,4 +252,19 @@ class _FakeArticleTextExtractor:
             final_url=html.final_url,
             title="Smoke article",
             cleaned_text=self.CLEANED_TEXT,
+        )
+
+
+class _FakeArticleAnalyzer:
+    """Fake LLM-анализатор для smoke-проверки analysis pipeline."""
+
+    def analyze(self, article: Article) -> ArticleAnalysisResult:
+        """Возвращает стабильный Markdown-результат без LLM-запроса."""
+        if article.id is None:
+            raise ValueError("article must contain id")
+        return ArticleAnalysisResult(
+            article_id=article.id,
+            llm_model="fake-llm",
+            prompt_version="article-summary-v1",
+            result_text="## Кратко\nSmoke summary.",
         )

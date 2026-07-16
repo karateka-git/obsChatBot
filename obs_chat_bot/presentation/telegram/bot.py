@@ -8,6 +8,11 @@ from obs_chat_bot.application.articles.incoming_messages import (
     IncomingMessage,
     SavedIncomingMessage,
 )
+from obs_chat_bot.application.articles.analysis import (
+    AnalyzeArticleCommand,
+    AnalyzeArticleError,
+    AnalyzeArticleUseCase,
+)
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
@@ -16,6 +21,7 @@ from obs_chat_bot.application.articles.processing import (
 from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.presentation.telegram.responses import (
+    format_article_analysis_result,
     format_article_processing_result,
 )
 
@@ -28,6 +34,7 @@ def run_telegram_bot(
     *,
     token: str,
     article_url_use_case: ProcessArticleUrlUseCase,
+    article_analysis_use_case: AnalyzeArticleUseCase | None = None,
     incoming_message_repository: IncomingMessageRepository | None = None,
     logger: logging.Logger,
 ) -> None:
@@ -36,6 +43,7 @@ def run_telegram_bot(
     Args:
         token: Telegram Bot API token.
         article_url_use_case: Use case обработки найденной ссылки.
+        article_analysis_use_case: Optional use case LLM-анализа статьи.
         incoming_message_repository: Optional port сохранения входящих сообщений.
         logger: Logger для сообщений adapter.
 
@@ -47,6 +55,7 @@ def run_telegram_bot(
             _run_telegram_bot(
                 token=token,
                 article_url_use_case=article_url_use_case,
+                article_analysis_use_case=article_analysis_use_case,
                 incoming_message_repository=incoming_message_repository,
                 logger=logger,
             )
@@ -61,6 +70,7 @@ async def _run_telegram_bot(
     *,
     token: str,
     article_url_use_case: ProcessArticleUrlUseCase,
+    article_analysis_use_case: AnalyzeArticleUseCase | None,
     incoming_message_repository: IncomingMessageRepository | None,
     logger: logging.Logger,
 ) -> None:
@@ -73,6 +83,7 @@ async def _run_telegram_bot(
         dispatcher,
         aiogram,
         article_url_use_case=article_url_use_case,
+        article_analysis_use_case=article_analysis_use_case,
         incoming_message_repository=incoming_message_repository,
         logger=logger,
     )
@@ -89,6 +100,7 @@ def _register_handlers(
     aiogram: Any,
     *,
     article_url_use_case: ProcessArticleUrlUseCase,
+    article_analysis_use_case: AnalyzeArticleUseCase | None,
     incoming_message_repository: IncomingMessageRepository | None,
     logger: logging.Logger,
 ) -> None:
@@ -111,6 +123,7 @@ def _register_handlers(
         reply = process_incoming_message(
             incoming_message,
             article_url_use_case=article_url_use_case,
+            article_analysis_use_case=article_analysis_use_case,
             incoming_message_repository=incoming_message_repository,
             logger=logger,
         )
@@ -123,6 +136,7 @@ def process_incoming_message(
     incoming_message: IncomingMessage,
     *,
     article_url_use_case: ProcessArticleUrlUseCase,
+    article_analysis_use_case: AnalyzeArticleUseCase | None = None,
     incoming_message_repository: IncomingMessageRepository | None = None,
     logger: logging.Logger,
 ) -> str:
@@ -131,6 +145,7 @@ def process_incoming_message(
     Args:
         incoming_message: Сообщение в application-формате.
         article_url_use_case: Use case обработки найденного URL.
+        article_analysis_use_case: Optional use case LLM-анализа статьи.
         incoming_message_repository: Optional port сохранения сообщения со ссылкой.
         logger: Logger для диагностических сообщений.
 
@@ -168,7 +183,26 @@ def process_incoming_message(
             article_id=result.article.id,
         )
 
-    return format_article_processing_result(result)
+    if article_analysis_use_case is None or result.article.id is None:
+        return format_article_processing_result(result)
+
+    try:
+        analysis_result = article_analysis_use_case.execute(
+            AnalyzeArticleCommand(
+                article_id=result.article.id,
+                incoming_message_id=(
+                    saved_message.id if saved_message is not None else None
+                ),
+            )
+        )
+    except AnalyzeArticleError as error:
+        logger.error("Telegram article analysis failed: %s", error)
+        return (
+            "Статью удалось сохранить, но анализ пока не получился. "
+            "Я сохранил ошибку для диагностики."
+        )
+
+    return format_article_analysis_result(result, analysis_result)
 
 
 def _incoming_message_from_telegram(message: Any) -> IncomingMessage:
