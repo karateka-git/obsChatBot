@@ -1,0 +1,25 @@
+$ErrorActionPreference = "Stop"
+
+$projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+Set-Location $projectRoot
+
+Write-Host "Project: $projectRoot"
+Write-Host "Starting Docker Desktop..."
+docker desktop start
+
+Write-Host "Waiting for Docker Engine..."
+for ($attempt = 1; $attempt -le 30; $attempt++) {
+    docker info *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Docker Engine is ready."
+        break
+    }
+
+    if ($attempt -eq 30) {
+        throw "Docker Engine did not become ready in time."
+    }
+
+    Start-Sleep -Seconds 2
+}
+
+docker compose up --build
