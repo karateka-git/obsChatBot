@@ -4,6 +4,10 @@ from typing import Protocol
 
 from obs_chat_bot.application.articles.extracted import ExtractedArticle
 from obs_chat_bot.application.articles.html import ArticleHtml
+from obs_chat_bot.application.articles.incoming_messages import (
+    IncomingMessage,
+    SavedIncomingMessage,
+)
 from obs_chat_bot.application.articles.stages import ProcessingStage
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
@@ -102,4 +106,34 @@ class ProcessingErrorRecorder(Protocol):
             stage: Этап обработки, на котором произошла ошибка.
             error_type: Имя класса ошибки.
             error_message: Текст ошибки.
+        """
+
+
+class IncomingMessageRepository(Protocol):
+    """Описывает хранение входящих сообщений из внешних каналов."""
+
+    def save(self, message: IncomingMessage) -> SavedIncomingMessage:
+        """Сохраняет входящее сообщение или возвращает уже существующую запись.
+
+        Args:
+            message: Нормализованное сообщение из presentation-слоя.
+
+        Returns:
+            Сохранённое сообщение с ID записи.
+        """
+
+    def link_to_article(
+        self,
+        *,
+        incoming_message_id: int,
+        article_id: int,
+    ) -> SavedIncomingMessage | None:
+        """Привязывает сохранённое входящее сообщение к статье.
+
+        Args:
+            incoming_message_id: ID сохранённого входящего сообщения.
+            article_id: ID статьи, созданной или найденной после обработки URL.
+
+        Returns:
+            Обновлённое сообщение или `None`, если запись не найдена.
         """
