@@ -2,13 +2,19 @@
 
 import logging
 import unittest
+from unittest.mock import patch
 
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
-from obs_chat_bot.presentation.vk.bot import _handle_update, split_vk_message
+from obs_chat_bot.presentation.vk.bot import (
+    VkApiClient,
+    VkBotError,
+    _handle_update,
+    split_vk_message,
+)
 
 
 class FakeVkClient:
@@ -20,6 +26,28 @@ class FakeVkClient:
     def send_message(self, *, peer_id: int, text: str) -> None:
         """Запоминает отправленное сообщение."""
         self.messages.append((peer_id, text))
+
+
+class FailingVkClient(FakeVkClient):
+    """Fake VK client, который имитирует ошибку отправки."""
+
+    def send_message(self, *, peer_id: int, text: str) -> None:
+        """Имитирует ошибку VK API при отправке сообщения."""
+        raise VkBotError("send failed")
+
+
+class FakeHttpResponse:
+    """Минимальный context manager HTTP-ответа для тестов VK API."""
+
+    def __enter__(self) -> "FakeHttpResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        """Возвращает успешный JSON-ответ VK API."""
+        return b'{"response": 1}'
 
 
 class VkBotTest(unittest.TestCase):
@@ -67,6 +95,54 @@ class VkBotTest(unittest.TestCase):
         self.assertEqual(processed[0].external_user_id, "33")
         self.assertEqual(client.messages[0][0], 22)
         self.assertIn("Пришли ссылку", client.messages[0][1])
+
+    def test_handle_update_does_not_raise_when_vk_send_fails(self) -> None:
+        """Ошибка отправки VK-сообщения логируется и не роняет adapter."""
+        client = FailingVkClient()
+        logger = logging.getLogger("test.vk.safe_send")
+
+        def processor(_message: IncomingMessage) -> ProcessIncomingMessageResult:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_URL_MISSING
+            )
+
+        with self.assertLogs(logger, level="ERROR") as logs:
+            _handle_update(
+                {
+                    "type": "message_new",
+                    "object": {
+                        "message": {
+                            "id": 11,
+                            "peer_id": 22,
+                            "from_id": 33,
+                            "text": "hello",
+                        }
+                    },
+                },
+                incoming_message_processor=processor,
+                client=client,
+                logger=logger,
+            )
+        self.assertIn("VK message send failed", logs.output[0])
+
+    def test_api_call_sends_vk_method_params_in_post_body(self) -> None:
+        """VK API methods send params in POST body, not in request URI."""
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return FakeHttpResponse()
+
+        client = VkApiClient(token="token")
+        with patch("obs_chat_bot.presentation.vk.bot.urlopen", fake_urlopen):
+            client.send_message(peer_id=22, text="hello")
+
+        request = captured["request"]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.full_url, "https://api.vk.com/method/messages.send")
+        self.assertIn(b"message=hello", request.data)
+        self.assertIn(b"access_token=token", request.data)
 
 
 if __name__ == "__main__":

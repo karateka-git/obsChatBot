@@ -11,6 +11,7 @@ from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageR
 from obs_chat_bot.presentation.shared.responses import (
     format_incoming_message_result,
 )
+from obs_chat_bot.presentation.shared.safe_send import safe_send_async
 
 
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
@@ -82,12 +83,20 @@ def _register_handlers(
     async def handle_text(message: Any) -> None:
         """Обрабатывает текстовое сообщение через article pipeline."""
         if not message.text:
-            await message.answer("Пришли текстовое сообщение со ссылкой на статью.")
+            await safe_send_telegram_reply(
+                message,
+                "Пришли текстовое сообщение со ссылкой на статью.",
+                logger=logger,
+            )
             return
 
         incoming_message = _incoming_message_from_telegram(message)
         if _should_send_processing_ack(message.text):
-            await message.answer(PROCESSING_ACK_TEXT)
+            await safe_send_telegram_reply(
+                message,
+                PROCESSING_ACK_TEXT,
+                logger=logger,
+            )
 
         result = await asyncio.to_thread(
             incoming_message_processor,
@@ -96,7 +105,7 @@ def _register_handlers(
         if result.error is not None:
             logger.error("Telegram incoming message processing failed: %s", result.error)
         reply = format_incoming_message_result(result)
-        await send_telegram_reply(message, reply)
+        await safe_send_telegram_reply(message, reply, logger=logger)
 
     dispatcher.include_router(router)
 
@@ -145,6 +154,22 @@ async def send_telegram_reply(
     """
     for chunk in split_telegram_message(text, limit=limit):
         await message.answer(chunk)
+
+
+async def safe_send_telegram_reply(
+    message: Any,
+    text: str,
+    *,
+    logger: logging.Logger,
+    limit: int = TELEGRAM_SAFE_MESSAGE_LIMIT,
+) -> None:
+    """Отправляет Telegram-ответ и не даёт ошибке отправки уронить handler."""
+    await safe_send_async(
+        lambda: send_telegram_reply(message, text, limit=limit),
+        logger=logger,
+        channel="Telegram",
+        target_id=str(message.chat.id),
+    )
 
 
 def split_telegram_message(text: str, *, limit: int = TELEGRAM_SAFE_MESSAGE_LIMIT) -> list[str]:

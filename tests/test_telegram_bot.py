@@ -1,8 +1,28 @@
 """Тесты низкоуровневых helpers Telegram adapter."""
 
+import asyncio
+import logging
 import unittest
 
-from obs_chat_bot.presentation.telegram.bot import split_telegram_message
+from obs_chat_bot.presentation.telegram.bot import (
+    safe_send_telegram_reply,
+    split_telegram_message,
+)
+
+
+class FailingTelegramMessage:
+    """Fake Telegram message, который имитирует ошибку отправки."""
+
+    class Chat:
+        """Минимальная модель Telegram chat для helper-теста."""
+
+        id = 42
+
+    chat = Chat()
+
+    async def answer(self, _text: str) -> None:
+        """Имитирует ошибку Telegram API при отправке ответа."""
+        raise RuntimeError("send failed")
 
 
 class TelegramBotHelpersTest(unittest.TestCase):
@@ -21,6 +41,22 @@ class TelegramBotHelpersTest(unittest.TestCase):
         chunks = split_telegram_message("abcdefghij", limit=4)
 
         self.assertEqual(chunks, ["abcd", "efgh", "ij"])
+
+    def test_safe_send_telegram_reply_does_not_raise_when_send_fails(self) -> None:
+        """Ошибка отправки Telegram-сообщения логируется и не роняет handler."""
+        message = FailingTelegramMessage()
+        logger = logging.getLogger("test.telegram.safe_send")
+
+        async def run() -> None:
+            await safe_send_telegram_reply(
+                message,
+                "hello",
+                logger=logger,
+            )
+
+        with self.assertLogs(logger, level="ERROR") as logs:
+            asyncio.run(run())
+        self.assertIn("Telegram message send failed", logs.output[0])
 
 
 if __name__ == "__main__":

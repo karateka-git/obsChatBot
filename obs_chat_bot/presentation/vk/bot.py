@@ -8,13 +8,14 @@ from random import randint
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
 from obs_chat_bot.presentation.telegram.bot import PROCESSING_ACK_TEXT
 from obs_chat_bot.presentation.shared.responses import format_incoming_message_result
+from obs_chat_bot.presentation.shared.safe_send import safe_send
 
 
 VK_API_VERSION = "5.199"
@@ -68,12 +69,15 @@ def run_vk_bot(
             ts=str(payload.get("ts", long_poll.ts)),
         )
         for update in payload.get("updates", []):
-            _handle_update(
-                update,
-                incoming_message_processor=incoming_message_processor,
-                client=api_client,
-                logger=logger,
-            )
+            try:
+                _handle_update(
+                    update,
+                    incoming_message_processor=incoming_message_processor,
+                    client=api_client,
+                    logger=logger,
+                )
+            except Exception as error:
+                logger.error("VK update handling failed: %s", error)
 
 
 class LongPollServer:
@@ -137,11 +141,18 @@ class VkApiClient:
         api_params = dict(params)
         api_params["access_token"] = self._token
         api_params["v"] = self._api_version
-        return self._request_json(f"{VK_API_BASE_URL}/{method}?{urlencode(api_params)}")
+        encoded_params = urlencode(api_params).encode("utf-8")
+        request = Request(
+            f"{VK_API_BASE_URL}/{method}",
+            data=encoded_params,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        return self._request_json(request)
 
-    def _request_json(self, url: str) -> dict[str, Any]:
+    def _request_json(self, request: str | Request) -> dict[str, Any]:
         try:
-            with urlopen(url, timeout=VK_LONG_POLL_WAIT_SECONDS + 5) as response:
+            with urlopen(request, timeout=VK_LONG_POLL_WAIT_SECONDS + 5) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as error:
             raise VkBotError(f"VK request failed: {error}") from error
@@ -195,10 +206,20 @@ def _handle_update(
     from_id = _require_int(message.get("from_id"), "from_id")
 
     if not text.strip():
-        client.send_message(peer_id=peer_id, text="Пришли текстовое сообщение со ссылкой на статью.")
+        _safe_send_vk_message(
+            client,
+            peer_id=peer_id,
+            text="Пришли текстовое сообщение со ссылкой на статью.",
+            logger=logger,
+        )
         return
     if _should_send_processing_ack(text):
-        client.send_message(peer_id=peer_id, text=PROCESSING_ACK_TEXT)
+        _safe_send_vk_message(
+            client,
+            peer_id=peer_id,
+            text=PROCESSING_ACK_TEXT,
+            logger=logger,
+        )
 
     incoming_message = IncomingMessage(
         channel="vk",
@@ -210,7 +231,28 @@ def _handle_update(
     result = incoming_message_processor(incoming_message)
     if result.error is not None:
         logger.error("VK incoming message processing failed: %s", result.error)
-    client.send_message(peer_id=peer_id, text=format_incoming_message_result(result))
+    _safe_send_vk_message(
+        client,
+        peer_id=peer_id,
+        text=format_incoming_message_result(result),
+        logger=logger,
+    )
+
+
+def _safe_send_vk_message(
+    client: Any,
+    *,
+    peer_id: int,
+    text: str,
+    logger: logging.Logger,
+) -> None:
+    """Отправляет VK-сообщение и не даёт ошибке отправки уронить polling."""
+    safe_send(
+        lambda: client.send_message(peer_id=peer_id, text=text),
+        logger=logger,
+        channel="VK",
+        target_id=str(peer_id),
+    )
 
 
 def _recover_long_poll(
