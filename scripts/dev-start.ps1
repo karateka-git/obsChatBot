@@ -1,9 +1,21 @@
+param(
+    [string]$Mode = ""
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $projectRoot
 
 Write-Host "Project: $projectRoot"
+if ($Mode -eq "debug") {
+    $env:APP_DEBUG = "true"
+    Write-Host "Debug mode: APP_DEBUG=true"
+}
+elseif ($Mode) {
+    throw "Unknown dev-start mode: $Mode"
+}
+
 Write-Host "Starting Docker Desktop..."
 docker desktop start
 

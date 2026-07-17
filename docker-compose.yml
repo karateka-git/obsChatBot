@@ -6,6 +6,8 @@ services:
     command: ["python", "-m", "obs_chat_bot", "--telegram-bot"]
     env_file:
       - .env
+    environment:
+      APP_DEBUG: ${APP_DEBUG:-false}
     volumes:
       - ./data:/app/data
     healthcheck:
