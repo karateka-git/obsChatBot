@@ -697,6 +697,16 @@
 
 Этап 7 завершён: добавлен Telegram-flow smoke без реального Telegram и LLM, уточнены пользовательские ошибки загрузки/извлечения/анализа, проверено переиспользование сохранённых статей и анализа, `check-all` покрывает основные smoke-сценарии, а локальный operational checklist вынесен в `docs/OPERATIONS.md`.
 
-Этап 7.1 начат: перед добавлением VK выполняется hardening/refactor. Первый блок завершает перевод `docker compose up` в режим запуска Telegram-бота, закрепляет версии runtime-зависимостей и выносит composition root из CLI в отдельный bootstrap-модуль.
+Этап 7.1 начат: перед добавлением VK выполняется hardening/refactor.
+
+Этап 7.1.1 Runtime foundation завершён: `docker compose up` запускает Telegram-бота, runtime-зависимости закреплены в `requirements.txt`, composition root вынесен из CLI в `obs_chat_bot/bootstrap.py`.
+
+Этап 7.1.2 User identity и изоляция данных запланирован: добавить `app_users`, `external_identities`, `identity_link_tokens`, команды `/register`, `/link_code`, `/link <код>`, `app_user_id` для пользовательских данных и переиспользование статей только внутри пользователя.
+
+Этап 7.1.3 Channel-agnostic incoming flow запланирован: вынести общий сценарий входящего сообщения из Telegram adapter в application use case, вернуть structured result и оставить Telegram/VK adapters только преобразователями канальных сообщений и ответов.
+
+Этап 7.1.4 Telegram UX и async hardening запланирован: добавить быстрый ack перед долгой обработкой, убрать блокировку event loop, безопасно отправлять длинные ответы chunks, ограничить длину LLM prompt/response и улучшить пользовательские тексты ошибок.
+
+Этап 7.1.5 Security и operations запланирован: добавить URL safety против SSRF, расширенный healthcheck для Telegram/LLM, дополнительные команды диагностики вроде `/status` и `/reanalyze`; retention/backup SQLite вынести в backlog.
 
 Следующий шаг: продолжить Этап 7.1 и добавить user identity модель без owner/admin: `/register`, `/link_code`, `/link <код>`, `app_user_id` для пользовательских данных и изоляцию статей по пользователю.
