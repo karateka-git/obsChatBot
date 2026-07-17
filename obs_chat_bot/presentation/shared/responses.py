@@ -147,6 +147,11 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 "Не нашел ожидающую перепривязку. Если хочешь привязать этот канал "
                 "к другому пользователю, снова отправь `/link <код>`."
             )
+        case IncomingMessageResultType.LINK_REBIND_CONFIRMATION_PENDING:
+            return (
+                "Я жду ответ `да` или `нет` по перепривязке канала.\n"
+                "Ответь `да`, чтобы перепривязать канал, или `нет`, чтобы оставить как есть."
+            )
         case IncomingMessageResultType.STATUS:
             if result.app_user is None:
                 return "Бот работает, но пользователь не определен."

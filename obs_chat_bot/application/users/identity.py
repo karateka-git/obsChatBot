@@ -194,6 +194,16 @@ class UserIdentityService:
         """Отменяет ожидающую перепривязку канала."""
         self._rebind_confirmation_repository.delete(identity=identity)
 
+    def has_pending_rebind(self, identity: IncomingIdentity) -> bool:
+        """Проверяет, ждёт ли канал ответа на подтверждение перепривязки."""
+        return (
+            self._rebind_confirmation_repository.find(
+                identity=identity,
+                now=self._clock(),
+            )
+            is not None
+        )
+
 
 def _hash_code(code: str) -> str:
     """Возвращает SHA-256 хеш одноразового кода привязки."""

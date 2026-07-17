@@ -51,6 +51,7 @@ class IncomingMessageResultType(StrEnum):
     LINK_REBOUND = "link_rebound"
     LINK_REBIND_CANCELLED = "link_rebind_cancelled"
     LINK_REBIND_CONFIRMATION_MISSING = "link_rebind_confirmation_missing"
+    LINK_REBIND_CONFIRMATION_PENDING = "link_rebind_confirmation_pending"
     STATUS = "status"
     REANALYZE_COMMAND_INVALID = "reanalyze_command_invalid"
     ARTICLE_REANALYZED = "article_reanalyzed"
@@ -241,6 +242,11 @@ class ProcessIncomingMessageUseCase:
             self._user_identity_service.cancel_rebind(identity)
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.LINK_REBIND_CANCELLED
+            )
+
+        if self._user_identity_service.has_pending_rebind(identity):
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_PENDING
             )
 
         if text == "/start":

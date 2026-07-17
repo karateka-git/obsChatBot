@@ -130,6 +130,10 @@ class FakeUserIdentityService:
         """Всегда возвращает пользователя."""
         return self.app_user
 
+    def has_pending_rebind(self, _identity: IncomingIdentity) -> bool:
+        """По умолчанию pending-перепривязки нет."""
+        return False
+
     def confirm_rebind(self, _identity: IncomingIdentity) -> AppUser:
         """Возвращает пользователя для тестов подтверждения перепривязки."""
         return self.app_user
@@ -147,6 +151,7 @@ class FakeRebindIdentityService(FakeUserIdentityService):
         self.rebind_requested = False
         self.rebind_confirmed = False
         self.rebind_cancelled = False
+        self.pending_rebind = False
 
     def link(self, *, code: str, identity: IncomingIdentity) -> AppUser:
         """Имитирует попытку привязать уже связанный канал."""
@@ -160,16 +165,23 @@ class FakeRebindIdentityService(FakeUserIdentityService):
     ) -> AppUser:
         """Имитирует создание ожидающего подтверждения перепривязки."""
         self.rebind_requested = True
+        self.pending_rebind = True
         return self.target_user
+
+    def has_pending_rebind(self, _identity: IncomingIdentity) -> bool:
+        """Возвращает состояние ожидающего подтверждения."""
+        return self.pending_rebind
 
     def confirm_rebind(self, _identity: IncomingIdentity) -> AppUser:
         """Имитирует подтвержденную перепривязку."""
         self.rebind_confirmed = True
+        self.pending_rebind = False
         return self.target_user
 
     def cancel_rebind(self, _identity: IncomingIdentity) -> None:
         """Имитирует отмену перепривязки."""
         self.rebind_cancelled = True
+        self.pending_rebind = False
 
 
 class FakeRegisteringIdentityService:
@@ -183,6 +195,10 @@ class FakeRegisteringIdentityService:
     def resolve(self, _identity: IncomingIdentity) -> AppUser | None:
         """Возвращает существующего пользователя, если он задан."""
         return self._existing
+
+    def has_pending_rebind(self, _identity: IncomingIdentity) -> bool:
+        """В тестах регистрации pending-перепривязки нет."""
+        return False
 
     def register(self, _identity: IncomingIdentity) -> AppUser:
         """Создает пользователя и запоминает регистрацию."""
@@ -346,6 +362,24 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
 
         self.assertEqual(result.type, IncomingMessageResultType.LINK_REBIND_CANCELLED)
         self.assertTrue(identity_service.rebind_cancelled)
+
+    def test_execute_waits_for_yes_or_no_when_rebind_is_pending(self) -> None:
+        """Произвольный текст при pending-перепривязке не уходит в article-flow."""
+        identity_service = FakeRebindIdentityService()
+        identity_service.pending_rebind = True
+        article_use_case = FakeArticleUrlUseCase()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("потом"))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.LINK_REBIND_CONFIRMATION_PENDING,
+        )
+        self.assertEqual(article_use_case.commands, [])
 
     def test_execute_reanalyze_forces_article_analysis(self) -> None:
         """Команда `/reanalyze` запускает анализ с force=True."""
