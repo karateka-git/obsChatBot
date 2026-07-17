@@ -47,6 +47,10 @@ class IncomingMessageResultType(StrEnum):
     LINKED = "linked"
     LINK_ALREADY_BOUND = "link_already_bound"
     LINK_CODE_INVALID = "link_code_invalid"
+    LINK_REBIND_CONFIRMATION_REQUIRED = "link_rebind_confirmation_required"
+    LINK_REBOUND = "link_rebound"
+    LINK_REBIND_CANCELLED = "link_rebind_cancelled"
+    LINK_REBIND_CONFIRMATION_MISSING = "link_rebind_confirmation_missing"
     STATUS = "status"
     REANALYZE_COMMAND_INVALID = "reanalyze_command_invalid"
     ARTICLE_REANALYZED = "article_reanalyzed"
@@ -218,6 +222,26 @@ class ProcessIncomingMessageUseCase:
 
         identity = _incoming_identity_from_message(incoming_message)
         text = incoming_message.text.strip()
+        normalized_text = text.lower()
+
+        if normalized_text in {"да", "yes", "y"}:
+            try:
+                app_user = self._user_identity_service.confirm_rebind(identity)
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.LINK_REBOUND,
+                    app_user=app_user,
+                )
+            except InvalidLinkCodeError as error:
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_MISSING,
+                    error=error,
+                )
+
+        if normalized_text in {"нет", "no", "n"}:
+            self._user_identity_service.cancel_rebind(identity)
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.LINK_REBIND_CANCELLED
+            )
 
         if text == "/start":
             app_user = self._user_identity_service.resolve(identity)
@@ -305,10 +329,25 @@ class ProcessIncomingMessageUseCase:
                     app_user=app_user,
                 )
             except IdentityAlreadyBoundError as error:
-                return ProcessIncomingMessageResult(
-                    type=IncomingMessageResultType.LINK_ALREADY_BOUND,
-                    error=error,
-                )
+                try:
+                    target_user = self._user_identity_service.request_rebind_confirmation(
+                        code=parts[1],
+                        identity=identity,
+                    )
+                    return ProcessIncomingMessageResult(
+                        type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_REQUIRED,
+                        app_user=target_user,
+                    )
+                except IdentityAlreadyBoundError:
+                    return ProcessIncomingMessageResult(
+                        type=IncomingMessageResultType.LINK_ALREADY_BOUND,
+                        error=error,
+                    )
+                except InvalidLinkCodeError as rebind_error:
+                    return ProcessIncomingMessageResult(
+                        type=IncomingMessageResultType.LINK_CODE_INVALID,
+                        error=rebind_error,
+                    )
             except InvalidLinkCodeError as error:
                 return ProcessIncomingMessageResult(
                     type=IncomingMessageResultType.LINK_CODE_INVALID,

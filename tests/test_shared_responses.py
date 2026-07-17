@@ -169,6 +169,32 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("ABC123", reply)
         self.assertIn("/link ABC123", reply)
 
+    def test_format_incoming_message_result_reports_rebind_confirmation(self) -> None:
+        """Запрос перепривязки просит ответить да или нет."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_REQUIRED,
+                app_user=AppUser(id=99),
+            )
+        )
+
+        self.assertIn("Перепривязать", reply)
+        self.assertIn("ID 99", reply)
+        self.assertIn("да", reply)
+        self.assertIn("нет", reply)
+
+    def test_format_incoming_message_result_reports_rebind_success(self) -> None:
+        """Подтвержденная перепривязка сообщает нового пользователя."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.LINK_REBOUND,
+                app_user=AppUser(id=99),
+            )
+        )
+
+        self.assertIn("перепривязал", reply)
+        self.assertIn("ID 99", reply)
+
     def test_format_incoming_message_result_reports_processing_error(self) -> None:
         """Ошибка article pipeline получает понятный текст ответа."""
         reply = format_incoming_message_result(

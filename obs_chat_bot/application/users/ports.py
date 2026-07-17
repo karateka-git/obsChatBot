@@ -15,6 +15,9 @@ class AppUserRepository(Protocol):
     def get_by_id(self, app_user_id: int) -> AppUser | None:
         """Возвращает пользователя по ID или `None`."""
 
+    def delete(self, app_user_id: int) -> None:
+        """Удаляет пользователя приложения по ID."""
+
 
 class ExternalIdentityRepository(Protocol):
     """Описывает хранилище связей внутренних пользователей с внешними каналами."""
@@ -29,6 +32,17 @@ class ExternalIdentityRepository(Protocol):
         identity: IncomingIdentity,
     ) -> ExternalIdentity:
         """Создает связь пользователя приложения с внешней личностью."""
+
+    def reassign(
+        self,
+        *,
+        app_user_id: int,
+        identity: IncomingIdentity,
+    ) -> ExternalIdentity:
+        """Перепривязывает существующую внешнюю личность к другому пользователю."""
+
+    def count_for_user(self, app_user_id: int) -> int:
+        """Возвращает количество внешних личностей пользователя."""
 
     def touch(self, identity: IncomingIdentity) -> None:
         """Обновляет служебные данные уже известной внешней личности."""
@@ -48,3 +62,31 @@ class IdentityLinkTokenRepository(Protocol):
 
     def consume(self, *, token_hash: str, now: datetime) -> int | None:
         """Погашает код и возвращает ID пользователя, если код действителен."""
+
+    def find_active(self, *, token_hash: str, now: datetime) -> int | None:
+        """Возвращает ID пользователя для действующего кода без погашения."""
+
+
+class IdentityRebindConfirmationRepository(Protocol):
+    """Описывает хранилище ожидающих подтверждений перепривязки каналов."""
+
+    def save(
+        self,
+        *,
+        identity: IncomingIdentity,
+        token_hash: str,
+        target_app_user_id: int,
+        expires_at: datetime,
+    ) -> None:
+        """Сохраняет ожидающее подтверждение перепривязки канала."""
+
+    def find(
+        self,
+        *,
+        identity: IncomingIdentity,
+        now: datetime,
+    ) -> tuple[str, int] | None:
+        """Возвращает хеш кода и целевого пользователя для активного подтверждения."""
+
+    def delete(self, *, identity: IncomingIdentity) -> None:
+        """Удаляет ожидающее подтверждение перепривязки канала."""

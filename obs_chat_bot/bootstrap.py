@@ -26,6 +26,7 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
 from obs_chat_bot.data.sqlite.user_identity_repository import (
     SQLiteAppUserRepository,
     SQLiteExternalIdentityRepository,
+    SQLiteIdentityRebindConfirmationRepository,
     SQLiteIdentityLinkTokenRepository,
 )
 
@@ -102,6 +103,9 @@ def create_user_identity_service(connection: sqlite3.Connection) -> UserIdentity
         app_user_repository=SQLiteAppUserRepository(connection),
         external_identity_repository=SQLiteExternalIdentityRepository(connection),
         link_token_repository=SQLiteIdentityLinkTokenRepository(connection),
+        rebind_confirmation_repository=SQLiteIdentityRebindConfirmationRepository(
+            connection
+        ),
     )
 
 

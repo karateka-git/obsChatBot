@@ -122,6 +122,31 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             return "Этот канал уже привязан к пользователю."
         case IncomingMessageResultType.LINK_CODE_INVALID:
             return "Код привязки не найден или уже истек. Создай новый через `/link_code`."
+        case IncomingMessageResultType.LINK_REBIND_CONFIRMATION_REQUIRED:
+            if result.app_user is None:
+                return (
+                    "Этот канал уже привязан к другому пользователю.\n"
+                    "Чтобы перепривязать его, ответь `да`. Чтобы оставить как есть, ответь `нет`."
+                )
+            return (
+                "Этот канал уже привязан к другому пользователю.\n"
+                f"Перепривязать его к пользователю ID {result.app_user.id}?\n"
+                "Ответь `да` или `нет`."
+            )
+        case IncomingMessageResultType.LINK_REBOUND:
+            if result.app_user is None:
+                return "Готово, я перепривязал этот канал."
+            return (
+                "Готово, я перепривязал этот канал.\n"
+                f"Теперь он связан с пользователем ID {result.app_user.id}."
+            )
+        case IncomingMessageResultType.LINK_REBIND_CANCELLED:
+            return "Ок, оставляю текущую привязку без изменений."
+        case IncomingMessageResultType.LINK_REBIND_CONFIRMATION_MISSING:
+            return (
+                "Не нашел ожидающую перепривязку. Если хочешь привязать этот канал "
+                "к другому пользователю, снова отправь `/link <код>`."
+            )
         case IncomingMessageResultType.STATUS:
             if result.app_user is None:
                 return "Бот работает, но пользователь не определен."

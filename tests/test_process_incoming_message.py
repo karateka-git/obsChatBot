@@ -21,6 +21,7 @@ from obs_chat_bot.application.incoming.processing import (
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
+from obs_chat_bot.application.users.identity import IdentityAlreadyBoundError
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 
 
@@ -128,6 +129,47 @@ class FakeUserIdentityService:
     def resolve(self, _identity: IncomingIdentity) -> AppUser | None:
         """Всегда возвращает пользователя."""
         return self.app_user
+
+    def confirm_rebind(self, _identity: IncomingIdentity) -> AppUser:
+        """Возвращает пользователя для тестов подтверждения перепривязки."""
+        return self.app_user
+
+    def cancel_rebind(self, _identity: IncomingIdentity) -> None:
+        """Запоминает отмену перепривязки."""
+
+
+class FakeRebindIdentityService(FakeUserIdentityService):
+    """Fake identity service для проверки подтверждения перепривязки."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.target_user = AppUser(id=99)
+        self.rebind_requested = False
+        self.rebind_confirmed = False
+        self.rebind_cancelled = False
+
+    def link(self, *, code: str, identity: IncomingIdentity) -> AppUser:
+        """Имитирует попытку привязать уже связанный канал."""
+        raise IdentityAlreadyBoundError("External identity is already bound")
+
+    def request_rebind_confirmation(
+        self,
+        *,
+        code: str,
+        identity: IncomingIdentity,
+    ) -> AppUser:
+        """Имитирует создание ожидающего подтверждения перепривязки."""
+        self.rebind_requested = True
+        return self.target_user
+
+    def confirm_rebind(self, _identity: IncomingIdentity) -> AppUser:
+        """Имитирует подтвержденную перепривязку."""
+        self.rebind_confirmed = True
+        return self.target_user
+
+    def cancel_rebind(self, _identity: IncomingIdentity) -> None:
+        """Имитирует отмену перепривязки."""
+        self.rebind_cancelled = True
 
 
 class FakeRegisteringIdentityService:
@@ -260,6 +302,50 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         result = use_case.execute(_telegram_message("/start"))
 
         self.assertEqual(result.type, IncomingMessageResultType.START_UNREGISTERED)
+
+    def test_execute_link_requests_rebind_confirmation_for_bound_identity(self) -> None:
+        """`/link <код>` для привязанного канала просит подтвердить перепривязку."""
+        identity_service = FakeRebindIdentityService()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("/link ABC123"))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.LINK_REBIND_CONFIRMATION_REQUIRED,
+        )
+        self.assertEqual(result.app_user.id, 99)
+        self.assertTrue(identity_service.rebind_requested)
+
+    def test_execute_yes_confirms_pending_rebind(self) -> None:
+        """Ответ `да` подтверждает ожидающую перепривязку канала."""
+        identity_service = FakeRebindIdentityService()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("да"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.LINK_REBOUND)
+        self.assertEqual(result.app_user.id, 99)
+        self.assertTrue(identity_service.rebind_confirmed)
+
+    def test_execute_no_cancels_pending_rebind(self) -> None:
+        """Ответ `нет` отменяет ожидающую перепривязку канала."""
+        identity_service = FakeRebindIdentityService()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("нет"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.LINK_REBIND_CANCELLED)
+        self.assertTrue(identity_service.rebind_cancelled)
 
     def test_execute_reanalyze_forces_article_analysis(self) -> None:
         """Команда `/reanalyze` запускает анализ с force=True."""

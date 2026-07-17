@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from obs_chat_bot.application.users.ports import (
     AppUserRepository,
     ExternalIdentityRepository,
+    IdentityRebindConfirmationRepository,
     IdentityLinkTokenRepository,
 )
 from obs_chat_bot.domain.users.entities import AppUser, ExternalIdentity, IncomingIdentity
@@ -54,6 +55,14 @@ class SQLiteAppUserRepository(AppUserRepository):
             display_name=row["display_name"],
             created_at=_parse_utc_timestamp(row["created_at"]),
         )
+
+    def delete(self, app_user_id: int) -> None:
+        """Удаляет пользователя приложения по ID."""
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM app_users WHERE id = ?",
+                (app_user_id,),
+            )
 
 
 class SQLiteExternalIdentityRepository(ExternalIdentityRepository):
@@ -122,6 +131,52 @@ class SQLiteExternalIdentityRepository(ExternalIdentityRepository):
             )
         return created
 
+    def reassign(
+        self,
+        *,
+        app_user_id: int,
+        identity: IncomingIdentity,
+    ) -> ExternalIdentity:
+        """Перепривязывает существующую внешнюю личность к другому пользователю."""
+        with self._connection:
+            self._connection.execute(
+                """
+                UPDATE external_identities
+                SET
+                    app_user_id = ?,
+                    external_chat_id = ?,
+                    username = ?,
+                    display_name = ?,
+                    last_seen_at = CURRENT_TIMESTAMP
+                WHERE channel = ? AND external_user_id = ?
+                """,
+                (
+                    app_user_id,
+                    identity.external_chat_id,
+                    identity.username,
+                    identity.display_name,
+                    identity.channel,
+                    identity.external_user_id,
+                ),
+            )
+
+        updated = self.find(identity)
+        if updated is None:
+            raise RuntimeError("Reassigned external identity could not be read")
+        return updated
+
+    def count_for_user(self, app_user_id: int) -> int:
+        """Возвращает количество внешних личностей пользователя."""
+        row = self._connection.execute(
+            """
+            SELECT COUNT(*) AS identity_count
+            FROM external_identities
+            WHERE app_user_id = ?
+            """,
+            (app_user_id,),
+        ).fetchone()
+        return int(row["identity_count"])
+
     def touch(self, identity: IncomingIdentity) -> None:
         """Обновляет чат, имя и время последнего появления внешней личности."""
         with self._connection:
@@ -175,30 +230,123 @@ class SQLiteIdentityLinkTokenRepository(IdentityLinkTokenRepository):
     def consume(self, *, token_hash: str, now: datetime) -> int | None:
         """Погашает действующий код и возвращает ID пользователя."""
         with self._connection:
-            row = self._connection.execute(
-                """
-                SELECT id, app_user_id
-                FROM identity_link_tokens
-                WHERE token_hash = ?
-                    AND used_at IS NULL
-                    AND expires_at > ?
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (token_hash, _format_timestamp(now)),
-            ).fetchone()
+            row = self._find_active_row(token_hash=token_hash, now=now)
             if row is None:
                 return None
 
-            self._connection.execute(
+            cursor = self._connection.execute(
                 """
                 UPDATE identity_link_tokens
                 SET used_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND used_at IS NULL
                 """,
                 (row["id"],),
             )
+            if cursor.rowcount != 1:
+                return None
             return row["app_user_id"]
+
+    def find_active(self, *, token_hash: str, now: datetime) -> int | None:
+        """Возвращает ID пользователя для действующего кода без погашения."""
+        row = self._find_active_row(token_hash=token_hash, now=now)
+        return row["app_user_id"] if row is not None else None
+
+    def _find_active_row(
+        self,
+        *,
+        token_hash: str,
+        now: datetime,
+    ) -> sqlite3.Row | None:
+        return self._connection.execute(
+            """
+            SELECT id, app_user_id
+            FROM identity_link_tokens
+            WHERE token_hash = ?
+                AND used_at IS NULL
+                AND expires_at > ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (token_hash, _format_timestamp(now)),
+        ).fetchone()
+
+
+class SQLiteIdentityRebindConfirmationRepository(IdentityRebindConfirmationRepository):
+    """Хранит ожидающие подтверждения перепривязки каналов в SQLite."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def save(
+        self,
+        *,
+        identity: IncomingIdentity,
+        token_hash: str,
+        target_app_user_id: int,
+        expires_at: datetime,
+    ) -> None:
+        """Сохраняет ожидающее подтверждение перепривязки канала."""
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO identity_rebind_confirmations (
+                    channel,
+                    external_user_id,
+                    token_hash,
+                    target_app_user_id,
+                    expires_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(channel, external_user_id) DO UPDATE SET
+                    token_hash = excluded.token_hash,
+                    target_app_user_id = excluded.target_app_user_id,
+                    expires_at = excluded.expires_at,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    identity.channel,
+                    identity.external_user_id,
+                    token_hash,
+                    target_app_user_id,
+                    _format_timestamp(expires_at),
+                ),
+            )
+
+    def find(
+        self,
+        *,
+        identity: IncomingIdentity,
+        now: datetime,
+    ) -> tuple[str, int] | None:
+        """Возвращает активное подтверждение перепривязки канала."""
+        row = self._connection.execute(
+            """
+            SELECT token_hash, target_app_user_id
+            FROM identity_rebind_confirmations
+            WHERE channel = ?
+                AND external_user_id = ?
+                AND expires_at > ?
+            """,
+            (
+                identity.channel,
+                identity.external_user_id,
+                _format_timestamp(now),
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        return row["token_hash"], row["target_app_user_id"]
+
+    def delete(self, *, identity: IncomingIdentity) -> None:
+        """Удаляет ожидающее подтверждение перепривязки канала."""
+        with self._connection:
+            self._connection.execute(
+                """
+                DELETE FROM identity_rebind_confirmations
+                WHERE channel = ? AND external_user_id = ?
+                """,
+                (identity.channel, identity.external_user_id),
+            )
 
 
 def _external_identity_from_row(row: sqlite3.Row) -> ExternalIdentity:

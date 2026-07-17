@@ -36,6 +36,21 @@ CREATE INDEX idx_identity_link_tokens_app_user_id
 CREATE INDEX idx_identity_link_tokens_expires_at
     ON identity_link_tokens (expires_at);
 
+CREATE TABLE identity_rebind_confirmations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    external_user_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    target_app_user_id INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (target_app_user_id) REFERENCES app_users (id) ON DELETE CASCADE,
+    UNIQUE (channel, external_user_id)
+);
+
+CREATE INDEX idx_identity_rebind_confirmations_expires_at
+    ON identity_rebind_confirmations (expires_at);
+
 INSERT INTO app_users (id, display_name)
 VALUES (1, 'Legacy user');
 

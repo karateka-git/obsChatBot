@@ -9,6 +9,7 @@ from typing import Callable
 from obs_chat_bot.application.users.ports import (
     AppUserRepository,
     ExternalIdentityRepository,
+    IdentityRebindConfirmationRepository,
     IdentityLinkTokenRepository,
 )
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
@@ -43,6 +44,7 @@ class UserIdentityService:
         app_user_repository: AppUserRepository,
         external_identity_repository: ExternalIdentityRepository,
         link_token_repository: IdentityLinkTokenRepository,
+        rebind_confirmation_repository: IdentityRebindConfirmationRepository,
         clock: Callable[[], datetime] | None = None,
         token_factory: Callable[[], str] | None = None,
         token_ttl: timedelta = timedelta(minutes=10),
@@ -50,6 +52,7 @@ class UserIdentityService:
         self._app_user_repository = app_user_repository
         self._external_identity_repository = external_identity_repository
         self._link_token_repository = link_token_repository
+        self._rebind_confirmation_repository = rebind_confirmation_repository
         self._clock = clock or (lambda: datetime.now(UTC))
         self._token_factory = token_factory or (lambda: token_urlsafe(6))
         self._token_ttl = token_ttl
@@ -110,6 +113,86 @@ class UserIdentityService:
         if app_user is None:
             raise InvalidLinkCodeError("Link code points to missing user")
         return app_user
+
+    def request_rebind_confirmation(
+        self,
+        *,
+        code: str,
+        identity: IncomingIdentity,
+    ) -> AppUser:
+        """Запрашивает подтверждение перепривязки уже известного канала."""
+        current_user = self.resolve(identity)
+        if current_user is None:
+            raise InvalidLinkCodeError("External identity is not bound")
+
+        token_hash = _hash_code(code.strip())
+        target_app_user_id = self._link_token_repository.find_active(
+            token_hash=token_hash,
+            now=self._clock(),
+        )
+        if target_app_user_id is None:
+            raise InvalidLinkCodeError("Link code is invalid or expired")
+        if target_app_user_id == current_user.id:
+            raise IdentityAlreadyBoundError("External identity is already bound")
+
+        target_user = self._app_user_repository.get_by_id(target_app_user_id)
+        if target_user is None:
+            raise InvalidLinkCodeError("Link code points to missing user")
+
+        self._rebind_confirmation_repository.save(
+            identity=identity,
+            token_hash=token_hash,
+            target_app_user_id=target_app_user_id,
+            expires_at=self._clock() + self._token_ttl,
+        )
+        return target_user
+
+    def confirm_rebind(self, identity: IncomingIdentity) -> AppUser:
+        """Подтверждает ожидающую перепривязку канала."""
+        confirmation = self._rebind_confirmation_repository.find(
+            identity=identity,
+            now=self._clock(),
+        )
+        if confirmation is None:
+            raise InvalidLinkCodeError("Rebind confirmation is missing or expired")
+
+        token_hash, target_app_user_id = confirmation
+        consumed_app_user_id = self._link_token_repository.consume(
+            token_hash=token_hash,
+            now=self._clock(),
+        )
+        if consumed_app_user_id != target_app_user_id:
+            self._rebind_confirmation_repository.delete(identity=identity)
+            raise InvalidLinkCodeError("Link code is invalid or expired")
+
+        previous_identity = self._external_identity_repository.find(identity)
+        previous_app_user_id = (
+            previous_identity.app_user_id if previous_identity is not None else None
+        )
+        self._external_identity_repository.reassign(
+            app_user_id=target_app_user_id,
+            identity=identity,
+        )
+        self._rebind_confirmation_repository.delete(identity=identity)
+
+        if (
+            previous_app_user_id is not None
+            and previous_app_user_id != target_app_user_id
+            and self._external_identity_repository.count_for_user(
+                previous_app_user_id
+            )
+            == 0
+        ):
+            self._app_user_repository.delete(previous_app_user_id)
+
+        app_user = self._app_user_repository.get_by_id(target_app_user_id)
+        if app_user is None:
+            raise InvalidLinkCodeError("Link code points to missing user")
+        return app_user
+
+    def cancel_rebind(self, identity: IncomingIdentity) -> None:
+        """Отменяет ожидающую перепривязку канала."""
+        self._rebind_confirmation_repository.delete(identity=identity)
 
 
 def _hash_code(code: str) -> str:

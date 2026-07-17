@@ -11,6 +11,7 @@ from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
 from obs_chat_bot.data.sqlite.user_identity_repository import (
     SQLiteAppUserRepository,
     SQLiteExternalIdentityRepository,
+    SQLiteIdentityRebindConfirmationRepository,
     SQLiteIdentityLinkTokenRepository,
 )
 from obs_chat_bot.domain.users.entities import IncomingIdentity
@@ -49,6 +50,33 @@ class SQLiteUserIdentityRepositoryTest(unittest.TestCase):
         self.assertEqual(linked, user)
         self.assertEqual(resolved, user)
 
+    def test_confirm_rebind_moves_channel_and_deletes_empty_previous_user(self) -> None:
+        """Подтверждение перепривязки переносит канал и удаляет пустого старого пользователя."""
+        with TemporaryDirectory(prefix="obs-chat-bot-identity-") as directory:
+            with connect_database(Path(directory) / "test.db") as connection:
+                apply_migrations(connection)
+                service = _service(connection)
+
+                old_user = service.register(_identity("telegram", "tg-1", "chat-1"))
+                new_user = service.register(_identity("vk", "vk-1", "chat-2"))
+                link_code = service.create_link_code(new_user.id)
+                target_user = service.request_rebind_confirmation(
+                    code=link_code.code,
+                    identity=_identity("telegram", "tg-1", "chat-1"),
+                )
+                rebound_user = service.confirm_rebind(
+                    _identity("telegram", "tg-1", "chat-1")
+                )
+                resolved = service.resolve(_identity("telegram", "tg-1", "chat-1"))
+                old_user_row = SQLiteAppUserRepository(connection).get_by_id(
+                    old_user.id
+                )
+
+        self.assertEqual(target_user, new_user)
+        self.assertEqual(rebound_user, new_user)
+        self.assertEqual(resolved, new_user)
+        self.assertIsNone(old_user_row)
+
 
 def _service(connection) -> UserIdentityService:
     """Создает identity service с предсказуемыми часами и кодом."""
@@ -56,6 +84,9 @@ def _service(connection) -> UserIdentityService:
         app_user_repository=SQLiteAppUserRepository(connection),
         external_identity_repository=SQLiteExternalIdentityRepository(connection),
         link_token_repository=SQLiteIdentityLinkTokenRepository(connection),
+        rebind_confirmation_repository=SQLiteIdentityRebindConfirmationRepository(
+            connection
+        ),
         clock=lambda: datetime(2026, 7, 17, tzinfo=UTC),
         token_factory=lambda: "ABC123",
         token_ttl=timedelta(minutes=10),
