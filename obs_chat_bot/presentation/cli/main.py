@@ -29,6 +29,7 @@ from obs_chat_bot.data.http.url_safety import UnsafeUrlError, validate_public_ht
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
 from obs_chat_bot.presentation.telegram.bot import TelegramBotError, run_telegram_bot
+from obs_chat_bot.presentation.vk.bot import VkBotError, run_vk_bot
 from obs_chat_bot.presentation.cli.smoke import (
     AnalysisSmokeError,
     SQLiteSmokeError,
@@ -79,6 +80,11 @@ def parse_args() -> argparse.Namespace:
         "--telegram-bot",
         action="store_true",
         help="Start Telegram bot polling.",
+    )
+    mode.add_argument(
+        "--vk-bot",
+        action="store_true",
+        help="Start VK bot long polling.",
     )
     return parser.parse_args()
 
@@ -131,6 +137,17 @@ def main() -> int:
         return run_telegram_bot_command(
             database_path=config.database_path,
             token=config.telegram_bot_token,
+            openai_base_url=config.openai_base_url,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            logger=logger,
+        )
+
+    if args.vk_bot:
+        return run_vk_bot_command(
+            database_path=config.database_path,
+            token=config.vk_bot_token,
+            group_id=config.vk_group_id,
             openai_base_url=config.openai_base_url,
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
@@ -219,6 +236,23 @@ def check_llm_config(
         logger.error("LLM base URL is not safe: %s", error)
         return False
     logger.info("LLM configuration is ready")
+    return True
+
+
+def check_vk_config(
+    *,
+    token: str,
+    group_id: int | None,
+    logger: logging.Logger,
+) -> bool:
+    """Проверяет VK-конфигурацию для запуска VK adapter."""
+    if not token.strip():
+        logger.error("VK bot token is empty")
+        return False
+    if group_id is None or group_id <= 0:
+        logger.error("VK group id is missing or invalid")
+        return False
+    logger.info("VK configuration is ready")
     return True
 
 
@@ -405,7 +439,7 @@ def run_telegram_bot_command(
         run_telegram_bot(
             token=token,
             incoming_message_processor=lambda incoming_message: (
-                process_telegram_incoming_message(
+                process_channel_incoming_message(
                     database_path=database_path,
                     incoming_message=incoming_message,
                     openai_base_url=openai_base_url,
@@ -430,7 +464,70 @@ def run_telegram_bot_command(
     return 0
 
 
-def process_telegram_incoming_message(
+def run_vk_bot_command(
+    *,
+    database_path: Path,
+    token: str,
+    group_id: int | None,
+    openai_base_url: str = "",
+    openai_api_key: str = "",
+    openai_model: str = "",
+    logger: logging.Logger,
+    use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
+    analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
+) -> int:
+    """Запускает VK adapter как CLI-команду.
+
+    Args:
+        database_path: Путь к рабочему файлу SQLite.
+        token: VK group access token.
+        group_id: ID VK-группы для Bots Long Poll.
+        openai_base_url: Базовый URL OpenAI-compatible API.
+        openai_api_key: API key провайдера LLM.
+        openai_model: Имя модели для анализа статей.
+        logger: Logger для результата запуска.
+        use_case_factory: Factory use case для тестов.
+        analysis_use_case_factory: Factory analysis use case для тестов.
+
+    Returns:
+        Ноль при штатной остановке, иначе единицу.
+    """
+    if not check_vk_config(token=token, group_id=group_id, logger=logger):
+        return 2
+
+    try:
+        if not initialize_database(database_path, logger):
+            return 1
+        run_vk_bot(
+            token=token,
+            group_id=group_id,
+            incoming_message_processor=lambda incoming_message: (
+                process_channel_incoming_message(
+                    database_path=database_path,
+                    incoming_message=incoming_message,
+                    openai_base_url=openai_base_url,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
+                    use_case_factory=use_case_factory,
+                    analysis_use_case_factory=analysis_use_case_factory,
+                )
+            ),
+            logger=logger,
+        )
+    except KeyboardInterrupt:
+        logger.info("VK bot stopped")
+        return 0
+    except (MigrationError, OSError, sqlite3.Error) as error:
+        logger.error("Could not prepare VK bot: %s", error)
+        return 1
+    except VkBotError as error:
+        logger.error("%s", error)
+        return 1
+
+    return 0
+
+
+def process_channel_incoming_message(
     *,
     database_path: Path,
     incoming_message: IncomingMessage,
@@ -440,11 +537,11 @@ def process_telegram_incoming_message(
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
 ) -> ProcessIncomingMessageResult:
-    """Обрабатывает одно Telegram-сообщение внутри worker thread.
+    """Обрабатывает одно сообщение внешнего канала внутри worker thread.
 
     Args:
         database_path: Путь к рабочему файлу SQLite.
-        incoming_message: Нормализованное сообщение Telegram.
+        incoming_message: Нормализованное сообщение внешнего канала.
         openai_base_url: Базовый URL OpenAI-compatible API.
         openai_api_key: API key провайдера LLM.
         openai_model: Имя модели для анализа статей.

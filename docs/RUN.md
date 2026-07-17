@@ -189,3 +189,21 @@ docker compose run --rm catcher python -m obs_chat_bot --analysis-smoke
 ```
 
 Команда создаёт временную базу, применяет миграции, создаёт статью с извлечённым текстом и проверяет analysis pipeline на fake LLM-анализаторе. Рабочая база `data/app.db` не изменяется.
+
+## 11. Запустить VK adapter
+
+Для VK нужны настройки в `.env`:
+
+```dotenv
+VK_BOT_TOKEN=...
+VK_GROUP_ID=...
+```
+
+После этого VK long polling можно запустить отдельной командой:
+
+```powershell
+docker compose run --rm --entrypoint python catcher -m obs_chat_bot --vk-bot
+```
+
+VK adapter использует тот же incoming-flow, регистрацию, привязку каналов,
+сохранение статей и LLM-анализ, что и Telegram.

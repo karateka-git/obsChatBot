@@ -23,15 +23,18 @@ from obs_chat_bot.data.config import AppConfig
 from obs_chat_bot.presentation.cli.main import (
     check_llm_config,
     check_telegram_config,
+    check_vk_config,
     configure_debug_logging,
     parse_args,
-    process_telegram_incoming_message,
+    process_channel_incoming_message,
     initialize_database,
     run_healthcheck,
     run_process_url_command,
     run_telegram_bot_command,
+    run_vk_bot_command,
 )
 from obs_chat_bot.presentation.telegram.bot import TelegramBotError
+from obs_chat_bot.presentation.vk.bot import VkBotError
 
 
 class SilentLogger:
@@ -156,6 +159,16 @@ class ProcessUrlCliTest(unittest.TestCase):
         self.assertFalse(args.sqlite_smoke)
         self.assertIsNone(args.process_url)
 
+    def test_parse_args_reads_vk_bot(self) -> None:
+        """CLI принимает запуск VK-бота как отдельный режим."""
+        with patch("sys.argv", ["obs-chat-bot", "--vk-bot"]):
+            args = parse_args()
+
+        self.assertTrue(args.vk_bot)
+        self.assertFalse(args.healthcheck)
+        self.assertFalse(args.sqlite_smoke)
+        self.assertIsNone(args.process_url)
+
     def test_run_healthcheck_validates_runtime_config(self) -> None:
         """Healthcheck проверяет SQLite, Telegram и LLM-конфигурацию."""
         with TemporaryDirectory(prefix="obs-chat-bot-health-") as temporary_directory:
@@ -185,6 +198,15 @@ class ProcessUrlCliTest(unittest.TestCase):
                 model="fake-model",
                 logger=SilentLogger(),
             )
+        )
+
+    def test_check_vk_config_rejects_missing_values(self) -> None:
+        """VK adapter требует token и group id."""
+        self.assertFalse(
+            check_vk_config(token="", group_id=123, logger=SilentLogger())
+        )
+        self.assertFalse(
+            check_vk_config(token="token", group_id=None, logger=SilentLogger())
         )
 
     def test_configure_debug_logging_enables_debug_level(self) -> None:
@@ -285,6 +307,41 @@ class ProcessUrlCliTest(unittest.TestCase):
         self.assertTrue(callable(processor))
         self.assertEqual(exit_code, 0)
 
+    def test_run_vk_bot_command_passes_processor(self) -> None:
+        """VK adapter получает processor вместо готового SQLite use case."""
+        fake_use_case = FakeProcessArticleUrlUseCase()
+        fake_analysis_use_case = FakeAnalyzeArticleUseCase()
+        with patch("obs_chat_bot.presentation.cli.main.run_vk_bot") as runner:
+            with TemporaryDirectory(prefix="obs-chat-bot-vk-") as temporary_directory:
+                exit_code = run_vk_bot_command(
+                    database_path=Path(temporary_directory) / "test.db",
+                    token="vk-token",
+                    group_id=123,
+                    logger=SilentLogger(),
+                    use_case_factory=lambda _connection: fake_use_case,
+                    analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
+                )
+
+        processor = runner.call_args.kwargs["incoming_message_processor"]
+        self.assertTrue(callable(processor))
+        self.assertEqual(exit_code, 0)
+
+    def test_run_vk_bot_command_returns_one_on_adapter_error(self) -> None:
+        """Ошибка VK adapter превращается в ненулевой exit code."""
+        with patch(
+            "obs_chat_bot.presentation.cli.main.run_vk_bot",
+            side_effect=VkBotError("failed"),
+        ):
+            with TemporaryDirectory(prefix="obs-chat-bot-vk-") as temporary_directory:
+                exit_code = run_vk_bot_command(
+                    database_path=Path(temporary_directory) / "test.db",
+                    token="vk-token",
+                    group_id=123,
+                    logger=SilentLogger(),
+                )
+
+        self.assertEqual(exit_code, 1)
+
     def test_telegram_processor_opens_fresh_sqlite_connection(self) -> None:
         """Telegram processor собирает dependencies внутри обработки сообщения."""
         fake_use_case = FakeProcessArticleUrlUseCase(article_id=None)
@@ -293,7 +350,7 @@ class ProcessUrlCliTest(unittest.TestCase):
         with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as temporary_directory:
             database_path = Path(temporary_directory) / "test.db"
             initialize_database(database_path, SilentLogger())
-            process_telegram_incoming_message(
+            process_channel_incoming_message(
                 database_path=database_path,
                 incoming_message=_telegram_message("/register"),
                 openai_base_url="https://llm.example/v1",
@@ -302,7 +359,7 @@ class ProcessUrlCliTest(unittest.TestCase):
                 use_case_factory=lambda _connection: fake_use_case,
                 analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
             )
-            result = process_telegram_incoming_message(
+            result = process_channel_incoming_message(
                 database_path=database_path,
                 incoming_message=_telegram_message("https://example.com/article", "msg-2"),
                 openai_base_url="https://llm.example/v1",

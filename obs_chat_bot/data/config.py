@@ -33,6 +33,8 @@ class AppConfig:
     openai_api_key: str
     openai_model: str
     app_debug: bool = False
+    vk_bot_token: str = ""
+    vk_group_id: int | None = None
 
     @property
     def data_dir(self) -> Path:
@@ -47,6 +49,8 @@ class AppConfig:
             "openai_api_key": _presence(self.openai_api_key),
             "openai_model": self.openai_model,
             "app_debug": str(self.app_debug).lower(),
+            "vk_bot_token": _presence(self.vk_bot_token),
+            "vk_group_id": str(self.vk_group_id) if self.vk_group_id is not None else "missing",
         }
 
 
@@ -67,6 +71,8 @@ def load_config() -> AppConfig:
         openai_api_key=_get_required("OPENAI_API_KEY"),
         openai_model=_get_required("OPENAI_MODEL"),
         app_debug=_get_bool("APP_DEBUG", default=False),
+        vk_bot_token=os.getenv("VK_BOT_TOKEN", ""),
+        vk_group_id=_get_optional_int("VK_GROUP_ID"),
     )
 
 
@@ -92,3 +98,16 @@ def _get_bool(name: str, *, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ConfigError(f"Environment variable {name} must be boolean")
+
+
+def _get_optional_int(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise ConfigError(f"Environment variable {name} must be integer") from error
+    if parsed <= 0:
+        raise ConfigError(f"Environment variable {name} must be positive")
+    return parsed

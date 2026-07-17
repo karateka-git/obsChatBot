@@ -7,6 +7,7 @@
 1. Убедиться, что Docker Desktop запущен.
 2. Проверить `.env`:
    - `TELEGRAM_BOT_TOKEN` задан;
+   - `VK_BOT_TOKEN` и `VK_GROUP_ID` заданы, если запускается VK adapter;
    - `OPENAI_BASE_URL` указывает на базовый URL AI-агента;
    - `OPENAI_API_KEY` содержит только токен, без `Bearer`;
    - `OPENAI_MODEL` заполнен, даже если провайдер игнорирует это поле;
@@ -53,6 +54,18 @@ python -m obs_chat_bot --analysis-smoke
 `docker compose up --build`, поднимает Telegram polling и держит контейнер
 активным до остановки через `Ctrl+C`. В логах ожидается старт polling без
 `TelegramConflictError`.
+
+## Запуск VK adapter
+
+Если в `.env` заданы `VK_BOT_TOKEN` и `VK_GROUP_ID`, VK adapter запускается
+отдельной командой:
+
+```powershell
+docker compose run --rm --entrypoint python catcher -m obs_chat_bot --vk-bot
+```
+
+VK использует тот же flow регистрации, привязки каналов, сохранения статей и
+LLM-анализа, что и Telegram.
 
 ## Проверка пользовательского сценария
 
@@ -107,7 +120,7 @@ con.close()
 Ожидаемые таблицы MVP:
 
 - `articles` — сохранённые статьи и их статус;
-- `incoming_messages` — Telegram-сообщения со ссылками;
+- `incoming_messages` — сообщения внешних каналов со ссылками;
 - `analysis_results` — сохранённые LLM-сводки;
 - `processing_errors` — диагностика ошибок загрузки, извлечения и анализа.
 

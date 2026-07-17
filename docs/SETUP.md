@@ -44,6 +44,7 @@ GitHub CLI не обязателен, но удобен для авториза�
 Секреты и настройки, которые понадобятся в `.env`:
 
 - Telegram bot token от BotFather.
+- VK group token и group id, если запускается VK adapter.
 - OpenAI-compatible API key.
 - OpenAI-compatible base URL.
 - Имя модели.
