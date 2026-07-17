@@ -14,7 +14,7 @@
 
 ```powershell
 Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine -match 'obs_chat_bot|telegram-bot|--telegram-bot' } |
+  Where-Object { $_.CommandLine -match 'obs_chat_bot|--telegram-bot' } |
   Select-Object ProcessId,Name,CommandLine
 ```
 
@@ -44,20 +44,13 @@ python -m obs_chat_bot --analysis-smoke
 ## Запуск бота
 
 ```powershell
-.\scripts\open-telegram-bot.cmd
+.\scripts\open-dev-start.cmd
 ```
 
-Окно PowerShell должно остаться открытым. В логах ожидается старт polling без
+Окно PowerShell должно остаться открытым. Скрипт запускает Docker Compose через
+`docker compose up --build`, поднимает Telegram polling и держит контейнер
+активным до остановки через `Ctrl+C`. В логах ожидается старт polling без
 `TelegramConflictError`.
-
-Альтернативный основной запуск через Docker Compose:
-
-```powershell
-docker compose up --build
-```
-
-Этот режим тоже запускает Telegram polling и держит контейнер активным до
-остановки через `Ctrl+C`.
 
 ## Проверка пользовательского сценария
 

@@ -25,12 +25,6 @@
 .\scripts\open-process-url.cmd "https://habr.com/ru/articles/198682/"
 ```
 
-Запустить Telegram-бота:
-
-```powershell
-.\scripts\open-telegram-bot.cmd
-```
-
 Текущий Telegram-сценарий:
 
 - сообщение без ссылки получает просьбу прислать ссылку и не сохраняется в `incoming_messages`;
@@ -59,8 +53,7 @@
 - `проверь pipeline`;
 - `проверь всё`;
 - `проверь ссылку` (если URL не указан, используется `https://habr.com/ru/articles/198682/`);
-- `проверь ссылку https://habr.com/ru/articles/198682/`;
-- `запусти telegram`.
+- `проверь ссылку https://habr.com/ru/articles/198682/`.
 
 Окно PowerShell останется открытым после завершения команды.
 

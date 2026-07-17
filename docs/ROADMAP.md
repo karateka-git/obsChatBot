@@ -647,7 +647,7 @@
 
 Этап 4 завершён: общий article pipeline готов к подключению Telegram adapter.
 
-Этап 5.1 завершён: добавлен пакет `presentation.telegram`, минимальный Telegram polling adapter через `aiogram`, CLI-команда `--telegram-bot` и скрипт запуска Telegram-бота в отдельном окне PowerShell.
+Этап 5.1 завершён: добавлен пакет `presentation.telegram`, минимальный Telegram polling adapter через `aiogram` и CLI-команда `--telegram-bot`, которую запускает Docker Compose.
 
 Этап 5.2 завершён: добавлена application-модель входящего сообщения и извлечение первой поддерживаемой HTTP/HTTPS-ссылки из текста.
 
