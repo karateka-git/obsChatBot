@@ -20,10 +20,13 @@ class ArticleAnalysisResult:
     result_text: str
     id: int | None = None
     created_at: datetime | None = None
+    app_user_id: int = 1
 
     def __post_init__(self) -> None:
         if self.article_id <= 0:
             raise ValueError("article_id must be positive")
+        if self.app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
         if not self.llm_model.strip():
             raise ValueError("llm_model must not be empty")
         if not self.prompt_version.strip():

@@ -7,6 +7,7 @@ from typing import Callable
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
 from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
+from obs_chat_bot.application.users.identity import UserIdentityService
 from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
     TrafilaturaArticleTextExtractor,
 )
@@ -21,6 +22,11 @@ from obs_chat_bot.data.sqlite.incoming_message_repository import (
 )
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
+)
+from obs_chat_bot.data.sqlite.user_identity_repository import (
+    SQLiteAppUserRepository,
+    SQLiteExternalIdentityRepository,
+    SQLiteIdentityLinkTokenRepository,
 )
 
 
@@ -45,6 +51,7 @@ class TelegramBotDependencies:
     article_url_use_case: ProcessArticleUrlUseCase
     article_analysis_use_case: AnalyzeArticleUseCase
     incoming_message_repository: IncomingMessageRepository
+    user_identity_service: UserIdentityService
 
 
 def create_process_article_url_use_case(
@@ -103,6 +110,15 @@ def create_incoming_message_repository(
     return SQLiteIncomingMessageRepository(connection)
 
 
+def create_user_identity_service(connection: sqlite3.Connection) -> UserIdentityService:
+    """Собирает сервис регистрации пользователей и привязки внешних каналов."""
+    return UserIdentityService(
+        app_user_repository=SQLiteAppUserRepository(connection),
+        external_identity_repository=SQLiteExternalIdentityRepository(connection),
+        link_token_repository=SQLiteIdentityLinkTokenRepository(connection),
+    )
+
+
 def create_telegram_bot_dependencies(
     connection: sqlite3.Connection,
     *,
@@ -130,4 +146,5 @@ def create_telegram_bot_dependencies(
             openai_model=openai_model,
         ),
         incoming_message_repository=create_incoming_message_repository(connection),
+        user_identity_service=create_user_identity_service(connection),
     )

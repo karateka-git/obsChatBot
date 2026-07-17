@@ -30,10 +30,14 @@ class ArticleRepository(Protocol):
     def get_by_id(self, article_id: int) -> Article | None:
         """Возвращает статью по ID или `None`, если записи нет."""
 
-    def find_by_normalized_url(self, normalized_url: str) -> Article | None:
+    def find_by_normalized_url(
+        self,
+        normalized_url: str,
+        app_user_id: int = 1,
+    ) -> Article | None:
         """Ищет статью по нормализованному URL."""
 
-    def find_by_text_hash(self, text_hash: str) -> list[Article]:
+    def find_by_text_hash(self, text_hash: str, app_user_id: int = 1) -> list[Article]:
         """Возвращает статьи с одинаковым хешем очищенного текста."""
 
     def update_status(
@@ -138,6 +142,7 @@ class ProcessingErrorRecorder(Protocol):
         self,
         *,
         article_id: int | None,
+        app_user_id: int | None = None,
         incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error_type: str,
@@ -147,6 +152,7 @@ class ProcessingErrorRecorder(Protocol):
 
         Args:
             article_id: ID статьи, если она уже была создана.
+            app_user_id: ID пользователя приложения, если он уже известен.
             incoming_message_id: ID входящего сообщения, если ошибка связана
                 с конкретным сообщением пользователя.
             stage: Этап обработки, на котором произошла ошибка.

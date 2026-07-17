@@ -13,6 +13,7 @@ class ArticleDto:
 
     source_url: str
     normalized_url: str
+    app_user_id: int
     title: str | None
     cleaned_text: str | None
     text_hash: str | None

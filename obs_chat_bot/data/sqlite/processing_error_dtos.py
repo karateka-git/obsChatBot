@@ -11,6 +11,7 @@ class ProcessingErrorDto:
     error_type: str
     error_message: str
     article_id: int | None = None
+    app_user_id: int | None = None
     incoming_message_id: int | None = None
     id: int | None = None
     created_at: str | None = None

@@ -24,6 +24,7 @@ class ProcessArticleUrlCommand:
     """Команда обработки одной ссылки на статью."""
 
     source_url: str
+    app_user_id: int = 1
     incoming_message_id: int | None = None
 
 
@@ -84,13 +85,17 @@ class ProcessArticleUrlUseCase:
         except ValueError as error:
             self._record_error(
                 article_id=None,
+                app_user_id=command.app_user_id,
                 incoming_message_id=command.incoming_message_id,
                 stage=ProcessingStage.NORMALIZATION,
                 error=error,
             )
             raise ProcessArticleUrlError(f"Could not normalize article URL: {error}") from error
 
-        existing = self._article_repository.find_by_normalized_url(normalized_url)
+        existing = self._article_repository.find_by_normalized_url(
+            normalized_url,
+            command.app_user_id,
+        )
         if existing is not None and existing.cleaned_text:
             return ProcessArticleUrlResult(
                 article=existing,
@@ -101,6 +106,7 @@ class ProcessArticleUrlUseCase:
         article = existing or self._create_article(
             command.source_url,
             normalized_url,
+            command.app_user_id,
             command.incoming_message_id,
         )
         created = existing is None
@@ -113,6 +119,7 @@ class ProcessArticleUrlUseCase:
             self._mark_failed_and_record(
                 article_id,
                 command.incoming_message_id,
+                command.app_user_id,
                 ProcessingStage.FETCHING,
                 error,
             )
@@ -124,6 +131,7 @@ class ProcessArticleUrlUseCase:
             self._mark_failed_and_record(
                 article_id,
                 command.incoming_message_id,
+                command.app_user_id,
                 ProcessingStage.EXTRACTION,
                 error,
             )
@@ -143,6 +151,7 @@ class ProcessArticleUrlUseCase:
             )
             self._record_error(
                 article_id=article_id,
+                app_user_id=command.app_user_id,
                 incoming_message_id=command.incoming_message_id,
                 stage=ProcessingStage.STORAGE,
                 error=error,
@@ -159,16 +168,22 @@ class ProcessArticleUrlUseCase:
         self,
         source_url: str,
         normalized_url: str,
+        app_user_id: int,
         incoming_message_id: int | None,
     ) -> Article:
         """Создаёт новую статью в статусе `new`."""
         try:
             return self._article_repository.create(
-                Article(source_url=source_url, normalized_url=normalized_url)
+                Article(
+                    source_url=source_url,
+                    normalized_url=normalized_url,
+                    app_user_id=app_user_id,
+                )
             )
         except Exception as error:
             self._record_error(
                 article_id=None,
+                app_user_id=app_user_id,
                 incoming_message_id=incoming_message_id,
                 stage=ProcessingStage.STORAGE,
                 error=error,
@@ -179,6 +194,7 @@ class ProcessArticleUrlUseCase:
         self,
         article_id: int,
         incoming_message_id: int | None,
+        app_user_id: int,
         stage: ProcessingStage,
         error: Exception,
     ) -> None:
@@ -186,6 +202,7 @@ class ProcessArticleUrlUseCase:
         self._article_repository.update_status(article_id, ArticleStatus.FAILED)
         self._record_error(
             article_id=article_id,
+            app_user_id=app_user_id,
             incoming_message_id=incoming_message_id,
             stage=stage,
             error=error,
@@ -195,6 +212,7 @@ class ProcessArticleUrlUseCase:
         self,
         *,
         article_id: int | None,
+        app_user_id: int | None,
         incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error: Exception,
@@ -205,6 +223,7 @@ class ProcessArticleUrlUseCase:
 
         self._error_recorder.record(
             article_id=article_id,
+            app_user_id=app_user_id,
             incoming_message_id=incoming_message_id,
             stage=stage,
             error_type=type(error).__name__,

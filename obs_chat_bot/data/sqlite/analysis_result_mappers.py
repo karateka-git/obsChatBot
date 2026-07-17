@@ -21,6 +21,7 @@ def analysis_result_dto_from_result(
     return ArticleAnalysisResultDto(
         id=result.id,
         article_id=result.article_id,
+        app_user_id=result.app_user_id,
         llm_model=result.llm_model,
         prompt_version=result.prompt_version,
         result_text=result.result_text,
@@ -40,6 +41,7 @@ def analysis_result_dto_from_row(row: sqlite3.Row) -> ArticleAnalysisResultDto:
     return ArticleAnalysisResultDto(
         id=row["id"],
         article_id=row["article_id"],
+        app_user_id=row["app_user_id"],
         llm_model=row["llm_model"],
         prompt_version=row["prompt_version"],
         result_text=row["result_text"],
@@ -69,6 +71,7 @@ def analysis_result_from_dto(
     return ArticleAnalysisResult(
         id=dto.id,
         article_id=dto.article_id,
+        app_user_id=dto.app_user_id,
         llm_model=dto.llm_model,
         prompt_version=dto.prompt_version,
         result_text=dto.result_text,

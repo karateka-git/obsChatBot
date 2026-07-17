@@ -21,6 +21,7 @@ class SQLiteProcessingErrorRecorder(ProcessingErrorRecorder):
         self,
         *,
         article_id: int | None,
+        app_user_id: int | None = None,
         incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error_type: str,
@@ -30,6 +31,7 @@ class SQLiteProcessingErrorRecorder(ProcessingErrorRecorder):
 
         Args:
             article_id: ID статьи, если она уже была создана.
+            app_user_id: ID пользователя приложения, если он уже известен.
             incoming_message_id: ID входящего сообщения, если ошибка связана
                 с конкретным сообщением пользователя.
             stage: Этап обработки, на котором произошла ошибка.
@@ -38,6 +40,7 @@ class SQLiteProcessingErrorRecorder(ProcessingErrorRecorder):
         """
         dto = ProcessingErrorDto(
             article_id=article_id,
+            app_user_id=app_user_id,
             incoming_message_id=incoming_message_id,
             stage=stage.value,
             error_type=error_type,
@@ -49,15 +52,17 @@ class SQLiteProcessingErrorRecorder(ProcessingErrorRecorder):
                 """
                 INSERT INTO processing_errors (
                     article_id,
+                    app_user_id,
                     incoming_message_id,
                     stage,
                     error_type,
                     error_message
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     dto.article_id,
+                    dto.app_user_id,
                     dto.incoming_message_id,
                     dto.stage,
                     dto.error_type,

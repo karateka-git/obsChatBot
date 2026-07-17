@@ -15,6 +15,7 @@ from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
 ARTICLE_COLUMNS = """
     id,
+    app_user_id,
     source_url,
     normalized_url,
     title,
@@ -81,16 +82,18 @@ class SQLiteArticleRepository(ArticleRepository):
                     INSERT INTO articles (
                         source_url,
                         normalized_url,
+                        app_user_id,
                         title,
                         cleaned_text,
                         text_hash,
                         status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         dto.source_url,
                         dto.normalized_url,
+                        dto.app_user_id,
                         dto.title,
                         dto.cleaned_text,
                         dto.text_hash,
@@ -98,7 +101,10 @@ class SQLiteArticleRepository(ArticleRepository):
                     ),
                 )
         except sqlite3.IntegrityError:
-            existing = self.find_by_normalized_url(article.normalized_url)
+            existing = self.find_by_normalized_url(
+                article.normalized_url,
+                article.app_user_id,
+            )
             if existing is not None:
                 raise ArticleAlreadyExistsError(existing) from None
             raise
@@ -129,7 +135,11 @@ class SQLiteArticleRepository(ArticleRepository):
         ).fetchone()
         return article_from_row(row) if row is not None else None
 
-    def find_by_normalized_url(self, normalized_url: str) -> Article | None:
+    def find_by_normalized_url(
+        self,
+        normalized_url: str,
+        app_user_id: int = 1,
+    ) -> Article | None:
         """Ищет статью по нормализованному URL.
 
         Args:
@@ -143,14 +153,20 @@ class SQLiteArticleRepository(ArticleRepository):
         """
         if not normalized_url.strip():
             raise ValueError("normalized_url must not be empty")
+        if app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
 
         row = self._connection.execute(
-            f"SELECT {ARTICLE_COLUMNS} FROM articles WHERE normalized_url = ?",
-            (normalized_url,),
+            f"""
+            SELECT {ARTICLE_COLUMNS}
+            FROM articles
+            WHERE app_user_id = ? AND normalized_url = ?
+            """,
+            (app_user_id, normalized_url),
         ).fetchone()
         return article_from_row(row) if row is not None else None
 
-    def find_by_text_hash(self, text_hash: str) -> list[Article]:
+    def find_by_text_hash(self, text_hash: str, app_user_id: int = 1) -> list[Article]:
         """Возвращает все статьи с одинаковым хешем очищенного текста.
 
         Args:
@@ -164,15 +180,17 @@ class SQLiteArticleRepository(ArticleRepository):
         """
         if not text_hash.strip():
             raise ValueError("text_hash must not be empty")
+        if app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
 
         rows = self._connection.execute(
             f"""
             SELECT {ARTICLE_COLUMNS}
             FROM articles
-            WHERE text_hash = ?
+            WHERE app_user_id = ? AND text_hash = ?
             ORDER BY id
             """,
-            (text_hash,),
+            (app_user_id, text_hash),
         ).fetchall()
         return [article_from_row(row) for row in rows]
 

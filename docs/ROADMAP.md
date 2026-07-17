@@ -701,7 +701,7 @@
 
 Этап 7.1.1 Runtime foundation завершён: `docker compose up` запускает Telegram-бота, runtime-зависимости закреплены в `requirements.txt`, composition root вынесен из CLI в `obs_chat_bot/bootstrap.py`.
 
-Этап 7.1.2 User identity и изоляция данных запланирован: добавить `app_users`, `external_identities`, `identity_link_tokens`, команды `/register`, `/link_code`, `/link <код>`, `app_user_id` для пользовательских данных и переиспользование статей только внутри пользователя.
+Этап 7.1.2 User identity и изоляция данных завершён: базовая схема SQLite теперь содержит `app_users`, `external_identities`, `identity_link_tokens`, статьи/сообщения/анализ/ошибки привязаны к `app_user_id`, одинаковые URL переиспользуются только внутри пользователя, Telegram поддерживает `/register`, `/link_code` и `/link <код>` для привязки нескольких каналов к одному пользователю.
 
 Этап 7.1.3 Channel-agnostic incoming flow запланирован: вынести общий сценарий входящего сообщения из Telegram adapter в application use case, вернуть structured result и оставить Telegram/VK adapters только преобразователями канальных сообщений и ответов.
 
@@ -709,4 +709,4 @@
 
 Этап 7.1.5 Security и operations запланирован: добавить URL safety против SSRF, расширенный healthcheck для Telegram/LLM, дополнительные команды диагностики вроде `/status` и `/reanalyze`; retention/backup SQLite вынести в backlog.
 
-Следующий шаг: продолжить Этап 7.1 с подпункта 7.1.2.
+Следующий шаг: продолжить Этап 7.1 с подпункта 7.1.3.

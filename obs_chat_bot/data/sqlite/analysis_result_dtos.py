@@ -12,6 +12,7 @@ class ArticleAnalysisResultDto:
     """
 
     article_id: int
+    app_user_id: int
     llm_model: str
     prompt_version: str
     result_text: str

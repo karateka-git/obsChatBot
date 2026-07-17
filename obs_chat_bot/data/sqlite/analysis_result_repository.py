@@ -13,6 +13,7 @@ from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 ANALYSIS_RESULT_COLUMNS = """
     id,
     article_id,
+    app_user_id,
     llm_model,
     prompt_version,
     result_text,
@@ -57,14 +58,16 @@ class SQLiteArticleAnalysisResultRepository(ArticleAnalysisResultRepository):
                 """
                 INSERT INTO analysis_results (
                     article_id,
+                    app_user_id,
                     llm_model,
                     prompt_version,
                     result_text
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     dto.article_id,
+                    dto.app_user_id,
                     dto.llm_model,
                     dto.prompt_version,
                     dto.result_text,

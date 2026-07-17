@@ -15,6 +15,10 @@ class IncomingMessage:
     chat_id: str
     message_id: str
     text: str
+    app_user_id: int = 1
+    external_user_id: str | None = None
+    username: str | None = None
+    display_name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.channel.strip():
@@ -25,6 +29,10 @@ class IncomingMessage:
             raise ValueError("message_id must not be empty")
         if not self.text.strip():
             raise ValueError("text must not be empty")
+        if self.app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
+        if self.external_user_id is not None and not self.external_user_id.strip():
+            raise ValueError("external_user_id must not be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +48,7 @@ class SavedIncomingMessage:
     chat_id: str
     message_id: str
     text: str
+    app_user_id: int = 1
     article_id: int | None = None
 
     def __post_init__(self) -> None:
@@ -53,5 +62,7 @@ class SavedIncomingMessage:
             raise ValueError("message_id must not be empty")
         if not self.text.strip():
             raise ValueError("text must not be empty")
+        if self.app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
         if self.article_id is not None and self.article_id <= 0:
             raise ValueError("article_id must be positive")

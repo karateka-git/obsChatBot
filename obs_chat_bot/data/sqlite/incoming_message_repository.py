@@ -16,6 +16,7 @@ from obs_chat_bot.data.sqlite.incoming_message_mappers import (
 INCOMING_MESSAGE_COLUMNS = """
     id,
     article_id,
+    app_user_id,
     channel,
     chat_id,
     message_id,
@@ -53,15 +54,17 @@ class SQLiteIncomingMessageRepository(IncomingMessageRepository):
                 """
                 INSERT INTO incoming_messages (
                     channel,
+                    app_user_id,
                     chat_id,
                     message_id,
                     message_text
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(channel, chat_id, message_id) DO NOTHING
                 """,
                 (
                     dto.channel,
+                    dto.app_user_id,
                     dto.chat_id,
                     dto.message_id,
                     dto.message_text,

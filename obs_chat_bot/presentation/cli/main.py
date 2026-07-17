@@ -362,6 +362,7 @@ def run_telegram_bot_command(
                 article_url_use_case=use_case,
                 article_analysis_use_case=analysis_use_case,
                 incoming_message_repository=dependencies.incoming_message_repository,
+                user_identity_service=dependencies.user_identity_service,
                 logger=logger,
             )
     except KeyboardInterrupt:

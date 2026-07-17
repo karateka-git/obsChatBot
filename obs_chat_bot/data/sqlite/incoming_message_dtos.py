@@ -12,6 +12,7 @@ class IncomingMessageDto:
     """
 
     channel: str
+    app_user_id: int
     chat_id: str
     message_id: str
     message_text: str

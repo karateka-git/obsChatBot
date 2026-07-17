@@ -22,6 +22,7 @@ def incoming_message_dto_from_message(
     """
     return IncomingMessageDto(
         channel=message.channel,
+        app_user_id=message.app_user_id,
         chat_id=message.chat_id,
         message_id=message.message_id,
         message_text=message.text,
@@ -41,6 +42,7 @@ def incoming_message_dto_from_row(row: sqlite3.Row) -> IncomingMessageDto:
         id=row["id"],
         article_id=row["article_id"],
         channel=row["channel"],
+        app_user_id=row["app_user_id"],
         chat_id=row["chat_id"],
         message_id=row["message_id"],
         message_text=row["message_text"],
@@ -69,6 +71,7 @@ def saved_incoming_message_from_dto(
         id=dto.id,
         article_id=dto.article_id,
         channel=dto.channel,
+        app_user_id=dto.app_user_id,
         chat_id=dto.chat_id,
         message_id=dto.message_id,
         text=dto.message_text,

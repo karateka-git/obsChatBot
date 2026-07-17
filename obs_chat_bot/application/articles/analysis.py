@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from obs_chat_bot.application.articles.errors import ArticleAnalysisError
 from obs_chat_bot.application.articles.ports import (
@@ -20,6 +20,7 @@ class AnalyzeArticleCommand:
     """Команда LLM-анализа уже сохранённой статьи."""
 
     article_id: int
+    app_user_id: int = 1
     incoming_message_id: int | None = None
 
 
@@ -73,6 +74,16 @@ class AnalyzeArticleUseCase:
                 LLM-анализ или сохранение результата завершились ошибкой.
         """
         article = self._get_article(command.article_id, command.incoming_message_id)
+        if article.app_user_id != command.app_user_id:
+            error = AnalyzeArticleError(f"Article not found: {command.article_id}")
+            self._record_error(
+                article_id=None,
+                app_user_id=command.app_user_id,
+                incoming_message_id=command.incoming_message_id,
+                stage=ProcessingStage.STORAGE,
+                error=error,
+            )
+            raise error
         existing = self._analysis_result_repository.get_latest_for_article(article.id)
         if existing is not None:
             return AnalyzeArticleResult(
@@ -87,6 +98,7 @@ class AnalyzeArticleUseCase:
             )
             self._record_error(
                 article_id=article.id,
+                app_user_id=article.app_user_id,
                 incoming_message_id=command.incoming_message_id,
                 stage=ProcessingStage.ANALYSIS,
                 error=error,
@@ -101,6 +113,7 @@ class AnalyzeArticleUseCase:
             self._mark_failed_and_record(
                 article.id,
                 command.incoming_message_id,
+                article.app_user_id,
                 error,
             )
             raise AnalyzeArticleError(f"Could not analyze article: {error}") from error
@@ -113,9 +126,11 @@ class AnalyzeArticleUseCase:
             self._mark_failed_and_record(
                 article.id,
                 command.incoming_message_id,
+                article.app_user_id,
                 error,
             )
             raise error
+        analysis = replace(analysis, app_user_id=article.app_user_id)
 
         try:
             saved_analysis = self._analysis_result_repository.save(analysis)
@@ -126,6 +141,7 @@ class AnalyzeArticleUseCase:
         except Exception as error:
             self._record_error(
                 article_id=article.id,
+                app_user_id=article.app_user_id,
                 incoming_message_id=command.incoming_message_id,
                 stage=ProcessingStage.STORAGE,
                 error=error,
@@ -140,6 +156,7 @@ class AnalyzeArticleUseCase:
             )
             self._record_error(
                 article_id=article.id,
+                app_user_id=article.app_user_id,
                 incoming_message_id=command.incoming_message_id,
                 stage=ProcessingStage.STORAGE,
                 error=error,
@@ -165,6 +182,7 @@ class AnalyzeArticleUseCase:
         error = AnalyzeArticleError(f"Article not found: {article_id}")
         self._record_error(
             article_id=None,
+            app_user_id=None,
             incoming_message_id=incoming_message_id,
             stage=ProcessingStage.STORAGE,
             error=error,
@@ -175,12 +193,14 @@ class AnalyzeArticleUseCase:
         self,
         article_id: int,
         incoming_message_id: int | None,
+        app_user_id: int,
         error: Exception,
     ) -> None:
         """Переводит статью в `failed` и сохраняет ошибку анализа."""
         self._article_repository.update_status(article_id, ArticleStatus.FAILED)
         self._record_error(
             article_id=article_id,
+            app_user_id=app_user_id,
             incoming_message_id=incoming_message_id,
             stage=ProcessingStage.ANALYSIS,
             error=error,
@@ -190,6 +210,7 @@ class AnalyzeArticleUseCase:
         self,
         *,
         article_id: int | None,
+        app_user_id: int | None,
         incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error: Exception,
@@ -200,6 +221,7 @@ class AnalyzeArticleUseCase:
 
         self._error_recorder.record(
             article_id=article_id,
+            app_user_id=app_user_id,
             incoming_message_id=incoming_message_id,
             stage=stage,
             error_type=type(error).__name__,

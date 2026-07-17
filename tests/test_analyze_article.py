@@ -107,11 +107,19 @@ class FakeArticleRepository:
             return None
         return self.article
 
-    def find_by_normalized_url(self, _normalized_url: str) -> Article | None:
+    def find_by_normalized_url(
+        self,
+        _normalized_url: str,
+        _app_user_id: int = 1,
+    ) -> Article | None:
         """Не используется в сценарии анализа."""
         return None
 
-    def find_by_text_hash(self, _text_hash: str) -> list[Article]:
+    def find_by_text_hash(
+        self,
+        _text_hash: str,
+        _app_user_id: int = 1,
+    ) -> list[Article]:
         """Не используется в сценарии анализа."""
         return []
 
@@ -203,6 +211,7 @@ class FakeProcessingErrorRecorder:
         self,
         *,
         article_id: int | None,
+        app_user_id: int | None = None,
         incoming_message_id: int | None = None,
         stage: ProcessingStage,
         error_type: str,
@@ -212,6 +221,7 @@ class FakeProcessingErrorRecorder:
         self.records.append(
             {
                 "article_id": article_id,
+                "app_user_id": app_user_id,
                 "incoming_message_id": incoming_message_id,
                 "stage": stage,
                 "error_type": error_type,

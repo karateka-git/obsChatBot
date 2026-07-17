@@ -12,6 +12,7 @@ class Article:
 
     source_url: str
     normalized_url: str
+    app_user_id: int = 1
     id: int | None = None
     title: str | None = None
     cleaned_text: str | None = None
@@ -25,5 +26,7 @@ class Article:
             raise ValueError("source_url must not be empty")
         if not self.normalized_url.strip():
             raise ValueError("normalized_url must not be empty")
+        if self.app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
         if not isinstance(self.status, ArticleStatus):
             raise TypeError("status must be an ArticleStatus")
