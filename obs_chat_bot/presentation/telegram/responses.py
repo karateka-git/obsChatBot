@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleResult
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlResult
+from obs_chat_bot.application.incoming.processing import (
+    IncomingMessageResultType,
+    ProcessIncomingMessageResult,
+)
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
 
@@ -71,6 +75,51 @@ def format_article_analysis_result(
     )
 
 
+def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
+    """Формирует Telegram-ответ по структурированному результату общего flow."""
+    match result.type:
+        case IncomingMessageResultType.UNKNOWN_IDENTITY:
+            return _format_unknown_identity_response()
+        case IncomingMessageResultType.REGISTERED:
+            return "Готово, я зарегистрировал тебя. Теперь пришли ссылку на статью."
+        case IncomingMessageResultType.LINK_CODE_CREATED:
+            if result.link_code is None:
+                return "Не удалось создать код привязки. Попробуй позже."
+            return (
+                f"Код привязки: `{result.link_code.code}`\n"
+                f"Открой другой канал и отправь: `/link {result.link_code.code}`\n"
+                "Код действует 10 минут."
+            )
+        case IncomingMessageResultType.LINK_COMMAND_INVALID:
+            return "Пришли команду в формате `/link <код>`."
+        case IncomingMessageResultType.LINKED:
+            return "Готово, я привязал этот канал к твоему пользователю."
+        case IncomingMessageResultType.LINK_ALREADY_BOUND:
+            return "Этот канал уже привязан к пользователю."
+        case IncomingMessageResultType.LINK_CODE_INVALID:
+            return "Код привязки не найден или уже истек. Создай новый через `/link_code`."
+        case IncomingMessageResultType.ARTICLE_URL_MISSING:
+            return "Пришли ссылку на статью, и я попробую ее сохранить."
+        case IncomingMessageResultType.ARTICLE_PROCESSED:
+            if result.article_result is None:
+                return "Статья обработана, но результат не удалось подготовить."
+            return format_article_processing_result(result.article_result)
+        case IncomingMessageResultType.ARTICLE_ANALYZED:
+            if result.article_result is None or result.analysis_result is None:
+                return "Анализ готов, но результат не удалось подготовить."
+            return format_article_analysis_result(
+                result.article_result,
+                result.analysis_result,
+            )
+        case IncomingMessageResultType.ARTICLE_PROCESSING_FAILED:
+            return _format_processing_error(result.error)
+        case IncomingMessageResultType.ARTICLE_ANALYSIS_FAILED:
+            return (
+                "Статью удалось сохранить, но анализ пока не получился. "
+                "Попробуй отправить ссылку позже."
+            )
+
+
 def _article_action_text(result: ProcessArticleUrlResult) -> str:
     """Выбирает первую строку ответа по тому, что сделал pipeline."""
     if result.created:
@@ -78,3 +127,24 @@ def _article_action_text(result: ProcessArticleUrlResult) -> str:
     if result.extracted:
         return "Готово: статья обновлена."
     return "Эта статья уже была сохранена."
+
+
+def _format_unknown_identity_response() -> str:
+    """Возвращает подсказку для первого входа из нового канала."""
+    return (
+        "Я пока не знаю этот канал.\n"
+        "Отправь `/register`, чтобы создать нового пользователя, или `/link <код>`, "
+        "чтобы привязать этот канал к уже существующему пользователю."
+    )
+
+
+def _format_processing_error(error: Exception | None) -> str:
+    """Формирует понятный ответ пользователю по ошибке article pipeline."""
+    message = str(error) if error is not None else ""
+    if "normalize" in message:
+        return "Не удалось разобрать ссылку. Проверь URL и пришли его еще раз."
+    if "fetch" in message:
+        return "Не удалось загрузить страницу по ссылке. Попробуй отправить ее позже."
+    if "extract" in message:
+        return "Страница загрузилась, но текст статьи извлечь не получилось."
+    return "Не удалось обработать ссылку. Попробуй отправить ее позже."

@@ -7,6 +7,7 @@ from typing import Callable
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
 from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
+from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
 from obs_chat_bot.application.users.identity import UserIdentityService
 from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
     TrafilaturaArticleTextExtractor,
@@ -52,6 +53,7 @@ class TelegramBotDependencies:
     article_analysis_use_case: AnalyzeArticleUseCase
     incoming_message_repository: IncomingMessageRepository
     user_identity_service: UserIdentityService
+    incoming_message_use_case: ProcessIncomingMessageUseCase
 
 
 def create_process_article_url_use_case(
@@ -119,6 +121,22 @@ def create_user_identity_service(connection: sqlite3.Connection) -> UserIdentity
     )
 
 
+def create_process_incoming_message_use_case(
+    *,
+    article_url_use_case: ProcessArticleUrlUseCase,
+    article_analysis_use_case: AnalyzeArticleUseCase | None,
+    incoming_message_repository: IncomingMessageRepository | None,
+    user_identity_service: UserIdentityService | None,
+) -> ProcessIncomingMessageUseCase:
+    """Собирает общий сценарий обработки входящего сообщения из любого канала."""
+    return ProcessIncomingMessageUseCase(
+        article_url_use_case=article_url_use_case,
+        article_analysis_use_case=article_analysis_use_case,
+        incoming_message_repository=incoming_message_repository,
+        user_identity_service=user_identity_service,
+    )
+
+
 def create_telegram_bot_dependencies(
     connection: sqlite3.Connection,
     *,
@@ -137,14 +155,25 @@ def create_telegram_bot_dependencies(
     Returns:
         Группа зависимостей для запуска Telegram adapter.
     """
+    article_url_use_case = create_process_article_url_use_case(connection)
+    article_analysis_use_case = create_analyze_article_use_case(
+        connection,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
+    )
+    incoming_message_repository = create_incoming_message_repository(connection)
+    user_identity_service = create_user_identity_service(connection)
+
     return TelegramBotDependencies(
-        article_url_use_case=create_process_article_url_use_case(connection),
-        article_analysis_use_case=create_analyze_article_use_case(
-            connection,
-            openai_base_url=openai_base_url,
-            openai_api_key=openai_api_key,
-            openai_model=openai_model,
+        article_url_use_case=article_url_use_case,
+        article_analysis_use_case=article_analysis_use_case,
+        incoming_message_repository=incoming_message_repository,
+        user_identity_service=user_identity_service,
+        incoming_message_use_case=create_process_incoming_message_use_case(
+            article_url_use_case=article_url_use_case,
+            article_analysis_use_case=article_analysis_use_case,
+            incoming_message_repository=incoming_message_repository,
+            user_identity_service=user_identity_service,
         ),
-        incoming_message_repository=create_incoming_message_repository(connection),
-        user_identity_service=create_user_identity_service(connection),
     )

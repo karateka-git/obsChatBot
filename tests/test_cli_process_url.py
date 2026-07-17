@@ -177,9 +177,10 @@ class ProcessUrlCliTest(unittest.TestCase):
                     analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
                 )
 
-        self.assertIs(runner.call_args.kwargs["article_url_use_case"], fake_use_case)
+        incoming_use_case = runner.call_args.kwargs["incoming_message_use_case"]
+        self.assertIs(incoming_use_case._article_url_use_case, fake_use_case)
         self.assertIs(
-            runner.call_args.kwargs["article_analysis_use_case"],
+            incoming_use_case._article_analysis_use_case,
             fake_analysis_use_case,
         )
         self.assertEqual(exit_code, 0)

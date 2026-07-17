@@ -10,6 +10,7 @@ from obs_chat_bot.application.articles.extracted import ExtractedArticle
 from obs_chat_bot.application.articles.html import ArticleHtml
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
+from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
 from obs_chat_bot.data.sqlite.analysis_result_repository import (
     SQLiteArticleAnalysisResultRepository,
 )
@@ -24,7 +25,7 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
 )
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
-from obs_chat_bot.presentation.telegram.bot import process_incoming_message
+from obs_chat_bot.presentation.telegram.responses import format_incoming_message_result
 
 
 class SilentLogger:
@@ -62,19 +63,16 @@ class TelegramFlowSmokeTest(unittest.TestCase):
                 )
                 message_repository = SQLiteIncomingMessageRepository(connection)
 
-                first_reply = process_incoming_message(
-                    _message("10"),
+                incoming_use_case = ProcessIncomingMessageUseCase(
                     article_url_use_case=process_use_case,
                     article_analysis_use_case=analysis_use_case,
                     incoming_message_repository=message_repository,
-                    logger=SilentLogger(),
                 )
-                second_reply = process_incoming_message(
-                    _message("11"),
-                    article_url_use_case=process_use_case,
-                    article_analysis_use_case=analysis_use_case,
-                    incoming_message_repository=message_repository,
-                    logger=SilentLogger(),
+                first_reply = format_incoming_message_result(
+                    incoming_use_case.execute(_message("10"))
+                )
+                second_reply = format_incoming_message_result(
+                    incoming_use_case.execute(_message("11"))
                 )
 
                 counts = _read_counts(connection)

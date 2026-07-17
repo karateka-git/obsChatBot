@@ -1,16 +1,26 @@
 """Тесты форматирования ответов Telegram adapter."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 import unittest
 
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleResult
-from obs_chat_bot.application.articles.processing import ProcessArticleUrlResult
+from obs_chat_bot.application.articles.processing import (
+    ProcessArticleUrlError,
+    ProcessArticleUrlResult,
+)
+from obs_chat_bot.application.incoming.processing import (
+    IncomingMessageResultType,
+    ProcessIncomingMessageResult,
+)
+from obs_chat_bot.application.users.identity import CreatedLinkCode
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.presentation.telegram.responses import (
     format_article_analysis_result,
     format_article_processing_result,
+    format_incoming_message_result,
 )
 
 
@@ -95,6 +105,43 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("Готово: статья сохранена.", reply)
         self.assertIn("Анализ готов.", reply)
         self.assertIn("## Кратко", reply)
+
+
+    def test_format_incoming_message_result_reports_missing_url(self) -> None:
+        """Общий результат без URL получает пользовательскую подсказку."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_URL_MISSING
+            )
+        )
+
+        self.assertIn("Пришли ссылку", reply)
+
+    def test_format_incoming_message_result_reports_link_code(self) -> None:
+        """Код привязки форматируется как команда для второго канала."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.LINK_CODE_CREATED,
+                link_code=CreatedLinkCode(
+                    code="ABC123",
+                    expires_at=datetime(2026, 7, 17, tzinfo=UTC),
+                ),
+            )
+        )
+
+        self.assertIn("ABC123", reply)
+        self.assertIn("/link ABC123", reply)
+
+    def test_format_incoming_message_result_reports_processing_error(self) -> None:
+        """Ошибка article pipeline получает понятный текст ответа."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_PROCESSING_FAILED,
+                error=ProcessArticleUrlError("Could not fetch article HTML: failed"),
+            )
+        )
+
+        self.assertIn("Не удалось загрузить страницу", reply)
 
 
 def _article() -> Article:

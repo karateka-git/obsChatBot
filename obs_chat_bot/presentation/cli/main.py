@@ -14,6 +14,7 @@ from obs_chat_bot.application.articles.processing import (
 from obs_chat_bot.bootstrap import (
     AnalyzeArticleUseCaseFactory,
     ProcessArticleUrlUseCaseFactory,
+    create_process_incoming_message_use_case,
     create_process_article_url_use_case,
     create_telegram_bot_dependencies,
 )
@@ -357,12 +358,15 @@ def run_telegram_bot_command(
                 if analysis_use_case_factory is not None
                 else dependencies.article_analysis_use_case
             )
-            run_telegram_bot(
-                token=token,
+            incoming_message_use_case = create_process_incoming_message_use_case(
                 article_url_use_case=use_case,
                 article_analysis_use_case=analysis_use_case,
                 incoming_message_repository=dependencies.incoming_message_repository,
                 user_identity_service=dependencies.user_identity_service,
+            )
+            run_telegram_bot(
+                token=token,
+                incoming_message_use_case=incoming_message_use_case,
                 logger=logger,
             )
     except KeyboardInterrupt:
