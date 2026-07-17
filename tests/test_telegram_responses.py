@@ -9,6 +9,7 @@ from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlError,
     ProcessArticleUrlResult,
 )
+from obs_chat_bot.application.articles.stages import ProcessingStage
 from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
@@ -17,6 +18,7 @@ from obs_chat_bot.application.users.identity import CreatedLinkCode
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
+from obs_chat_bot.domain.users.entities import AppUser
 from obs_chat_bot.presentation.telegram.responses import (
     format_article_analysis_result,
     format_article_processing_result,
@@ -137,11 +139,48 @@ class TelegramResponsesTest(unittest.TestCase):
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_PROCESSING_FAILED,
-                error=ProcessArticleUrlError("Could not fetch article HTML: failed"),
+                error=ProcessArticleUrlError(
+                    "Could not fetch article HTML: failed",
+                    stage=ProcessingStage.FETCHING,
+                ),
             )
         )
 
         self.assertIn("Не удалось загрузить страницу", reply)
+
+    def test_format_incoming_message_result_reports_status(self) -> None:
+        """Команда статуса сообщает ID пользователя и доступные действия."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.STATUS,
+                app_user=AppUser(id=42),
+            )
+        )
+
+        self.assertIn("Бот работает", reply)
+        self.assertIn("ID пользователя: 42", reply)
+
+    def test_format_incoming_message_result_reports_reanalysis(self) -> None:
+        """Повторный анализ форматируется как полезный Markdown-ответ."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_REANALYZED,
+                analysis_result=AnalyzeArticleResult(
+                    article=replace(_article(), status=ArticleStatus.ANALYZED),
+                    analysis=ArticleAnalysisResult(
+                        id=2,
+                        article_id=1,
+                        llm_model="fake-llm",
+                        prompt_version="article-summary-v1",
+                        result_text="## Кратко\nОбновлено.",
+                    ),
+                    created=True,
+                ),
+            )
+        )
+
+        self.assertIn("Анализ обновлен.", reply)
+        self.assertIn("## Кратко", reply)
 
 
 def _article() -> Article:

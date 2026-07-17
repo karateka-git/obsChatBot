@@ -705,8 +705,8 @@
 
 Этап 7.1.3 Channel-agnostic incoming flow завершён: общий сценарий входящего сообщения вынесен в `ProcessIncomingMessageUseCase`, он возвращает structured result, а Telegram adapter теперь только преобразует Telegram message в application-модель, вызывает общий use case и форматирует результат для канала.
 
-Этап 7.1.4 Telegram UX и async hardening запланирован: добавить быстрый ack перед долгой обработкой, убрать блокировку event loop, безопасно отправлять длинные ответы chunks, ограничить длину LLM prompt/response и улучшить пользовательские тексты ошибок.
+Этап 7.1.4 Telegram UX и async hardening завершён: Telegram adapter отправляет быстрый ack перед долгой обработкой, выполняет общий blocking flow через worker thread, безопасно режет длинные ответы на chunks, LLM prompt/response ограничены, а пользовательские ошибки article pipeline опираются на типизированный stage.
 
-Этап 7.1.5 Security и operations запланирован: добавить URL safety против SSRF, расширенный healthcheck для Telegram/LLM, дополнительные команды диагностики вроде `/status` и `/reanalyze`; retention/backup SQLite вынести в backlog.
+Этап 7.1.5 Security и operations завершён: HTTP-загрузчик отклоняет localhost/private/link-local URL до запроса и после redirect, healthcheck проверяет SQLite/Telegram/LLM-конфигурацию, Telegram поддерживает `/status` и `/reanalyze <ID статьи>`; retention/backup SQLite вынесен в backlog.
 
-Следующий шаг: продолжить Этап 7.1 с подпункта 7.1.4.
+Следующий шаг: переходить к следующему этапу после 7.1.

@@ -4,11 +4,16 @@ import asyncio
 import logging
 from typing import Any
 
+from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
 from obs_chat_bot.presentation.telegram.responses import (
     format_incoming_message_result,
 )
+
+
+TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
+PROCESSING_ACK_TEXT = "Принял, обрабатываю. Это может занять немного времени."
 
 
 class TelegramBotError(RuntimeError):
@@ -87,11 +92,17 @@ def _register_handlers(
             return
 
         incoming_message = _incoming_message_from_telegram(message)
-        result = incoming_message_use_case.execute(incoming_message)
+        if _should_send_processing_ack(message.text):
+            await message.answer(PROCESSING_ACK_TEXT)
+
+        result = await asyncio.to_thread(
+            incoming_message_use_case.execute,
+            incoming_message,
+        )
         if result.error is not None:
             logger.error("Telegram incoming message processing failed: %s", result.error)
         reply = format_incoming_message_result(result)
-        await message.answer(reply)
+        await send_telegram_reply(message, reply)
 
     dispatcher.include_router(router)
 
@@ -122,6 +133,72 @@ def _incoming_message_from_telegram(message: Any) -> IncomingMessage:
             else None
         ),
         display_name=display_name,
+    )
+
+
+async def send_telegram_reply(
+    message: Any,
+    text: str,
+    *,
+    limit: int = TELEGRAM_SAFE_MESSAGE_LIMIT,
+) -> None:
+    """Отправляет длинный Telegram-ответ безопасными частями.
+
+    Args:
+        message: Aiogram message или совместимый fake в тестах.
+        text: Текст ответа.
+        limit: Максимальная длина одного сообщения с запасом ниже лимита Telegram.
+    """
+    for chunk in split_telegram_message(text, limit=limit):
+        await message.answer(chunk)
+
+
+def split_telegram_message(text: str, *, limit: int = TELEGRAM_SAFE_MESSAGE_LIMIT) -> list[str]:
+    """Делит текст на части, не превышающие безопасный лимит Telegram.
+
+    Args:
+        text: Исходный ответ.
+        limit: Максимальная длина одного фрагмента.
+
+    Returns:
+        Непустой список фрагментов для последовательной отправки.
+    """
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    if not text:
+        return [""]
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+
+        split_at = _find_split_position(remaining, limit)
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+
+    return chunks
+
+
+def _find_split_position(text: str, limit: int) -> int:
+    """Находит позицию разреза по абзацу, строке или пробелу."""
+    window = text[:limit]
+    for separator in ("\n\n", "\n", " "):
+        position = window.rfind(separator)
+        if position > 0:
+            return position + len(separator)
+    return limit
+
+
+def _should_send_processing_ack(text: str) -> bool:
+    """Определяет, будет ли сообщение запускать долгую обработку."""
+    stripped_text = text.strip()
+    return stripped_text.startswith("/reanalyze") or (
+        extract_first_supported_url(stripped_text) is not None
     )
 
 

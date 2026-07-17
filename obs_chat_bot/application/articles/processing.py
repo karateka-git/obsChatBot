@@ -40,6 +40,21 @@ class ProcessArticleUrlResult:
 class ProcessArticleUrlError(RuntimeError):
     """Ошибка полного pipeline обработки URL статьи."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: ProcessingStage | None = None,
+    ) -> None:
+        """Создаёт ошибку article pipeline с типизированным этапом.
+
+        Args:
+            message: Техническое описание ошибки.
+            stage: Этап pipeline, на котором произошла ошибка.
+        """
+        self.stage = stage
+        super().__init__(message)
+
 
 class ProcessArticleUrlUseCase:
     """Обрабатывает URL статьи до сохранения очищенного текста.
@@ -90,7 +105,10 @@ class ProcessArticleUrlUseCase:
                 stage=ProcessingStage.NORMALIZATION,
                 error=error,
             )
-            raise ProcessArticleUrlError(f"Could not normalize article URL: {error}") from error
+            raise ProcessArticleUrlError(
+                f"Could not normalize article URL: {error}",
+                stage=ProcessingStage.NORMALIZATION,
+            ) from error
 
         existing = self._article_repository.find_by_normalized_url(
             normalized_url,
@@ -123,7 +141,10 @@ class ProcessArticleUrlUseCase:
                 ProcessingStage.FETCHING,
                 error,
             )
-            raise ProcessArticleUrlError(f"Could not fetch article HTML: {error}") from error
+            raise ProcessArticleUrlError(
+                f"Could not fetch article HTML: {error}",
+                stage=ProcessingStage.FETCHING,
+            ) from error
 
         try:
             extracted = self._text_extractor.extract(html)
@@ -135,7 +156,10 @@ class ProcessArticleUrlUseCase:
                 ProcessingStage.EXTRACTION,
                 error,
             )
-            raise ProcessArticleUrlError(f"Could not extract article text: {error}") from error
+            raise ProcessArticleUrlError(
+                f"Could not extract article text: {error}",
+                stage=ProcessingStage.EXTRACTION,
+            ) from error
 
         text_hash = _build_text_hash(extracted.cleaned_text)
         updated = self._article_repository.update_content(
@@ -147,7 +171,8 @@ class ProcessArticleUrlUseCase:
         )
         if updated is None:
             error = ProcessArticleUrlError(
-                f"Article disappeared before content update: {article_id}"
+                f"Article disappeared before content update: {article_id}",
+                stage=ProcessingStage.STORAGE,
             )
             self._record_error(
                 article_id=article_id,
@@ -188,7 +213,10 @@ class ProcessArticleUrlUseCase:
                 stage=ProcessingStage.STORAGE,
                 error=error,
             )
-            raise ProcessArticleUrlError(f"Could not create article: {error}") from error
+            raise ProcessArticleUrlError(
+                f"Could not create article: {error}",
+                stage=ProcessingStage.STORAGE,
+            ) from error
 
     def _mark_failed_and_record(
         self,
@@ -234,7 +262,10 @@ class ProcessArticleUrlUseCase:
 def _require_article_id(article: Article) -> int:
     """Возвращает ID сохранённой статьи или выбрасывает ошибку."""
     if article.id is None:
-        raise ProcessArticleUrlError("Saved article must contain id")
+        raise ProcessArticleUrlError(
+            "Saved article must contain id",
+            stage=ProcessingStage.STORAGE,
+        )
     return article.id
 
 

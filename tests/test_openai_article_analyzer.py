@@ -4,7 +4,11 @@ from types import SimpleNamespace
 import unittest
 
 from obs_chat_bot.application.articles.errors import ArticleAnalysisError
-from obs_chat_bot.data.llm.openai_article_analyzer import OpenAIArticleAnalyzer
+from obs_chat_bot.data.llm.openai_article_analyzer import (
+    MAX_ANALYSIS_RESPONSE_CHARS,
+    MAX_ANALYSIS_RESPONSE_TOKENS,
+    OpenAIArticleAnalyzer,
+)
 from obs_chat_bot.domain.articles.entities import Article
 
 
@@ -28,6 +32,7 @@ class OpenAIArticleAnalyzerTest(unittest.TestCase):
         self.assertEqual(result.prompt_version, "article-summary-v1")
         self.assertIn("Готовый анализ", result.result_text)
         self.assertEqual(client.requests[0]["model"], "fake-model")
+        self.assertEqual(client.requests[0]["max_tokens"], MAX_ANALYSIS_RESPONSE_TOKENS)
         self.assertIn("Основные идеи", client.requests[0]["messages"][1]["content"])
 
     def test_analyze_rejects_article_without_text(self) -> None:
@@ -71,6 +76,20 @@ class OpenAIArticleAnalyzerTest(unittest.TestCase):
 
         with self.assertRaises(ArticleAnalysisError):
             analyzer.analyze(_article())
+
+    def test_analyze_limits_long_response(self) -> None:
+        """Слишком длинный ответ LLM сокращается перед сохранением."""
+        analyzer = OpenAIArticleAnalyzer(
+            base_url="https://llm.example/v1",
+            api_key="token",
+            model="fake-model",
+            client=FakeOpenAIClient(result_text="x" * (MAX_ANALYSIS_RESPONSE_CHARS + 50)),
+        )
+
+        result = analyzer.analyze(_article())
+
+        self.assertLess(len(result.result_text), MAX_ANALYSIS_RESPONSE_CHARS + 100)
+        self.assertIn("Ответ LLM был сокращен", result.result_text)
 
 
 class FakeOpenAIClient:

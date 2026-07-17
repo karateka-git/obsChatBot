@@ -10,6 +10,8 @@ from obs_chat_bot.domain.articles.entities import Article
 
 DEFAULT_PROMPT_VERSION = "article-summary-v1"
 MAX_ARTICLE_TEXT_CHARS = 24_000
+MAX_ANALYSIS_RESPONSE_TOKENS = 1200
+MAX_ANALYSIS_RESPONSE_CHARS = 8_000
 
 
 class OpenAIArticleAnalyzer(ArticleAnalyzer):
@@ -62,11 +64,12 @@ class OpenAIArticleAnalyzer(ArticleAnalyzer):
                 model=self._model,
                 messages=_build_messages(article),
                 temperature=0.2,
+                max_tokens=MAX_ANALYSIS_RESPONSE_TOKENS,
             )
         except Exception as error:
             raise ArticleAnalysisError(f"LLM request failed: {error}") from error
 
-        result_text = _extract_response_text(response)
+        result_text = _limit_response_text(_extract_response_text(response))
         if not result_text:
             raise ArticleAnalysisError("LLM returned empty analysis")
 
@@ -132,3 +135,15 @@ def _extract_response_text(response: Any) -> str:
         raise ArticleAnalysisError("LLM response content is not text")
 
     return content.strip()
+
+
+def _limit_response_text(text: str) -> str:
+    """Ограничивает размер LLM-ответа перед сохранением в БД."""
+    stripped_text = text.strip()
+    if len(stripped_text) <= MAX_ANALYSIS_RESPONSE_CHARS:
+        return stripped_text
+
+    return (
+        stripped_text[:MAX_ANALYSIS_RESPONSE_CHARS].rstrip()
+        + "\n\n[Ответ LLM был сокращен до безопасного размера.]"
+    )

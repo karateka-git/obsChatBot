@@ -7,6 +7,7 @@ from urllib.request import Request, urlopen
 from obs_chat_bot.application.articles.errors import ArticleFetchError
 from obs_chat_bot.application.articles.html import ArticleHtml
 from obs_chat_bot.application.articles.ports import ArticleHtmlFetcher
+from obs_chat_bot.data.http.url_safety import UnsafeUrlError, validate_public_http_url
 
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
@@ -48,6 +49,11 @@ class UrllibArticleHtmlFetcher(ArticleHtmlFetcher):
             ArticleFetchError: Если сервер вернул ошибку, ответ не похож на HTML
                 или произошла сетевая ошибка.
         """
+        try:
+            validate_public_http_url(url)
+        except (UnsafeUrlError, ValueError) as error:
+            raise ArticleFetchError(f"Unsafe article URL: {error}") from error
+
         request = Request(url, headers={"User-Agent": self._user_agent})
 
         try:
@@ -65,6 +71,10 @@ class UrllibArticleHtmlFetcher(ArticleHtmlFetcher):
                 charset = response.headers.get_content_charset() or "utf-8"
                 content = response.read().decode(charset, errors="replace")
                 final_url = response.geturl()
+                try:
+                    validate_public_http_url(final_url)
+                except (UnsafeUrlError, ValueError) as error:
+                    raise ArticleFetchError(f"Unsafe final article URL: {error}") from error
         except HTTPError as error:
             raise ArticleFetchError(f"HTTP error while fetching article: {error.code}") from error
         except (URLError, TimeoutError, socket.timeout) as error:

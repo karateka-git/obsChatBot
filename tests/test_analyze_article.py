@@ -55,6 +55,22 @@ class AnalyzeArticleUseCaseTest(unittest.TestCase):
         self.assertEqual(result.analysis, existing)
         self.assertEqual(analyzer.article_ids, [])
 
+    def test_execute_force_creates_new_analysis(self) -> None:
+        """Принудительный анализ игнорирует сохранённый результат."""
+        article = _article(status=ArticleStatus.ANALYZED)
+        existing = _analysis_result(id=7)
+        analyzer = FakeArticleAnalyzer()
+
+        result = AnalyzeArticleUseCase(
+            article_repository=FakeArticleRepository(article),
+            analyzer=analyzer,
+            analysis_result_repository=FakeAnalysisResultRepository(existing),
+        ).execute(AnalyzeArticleCommand(article_id=1, force=True))
+
+        self.assertTrue(result.created)
+        self.assertEqual(analyzer.article_ids, [1])
+        self.assertNotEqual(result.analysis.id, existing.id)
+
     def test_execute_rejects_article_without_cleaned_text(self) -> None:
         """Статья без очищенного текста не отправляется в LLM."""
         recorder = FakeProcessingErrorRecorder()

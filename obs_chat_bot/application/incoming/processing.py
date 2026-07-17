@@ -40,6 +40,10 @@ class IncomingMessageResultType(StrEnum):
     LINKED = "linked"
     LINK_ALREADY_BOUND = "link_already_bound"
     LINK_CODE_INVALID = "link_code_invalid"
+    STATUS = "status"
+    REANALYZE_COMMAND_INVALID = "reanalyze_command_invalid"
+    ARTICLE_REANALYZED = "article_reanalyzed"
+    ARTICLE_REANALYSIS_FAILED = "article_reanalysis_failed"
     ARTICLE_URL_MISSING = "article_url_missing"
     ARTICLE_PROCESSED = "article_processed"
     ARTICLE_ANALYZED = "article_analyzed"
@@ -206,7 +210,56 @@ class ProcessIncomingMessageUseCase:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.UNKNOWN_IDENTITY
             )
+        if text == "/status":
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.STATUS,
+                app_user=app_user,
+            )
+        if text.startswith("/reanalyze"):
+            return self._reanalyze_article(text, incoming_message, app_user)
         return app_user
+
+    def _reanalyze_article(
+        self,
+        text: str,
+        incoming_message: IncomingMessage,
+        app_user: AppUser,
+    ) -> ProcessIncomingMessageResult:
+        """Повторно анализирует сохранённую статью по команде пользователя."""
+        parts = text.split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip() or not parts[1].strip().isdigit():
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.REANALYZE_COMMAND_INVALID,
+                app_user=app_user,
+            )
+        if self._article_analysis_use_case is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_REANALYSIS_FAILED,
+                app_user=app_user,
+                error=AnalyzeArticleError("Article analysis use case is not configured"),
+            )
+
+        try:
+            analysis_result = self._article_analysis_use_case.execute(
+                AnalyzeArticleCommand(
+                    article_id=int(parts[1]),
+                    app_user_id=app_user.id,
+                    incoming_message_id=None,
+                    force=True,
+                )
+            )
+        except AnalyzeArticleError as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_REANALYSIS_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+
+        return ProcessIncomingMessageResult(
+            type=IncomingMessageResultType.ARTICLE_REANALYZED,
+            app_user=app_user,
+            analysis_result=analysis_result,
+        )
 
     def _save_incoming_message(
         self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleResult
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlResult
+from obs_chat_bot.application.articles.stages import ProcessingStage
 from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
@@ -98,6 +99,24 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             return "Этот канал уже привязан к пользователю."
         case IncomingMessageResultType.LINK_CODE_INVALID:
             return "Код привязки не найден или уже истек. Создай новый через `/link_code`."
+        case IncomingMessageResultType.STATUS:
+            if result.app_user is None:
+                return "Бот работает, но пользователь не определен."
+            return (
+                "Бот работает.\n"
+                f"ID пользователя: {result.app_user.id}\n"
+                "Можно прислать ссылку на статью, `/link_code` или `/reanalyze <ID статьи>`."
+            )
+        case IncomingMessageResultType.REANALYZE_COMMAND_INVALID:
+            return "Пришли команду в формате `/reanalyze <ID статьи>`."
+        case IncomingMessageResultType.ARTICLE_REANALYZED:
+            if result.analysis_result is None:
+                return "Анализ обновлен, но результат не удалось подготовить."
+            return format_reanalysis_result(result.analysis_result)
+        case IncomingMessageResultType.ARTICLE_REANALYSIS_FAILED:
+            return (
+                "Не удалось обновить анализ статьи. Проверь ID статьи или попробуй позже."
+            )
         case IncomingMessageResultType.ARTICLE_URL_MISSING:
             return "Пришли ссылку на статью, и я попробую ее сохранить."
         case IncomingMessageResultType.ARTICLE_PROCESSED:
@@ -129,6 +148,19 @@ def _article_action_text(result: ProcessArticleUrlResult) -> str:
     return "Эта статья уже была сохранена."
 
 
+def format_reanalysis_result(analysis_result: AnalyzeArticleResult) -> str:
+    """Формирует Telegram-ответ для принудительного повторного анализа."""
+    article = analysis_result.article
+    title = article.title or "без заголовка"
+    article_id = article.id if article.id is not None else "не сохранен"
+    return (
+        "Анализ обновлен.\n\n"
+        f"Название: {title}\n"
+        f"ID статьи: {article_id}\n\n"
+        f"{analysis_result.analysis.result_text}"
+    )
+
+
 def _format_unknown_identity_response() -> str:
     """Возвращает подсказку для первого входа из нового канала."""
     return (
@@ -140,11 +172,19 @@ def _format_unknown_identity_response() -> str:
 
 def _format_processing_error(error: Exception | None) -> str:
     """Формирует понятный ответ пользователю по ошибке article pipeline."""
-    message = str(error) if error is not None else ""
-    if "normalize" in message:
+    stage = getattr(error, "stage", None)
+    if stage == ProcessingStage.NORMALIZATION:
         return "Не удалось разобрать ссылку. Проверь URL и пришли его еще раз."
-    if "fetch" in message:
-        return "Не удалось загрузить страницу по ссылке. Попробуй отправить ее позже."
-    if "extract" in message:
-        return "Страница загрузилась, но текст статьи извлечь не получилось."
+    if stage == ProcessingStage.FETCHING:
+        return (
+            "Не удалось загрузить страницу по ссылке. "
+            "Проверь, что она открывается в браузере, или попробуй позже."
+        )
+    if stage == ProcessingStage.EXTRACTION:
+        return (
+            "Страница загрузилась, но текст статьи извлечь не получилось. "
+            "Можно попробовать другую ссылку на эту же публикацию."
+        )
+    if stage == ProcessingStage.STORAGE:
+        return "Не удалось сохранить статью. Попробуй позже."
     return "Не удалось обработать ссылку. Попробуй отправить ее позже."

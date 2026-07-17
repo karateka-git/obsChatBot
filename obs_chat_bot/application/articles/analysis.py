@@ -22,6 +22,7 @@ class AnalyzeArticleCommand:
     article_id: int
     app_user_id: int = 1
     incoming_message_id: int | None = None
+    force: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +86,7 @@ class AnalyzeArticleUseCase:
             )
             raise error
         existing = self._analysis_result_repository.get_latest_for_article(article.id)
-        if existing is not None:
+        if existing is not None and not command.force:
             return AnalyzeArticleResult(
                 article=article,
                 analysis=existing,

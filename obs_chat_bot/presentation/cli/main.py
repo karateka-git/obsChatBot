@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -19,6 +20,8 @@ from obs_chat_bot.bootstrap import (
     create_telegram_bot_dependencies,
 )
 from obs_chat_bot.data.config import ConfigError, load_config
+from obs_chat_bot.data.config import AppConfig
+from obs_chat_bot.data.http.url_safety import UnsafeUrlError, validate_public_http_url
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
 from obs_chat_bot.presentation.telegram.bot import TelegramBotError, run_telegram_bot
@@ -102,7 +105,7 @@ def main() -> int:
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
     if args.healthcheck:
-        return run_healthcheck(config.database_path, logger)
+        return run_healthcheck(config, logger)
 
     for key, value in config.safe_summary().items():
         logger.info("Config %s: %s", key, value)
@@ -134,11 +137,14 @@ def main() -> int:
     return 0
 
 
-def run_healthcheck(database_path: Path, logger: logging.Logger) -> int:
-    """Проверяет доступность каталога данных и соединения с SQLite.
+TELEGRAM_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
+
+
+def run_healthcheck(config: AppConfig, logger: logging.Logger) -> int:
+    """Проверяет runtime-конфигурацию, каталог данных и SQLite.
 
     Args:
-        database_path: Путь к рабочему файлу SQLite.
+        config: Загруженная конфигурация приложения.
         logger: Logger для диагностических сообщений.
 
     Returns:
@@ -146,7 +152,7 @@ def run_healthcheck(database_path: Path, logger: logging.Logger) -> int:
     """
     try:
         with tempfile.NamedTemporaryFile(
-            dir=database_path.parent,
+            dir=config.database_path.parent,
             prefix="health-",
             delete=True,
         ):
@@ -155,11 +161,52 @@ def run_healthcheck(database_path: Path, logger: logging.Logger) -> int:
         logger.error("Health check failed: data directory is not writable: %s", error)
         return 1
 
-    if not check_database(database_path, logger):
+    if not check_database(config.database_path, logger):
+        return 1
+    if not check_telegram_config(config.telegram_bot_token, logger):
+        return 1
+    if not check_llm_config(
+        base_url=config.openai_base_url,
+        api_key=config.openai_api_key,
+        model=config.openai_model,
+        logger=logger,
+    ):
         return 1
 
     logger.info("Health check passed")
     return 0
+
+
+def check_telegram_config(token: str, logger: logging.Logger) -> bool:
+    """Проверяет базовую форму Telegram Bot API token без сетевого запроса."""
+    if not TELEGRAM_TOKEN_PATTERN.fullmatch(token):
+        logger.error("Telegram token has unexpected format")
+        return False
+    logger.info("Telegram configuration is ready")
+    return True
+
+
+def check_llm_config(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    logger: logging.Logger,
+) -> bool:
+    """Проверяет базовую LLM-конфигурацию без реального запроса к модели."""
+    if not api_key.strip():
+        logger.error("LLM API key is empty")
+        return False
+    if not model.strip():
+        logger.error("LLM model is empty")
+        return False
+    try:
+        validate_public_http_url(base_url)
+    except (UnsafeUrlError, ValueError) as error:
+        logger.error("LLM base URL is not safe: %s", error)
+        return False
+    logger.info("LLM configuration is ready")
+    return True
 
 
 def check_database(database_path: Path, logger: logging.Logger) -> bool:

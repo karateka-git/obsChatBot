@@ -12,8 +12,15 @@ from obs_chat_bot.application.articles.processing import (
 )
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
-from obs_chat_bot.presentation.cli.main import parse_args, run_process_url_command
-from obs_chat_bot.presentation.cli.main import run_telegram_bot_command
+from obs_chat_bot.data.config import AppConfig
+from obs_chat_bot.presentation.cli.main import (
+    check_llm_config,
+    check_telegram_config,
+    parse_args,
+    run_healthcheck,
+    run_process_url_command,
+    run_telegram_bot_command,
+)
 from obs_chat_bot.presentation.telegram.bot import TelegramBotError
 
 
@@ -99,6 +106,37 @@ class ProcessUrlCliTest(unittest.TestCase):
         self.assertFalse(args.healthcheck)
         self.assertFalse(args.sqlite_smoke)
         self.assertIsNone(args.process_url)
+
+    def test_run_healthcheck_validates_runtime_config(self) -> None:
+        """Healthcheck проверяет SQLite, Telegram и LLM-конфигурацию."""
+        with TemporaryDirectory(prefix="obs-chat-bot-health-") as temporary_directory:
+            config = AppConfig(
+                app_env="test",
+                database_path=Path(temporary_directory) / "test.db",
+                telegram_bot_token="123456789:abcdefghijklmnopqrstuvwxyz",
+                openai_base_url="https://llm.example/v1",
+                openai_api_key="token",
+                openai_model="fake-model",
+            )
+
+            exit_code = run_healthcheck(config, SilentLogger())
+
+        self.assertEqual(exit_code, 0)
+
+    def test_check_telegram_config_rejects_bad_token(self) -> None:
+        """Healthcheck отклоняет токен Telegram неожиданной формы."""
+        self.assertFalse(check_telegram_config("token", SilentLogger()))
+
+    def test_check_llm_config_rejects_local_base_url(self) -> None:
+        """Healthcheck отклоняет LLM endpoint на локальном адресе."""
+        self.assertFalse(
+            check_llm_config(
+                base_url="http://localhost/v1",
+                api_key="token",
+                model="fake-model",
+                logger=SilentLogger(),
+            )
+        )
 
     def test_run_process_url_command_returns_zero_on_success(self) -> None:
         """Успешный pipeline возвращает нулевой exit code."""

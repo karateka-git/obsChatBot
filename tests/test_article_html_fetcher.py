@@ -124,6 +124,27 @@ class UrllibArticleHtmlFetcherTest(unittest.TestCase):
             with self.assertRaises(ArticleFetchError):
                 fetcher.fetch("https://example.com/article")
 
+    def test_fetch_rejects_localhost_without_request(self) -> None:
+        """Локальный URL отклоняется до HTTP-запроса."""
+        fetcher = UrllibArticleHtmlFetcher(timeout_seconds=1)
+
+        with patch("obs_chat_bot.data.http.article_html_fetcher.urlopen") as opener:
+            with self.assertRaises(ArticleFetchError):
+                fetcher.fetch("http://127.0.0.1/admin")
+
+        opener.assert_not_called()
+
+    def test_fetch_rejects_unsafe_redirect_target(self) -> None:
+        """Redirect на локальный адрес не проходит финальную проверку."""
+        fetcher = UrllibArticleHtmlFetcher(timeout_seconds=1)
+
+        with patch(
+            "obs_chat_bot.data.http.article_html_fetcher.urlopen",
+            return_value=FakeHttpResponse(final_url="http://localhost/internal"),
+        ):
+            with self.assertRaises(ArticleFetchError):
+                fetcher.fetch("https://example.com/article")
+
     def test_fetch_validates_timeout(self) -> None:
         """Неположительный timeout отклоняется сразу."""
         with self.assertRaises(ValueError):
