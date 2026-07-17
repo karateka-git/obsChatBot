@@ -130,6 +130,25 @@ class FakeUserIdentityService:
         return self.app_user
 
 
+class FakeRegisteringIdentityService:
+    """Fake identity service для проверки регистрации и `/start`."""
+
+    def __init__(self, existing: AppUser | None = None) -> None:
+        self.app_user = existing or AppUser(id=77)
+        self.register_calls = 0
+        self._existing = existing
+
+    def resolve(self, _identity: IncomingIdentity) -> AppUser | None:
+        """Возвращает существующего пользователя, если он задан."""
+        return self._existing
+
+    def register(self, _identity: IncomingIdentity) -> AppUser:
+        """Создает пользователя и запоминает регистрацию."""
+        self.register_calls += 1
+        self._existing = self.app_user
+        return self.app_user
+
+
 class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
     """Проверяет общий application-flow без Telegram adapter."""
 
@@ -189,6 +208,58 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
 
         self.assertEqual(result.type, IncomingMessageResultType.STATUS)
         self.assertEqual(result.app_user.id, 42)
+
+    def test_execute_registers_new_identity(self) -> None:
+        """Команда `/register` создает пользователя для нового канала."""
+        identity_service = FakeRegisteringIdentityService()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("/register"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.REGISTERED)
+        self.assertEqual(result.app_user.id, 77)
+        self.assertEqual(identity_service.register_calls, 1)
+
+    def test_execute_reports_already_registered_identity(self) -> None:
+        """Повторный `/register` не создает пользователя заново."""
+        identity_service = FakeRegisteringIdentityService(existing=AppUser(id=42))
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("/register"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.ALREADY_REGISTERED)
+        self.assertEqual(result.app_user.id, 42)
+        self.assertEqual(identity_service.register_calls, 0)
+
+    def test_execute_start_reports_registered_identity(self) -> None:
+        """`/start` для привязанного канала возвращает registered-start result."""
+        identity_service = FakeRegisteringIdentityService(existing=AppUser(id=42))
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("/start"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.START_REGISTERED)
+        self.assertEqual(result.app_user.id, 42)
+
+    def test_execute_start_reports_unknown_identity(self) -> None:
+        """`/start` для нового канала возвращает onboarding result."""
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeRegisteringIdentityService(),
+        )
+
+        result = use_case.execute(_telegram_message("/start"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.START_UNREGISTERED)
 
     def test_execute_reanalyze_forces_article_analysis(self) -> None:
         """Команда `/reanalyze` запускает анализ с force=True."""

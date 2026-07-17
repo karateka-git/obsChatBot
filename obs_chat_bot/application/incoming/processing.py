@@ -38,7 +38,10 @@ class IncomingMessageResultType(StrEnum):
     """Тип результата обработки входящего сообщения."""
 
     UNKNOWN_IDENTITY = "unknown_identity"
+    START_UNREGISTERED = "start_unregistered"
+    START_REGISTERED = "start_registered"
     REGISTERED = "registered"
+    ALREADY_REGISTERED = "already_registered"
     LINK_CODE_CREATED = "link_code_created"
     LINK_COMMAND_INVALID = "link_command_invalid"
     LINKED = "linked"
@@ -216,10 +219,37 @@ class ProcessIncomingMessageUseCase:
         identity = _incoming_identity_from_message(incoming_message)
         text = incoming_message.text.strip()
 
+        if text == "/start":
+            app_user = self._user_identity_service.resolve(identity)
+            if app_user is None:
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.START_UNREGISTERED
+                )
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.START_REGISTERED,
+                app_user=app_user,
+            )
+
         if text == "/register":
+            existing = self._user_identity_service.resolve(identity)
+            if existing is not None:
+                LOGGER.debug(
+                    "User already registered: app_user_id=%s channel=%s "
+                    "external_user_id=%s external_chat_id=%s username=%s",
+                    existing.id,
+                    identity.channel,
+                    identity.external_user_id,
+                    identity.external_chat_id,
+                    identity.username,
+                )
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.ALREADY_REGISTERED,
+                    app_user=existing,
+                )
+
             app_user = self._user_identity_service.register(identity)
             LOGGER.debug(
-                "User registered or reused: app_user_id=%s channel=%s "
+                "User registered: app_user_id=%s channel=%s "
                 "external_user_id=%s external_chat_id=%s username=%s",
                 app_user.id,
                 identity.channel,

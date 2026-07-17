@@ -81,8 +81,31 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
     match result.type:
         case IncomingMessageResultType.UNKNOWN_IDENTITY:
             return _format_unknown_identity_response()
+        case IncomingMessageResultType.START_UNREGISTERED:
+            return (
+                "obsChatBot запущен.\n"
+                "Этот канал пока не зарегистрирован.\n"
+                "Отправь `/register`, чтобы создать нового пользователя, или `/link <код>`, "
+                "чтобы привязать этот канал к уже существующему пользователю."
+            )
+        case IncomingMessageResultType.START_REGISTERED:
+            if result.app_user is None:
+                return "obsChatBot запущен. Пришли ссылку на статью."
+            return (
+                "obsChatBot запущен.\n"
+                f"Этот канал уже привязан к пользователю ID {result.app_user.id}.\n"
+                "Можешь прислать ссылку на статью или отправить `/link_code` для привязки другого канала."
+            )
         case IncomingMessageResultType.REGISTERED:
             return "Готово, я зарегистрировал тебя. Теперь пришли ссылку на статью."
+        case IncomingMessageResultType.ALREADY_REGISTERED:
+            if result.app_user is None:
+                return "Ты уже зарегистрирован. Теперь пришли ссылку на статью."
+            return (
+                "Ты уже зарегистрирован.\n"
+                f"ID пользователя: {result.app_user.id}\n"
+                "Теперь можно прислать ссылку на статью."
+            )
         case IncomingMessageResultType.LINK_CODE_CREATED:
             if result.link_code is None:
                 return "Не удалось создать код привязки. Попробуй позже."

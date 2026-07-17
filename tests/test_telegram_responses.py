@@ -119,6 +119,41 @@ class TelegramResponsesTest(unittest.TestCase):
 
         self.assertIn("Пришли ссылку", reply)
 
+    def test_format_incoming_message_result_reports_start_registered(self) -> None:
+        """`/start` для зарегистрированного канала показывает user id."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.START_REGISTERED,
+                app_user=AppUser(id=42),
+            )
+        )
+
+        self.assertIn("уже привязан", reply)
+        self.assertIn("ID 42", reply)
+
+    def test_format_incoming_message_result_reports_start_unregistered(self) -> None:
+        """`/start` для нового канала объясняет регистрацию и привязку."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.START_UNREGISTERED,
+            )
+        )
+
+        self.assertIn("пока не зарегистрирован", reply)
+        self.assertIn("/register", reply)
+
+    def test_format_incoming_message_result_reports_already_registered(self) -> None:
+        """Повторный `/register` получает честный ответ."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ALREADY_REGISTERED,
+                app_user=AppUser(id=42),
+            )
+        )
+
+        self.assertIn("уже зарегистрирован", reply)
+        self.assertIn("ID пользователя: 42", reply)
+
     def test_format_incoming_message_result_reports_link_code(self) -> None:
         """Код привязки форматируется как команда для второго канала."""
         reply = format_incoming_message_result(

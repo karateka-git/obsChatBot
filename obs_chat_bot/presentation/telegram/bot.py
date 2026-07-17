@@ -78,14 +78,6 @@ def _register_handlers(
     """Регистрирует минимальные handlers Telegram adapter."""
     router = aiogram.Router()
 
-    @router.message(aiogram.filters.Command("start"))
-    async def handle_start(message: Any) -> None:
-        """Отвечает на стартовую команду Telegram-бота."""
-        await message.answer(
-            "obsChatBot запущен.\n"
-            "Отправь /register для нового пользователя или /link <код> для привязки канала."
-        )
-
     @router.message()
     async def handle_text(message: Any) -> None:
         """Обрабатывает текстовое сообщение через article pipeline."""
