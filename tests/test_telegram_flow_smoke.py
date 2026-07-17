@@ -25,7 +25,7 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
 )
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
-from obs_chat_bot.presentation.telegram.responses import format_incoming_message_result
+from obs_chat_bot.presentation.shared.responses import format_incoming_message_result
 
 
 class SilentLogger:

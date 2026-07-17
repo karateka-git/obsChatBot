@@ -8,7 +8,7 @@ from typing import Any
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
-from obs_chat_bot.presentation.telegram.responses import (
+from obs_chat_bot.presentation.shared.responses import (
     format_incoming_message_result,
 )
 

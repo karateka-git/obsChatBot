@@ -1,4 +1,4 @@
-"""Тесты форматирования ответов Telegram adapter."""
+"""Тесты форматирования общих ответов presentation-слоя."""
 
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -19,7 +19,7 @@ from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.domain.users.entities import AppUser
-from obs_chat_bot.presentation.telegram.responses import (
+from obs_chat_bot.presentation.shared.responses import (
     format_article_analysis_result,
     format_article_processing_result,
     format_incoming_message_result,
@@ -219,7 +219,7 @@ class TelegramResponsesTest(unittest.TestCase):
 
 
 def _article() -> Article:
-    """Создает минимальную статью для тестов Telegram-ответов."""
+    """Создает минимальную статью для тестов пользовательских ответов."""
     return Article(
         id=1,
         source_url="https://example.com/article",

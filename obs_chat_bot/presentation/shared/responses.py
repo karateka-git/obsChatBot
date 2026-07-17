@@ -23,13 +23,13 @@ _ARTICLE_STATUS_LABELS: dict[ArticleStatus, str] = {
 
 
 def format_article_processing_result(result: ProcessArticleUrlResult) -> str:
-    """Формирует человекочитаемый Telegram-ответ по результату article pipeline.
+    """Формирует человекочитаемый ответ по результату article pipeline.
 
     Args:
         result: Результат обработки URL статьи.
 
     Returns:
-        Короткий текст, который можно отправить пользователю в Telegram.
+        Короткий текст, который можно отправить пользователю во внешний канал.
     """
     article = result.article
     title = article.title or "без заголовка"
@@ -51,7 +51,7 @@ def format_article_analysis_result(
     processing_result: ProcessArticleUrlResult,
     analysis_result: AnalyzeArticleResult,
 ) -> str:
-    """Формирует Telegram-ответ с полезной LLM-сводкой статьи.
+    """Формирует ответ с полезной LLM-сводкой статьи.
 
     Args:
         processing_result: Результат обработки URL статьи.
@@ -77,7 +77,7 @@ def format_article_analysis_result(
 
 
 def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
-    """Формирует Telegram-ответ по структурированному результату общего flow."""
+    """Формирует ответ по структурированному результату общего flow."""
     match result.type:
         case IncomingMessageResultType.UNKNOWN_IDENTITY:
             return _format_unknown_identity_response()
@@ -172,7 +172,7 @@ def _article_action_text(result: ProcessArticleUrlResult) -> str:
 
 
 def format_reanalysis_result(analysis_result: AnalyzeArticleResult) -> str:
-    """Формирует Telegram-ответ для принудительного повторного анализа."""
+    """Формирует ответ для принудительного повторного анализа."""
     article = analysis_result.article
     title = article.title or "без заголовка"
     article_id = article.id if article.id is not None else "не сохранен"
