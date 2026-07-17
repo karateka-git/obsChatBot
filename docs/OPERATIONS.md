@@ -1,6 +1,6 @@
-# Operational checklist локального Telegram MVP
+# Operational checklist локального multi-channel MVP
 
-Короткий чеклист для ежедневного запуска и проверки Telegram-only версии.
+Короткий чеклист для ежедневного запуска и проверки Telegram/VK версии.
 
 ## Перед запуском
 
@@ -51,17 +51,18 @@ python -m obs_chat_bot --analysis-smoke
 ```
 
 Окно PowerShell должно остаться открытым. Скрипт запускает Docker Compose через
-`docker compose up --build`, поднимает Telegram polling и держит контейнер
+`docker compose up --build`, поднимает Telegram polling и VK long polling и держит контейнер
 активным до остановки через `Ctrl+C`. В логах ожидается старт polling без
 `TelegramConflictError`.
 
-## Запуск VK adapter
+## VK adapter
 
-Если в `.env` заданы `VK_BOT_TOKEN` и `VK_GROUP_ID`, VK adapter запускается
-отдельной командой:
+Если в `.env` заданы `VK_BOT_TOKEN` и `VK_GROUP_ID`, штатный
+`docker compose up --build` запускает VK adapter вместе с Telegram adapter.
+Отдельная команда ниже нужна только для изолированной диагностики VK:
 
 ```powershell
-docker compose run --rm --entrypoint python catcher -m obs_chat_bot --vk-bot
+docker compose run --rm --entrypoint python vk_catcher -m obs_chat_bot --vk-bot
 ```
 
 VK использует тот же flow регистрации, привязки каналов, сохранения статей и

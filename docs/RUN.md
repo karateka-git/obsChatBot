@@ -2,9 +2,9 @@
 
 ## Быстрый запуск через скрипты
 
-Скрипты `open-*.cmd` открывают отдельное окно PowerShell, выполняют нужные команды и оставляют окно открытым после завершения. Скрипты проверок и запуска команд внутри контейнера сначала пересобирают образ `catcher`, чтобы Docker использовал свежий код проекта.
+Скрипты `open-*.cmd` открывают отдельное окно PowerShell, выполняют нужные команды и оставляют окно открытым после завершения. Скрипты проверок и запуска команд внутри контейнера сначала пересобирают образ `obs-chat-bot:dev`, чтобы Docker использовал свежий код проекта.
 
-Запустить сборку и обычный старт Telegram-бота:
+Запустить сборку и обычный старт Telegram- и VK-ботов:
 
 ```powershell
 .\scripts\open-dev-start.cmd
@@ -106,7 +106,7 @@ docker info
 docker compose up --build
 ```
 
-Команда собирает или обновляет образ, создаёт контейнер и запускает Telegram-бота в polling-режиме. Окно нужно оставить открытым, пока бот должен принимать сообщения.
+Команда собирает или обновляет образ, создаёт контейнер и запускает Telegram-бота и VK-бота в polling-режиме. Окно нужно оставить открытым, пока бот должен принимать сообщения.
 
 В выводе команды сначала показывается сборка образа:
 
@@ -121,14 +121,14 @@ docker compose up --build
 Image obs-chat-bot:dev Built
 Network ... Created
 Container ... Created
-Attaching to catcher-1
+Attaching to tg_catcher-1, vk_catcher-1
 ```
 
-Строки с префиксом `catcher-1 |` и именем `obs_chat_bot` выводит уже наше Python-приложение:
+Строки с префиксом `tg_catcher-1 |` / `vk_catcher-1 |` и именем `obs_chat_bot` выводит уже наше Python-приложение:
 
 ```text
-catcher-1 | ... INFO obs_chat_bot: Starting obsChatBot 0.1.0
-catcher-1 | ... INFO obs_chat_bot: Telegram bot polling started
+tg_catcher-1 | ... INFO obs_chat_bot: Starting obsChatBot 0.1.0
+tg_catcher-1 | ... INFO obs_chat_bot: Telegram bot polling started
 ```
 
 Остановить бота можно через `Ctrl+C` в окне, где запущен `docker compose up`.
@@ -153,7 +153,7 @@ docker compose ps -a
 ## 6. Выполнить healthcheck
 
 ```powershell
-docker compose run --rm catcher python -m obs_chat_bot --healthcheck
+docker compose run --rm tg_catcher python -m obs_chat_bot --healthcheck
 ```
 
 Команда проверяет конфигурацию, доступность папки `data/` для записи и подключение к SQLite с обязательными настройками. После проверки временный контейнер удаляется.
@@ -161,7 +161,7 @@ docker compose run --rm catcher python -m obs_chat_bot --healthcheck
 ## 7. Проверить SQLite-контур
 
 ```powershell
-docker compose run --rm catcher python -m obs_chat_bot --sqlite-smoke
+docker compose run --rm tg_catcher python -m obs_chat_bot --sqlite-smoke
 ```
 
 Команда создаёт временную базу, применяет миграции, повторно проверяет их идемпотентность, записывает тестовую статью через `ArticleRepository` и читает её обратно. Рабочая база `data/app.db` не изменяется.
@@ -169,7 +169,7 @@ docker compose run --rm catcher python -m obs_chat_bot --sqlite-smoke
 ## 8. Проверить обработку URL
 
 ```powershell
-docker compose run --rm catcher python -m obs_chat_bot --process-url "https://example.com/article"
+docker compose run --rm tg_catcher python -m obs_chat_bot --process-url "https://example.com/article"
 ```
 
 Команда запускает текущий article pipeline: нормализует URL, создаёт или переиспользует статью в SQLite, загружает HTML, извлекает чистый текст и сохраняет результат в `data/app.db`.
@@ -177,7 +177,7 @@ docker compose run --rm catcher python -m obs_chat_bot --process-url "https://ex
 ## 9. Проверить pipeline без интернета
 
 ```powershell
-docker compose run --rm catcher python -m obs_chat_bot --pipeline-smoke
+docker compose run --rm tg_catcher python -m obs_chat_bot --pipeline-smoke
 ```
 
 Команда создаёт временную базу, применяет миграции и проверяет article pipeline на fake HTML-загрузчике и fake extractor. Рабочая база `data/app.db` не изменяется.
@@ -185,12 +185,12 @@ docker compose run --rm catcher python -m obs_chat_bot --pipeline-smoke
 ## 10. Проверить анализ без LLM
 
 ```powershell
-docker compose run --rm catcher python -m obs_chat_bot --analysis-smoke
+docker compose run --rm tg_catcher python -m obs_chat_bot --analysis-smoke
 ```
 
 Команда создаёт временную базу, применяет миграции, создаёт статью с извлечённым текстом и проверяет analysis pipeline на fake LLM-анализаторе. Рабочая база `data/app.db` не изменяется.
 
-## 11. Запустить VK adapter
+## 11. Проверить VK adapter отдельно
 
 Для VK нужны настройки в `.env`:
 
@@ -199,10 +199,11 @@ VK_BOT_TOKEN=...
 VK_GROUP_ID=...
 ```
 
-После этого VK long polling можно запустить отдельной командой:
+При обычном запуске `docker compose up --build` VK long polling стартует
+вместе с Telegram. Отдельная команда ниже нужна для изолированной проверки VK:
 
 ```powershell
-docker compose run --rm --entrypoint python catcher -m obs_chat_bot --vk-bot
+docker compose run --rm --entrypoint python vk_catcher -m obs_chat_bot --vk-bot
 ```
 
 VK adapter использует тот же incoming-flow, регистрацию, привязку каналов,

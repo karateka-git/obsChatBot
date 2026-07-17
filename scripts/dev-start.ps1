@@ -34,4 +34,4 @@ for ($attempt = 1; $attempt -le 30; $attempt++) {
     Start-Sleep -Seconds 2
 }
 
-docker compose up --build
+docker compose up --build --remove-orphans
