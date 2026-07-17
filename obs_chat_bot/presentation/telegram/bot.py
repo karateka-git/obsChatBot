@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from threading import Lock
 from typing import Any
 
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
@@ -75,6 +76,7 @@ def _register_handlers(
 ) -> None:
     """Регистрирует минимальные handlers Telegram adapter."""
     router = aiogram.Router()
+    processing_lock = Lock()
 
     @router.message(aiogram.filters.Command("start"))
     async def handle_start(message: Any) -> None:
@@ -96,8 +98,10 @@ def _register_handlers(
             await message.answer(PROCESSING_ACK_TEXT)
 
         result = await asyncio.to_thread(
-            incoming_message_use_case.execute,
+            _execute_incoming_message_with_lock,
+            incoming_message_use_case,
             incoming_message,
+            processing_lock,
         )
         if result.error is not None:
             logger.error("Telegram incoming message processing failed: %s", result.error)
@@ -105,6 +109,16 @@ def _register_handlers(
         await send_telegram_reply(message, reply)
 
     dispatcher.include_router(router)
+
+
+def _execute_incoming_message_with_lock(
+    incoming_message_use_case: ProcessIncomingMessageUseCase,
+    incoming_message: IncomingMessage,
+    processing_lock: Lock,
+) -> object:
+    """Выполняет blocking use case в worker thread с сериализацией SQLite."""
+    with processing_lock:
+        return incoming_message_use_case.execute(incoming_message)
 
 
 def _incoming_message_from_telegram(message: Any) -> IncomingMessage:
