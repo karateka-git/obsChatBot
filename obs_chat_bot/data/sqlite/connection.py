@@ -10,18 +10,11 @@ BUSY_TIMEOUT_MS = 5_000
 
 
 @contextmanager
-def connect_database(
-    database_path: Path,
-    *,
-    allow_cross_thread: bool = False,
-) -> Iterator[sqlite3.Connection]:
+def connect_database(database_path: Path) -> Iterator[sqlite3.Connection]:
     """Открывает SQLite-соединение и применяет runtime PRAGMA.
 
     Args:
         database_path: Путь к файлу SQLite.
-        allow_cross_thread: Разрешает использовать connection из worker thread.
-            Это нужно Telegram adapter, который выносит blocking pipeline из
-            event loop и дополнительно сериализует доступ lock'ом.
 
     Yields:
         Настроенное SQLite-соединение.
@@ -30,7 +23,6 @@ def connect_database(
     connection = sqlite3.connect(
         database_path,
         timeout=BUSY_TIMEOUT_MS / 1_000,
-        check_same_thread=not allow_cross_thread,
     )
 
     try:

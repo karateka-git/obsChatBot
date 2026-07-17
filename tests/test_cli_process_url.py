@@ -5,11 +5,18 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from obs_chat_bot.application.articles.analysis import (
+    AnalyzeArticleCommand,
+    AnalyzeArticleResult,
+)
+from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
     ProcessArticleUrlResult,
 )
+from obs_chat_bot.application.incoming.processing import IncomingMessageResultType
+from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.data.config import AppConfig
@@ -17,6 +24,8 @@ from obs_chat_bot.presentation.cli.main import (
     check_llm_config,
     check_telegram_config,
     parse_args,
+    process_telegram_incoming_message,
+    initialize_database,
     run_healthcheck,
     run_process_url_command,
     run_telegram_bot_command,
@@ -37,9 +46,15 @@ class SilentLogger:
 class FakeProcessArticleUrlUseCase:
     """Fake use case для проверки CLI без сети и extractor."""
 
-    def __init__(self, *, error: ProcessArticleUrlError | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        error: ProcessArticleUrlError | None = None,
+        article_id: int | None = 1,
+    ) -> None:
         self.commands: list[ProcessArticleUrlCommand] = []
         self._error = error
+        self._article_id = article_id
 
     def execute(self, command: ProcessArticleUrlCommand) -> ProcessArticleUrlResult:
         """Возвращает успешный результат или выбрасывает заданную ошибку."""
@@ -49,7 +64,7 @@ class FakeProcessArticleUrlUseCase:
 
         return ProcessArticleUrlResult(
             article=Article(
-                id=1,
+                id=self._article_id,
                 source_url=command.source_url,
                 normalized_url="https://example.com/article",
                 title="Article title",
@@ -59,6 +74,39 @@ class FakeProcessArticleUrlUseCase:
             ),
             created=True,
             extracted=True,
+        )
+
+
+class FakeAnalyzeArticleUseCase:
+    """Fake use case анализа статьи для Telegram CLI-тестов."""
+
+    def __init__(self) -> None:
+        self.commands: list[AnalyzeArticleCommand] = []
+
+    def execute(self, command: AnalyzeArticleCommand) -> AnalyzeArticleResult:
+        """Возвращает успешный fake-анализ."""
+        self.commands.append(command)
+        article = Article(
+            id=command.article_id,
+            app_user_id=command.app_user_id,
+            source_url="https://example.com/article",
+            normalized_url="https://example.com/article",
+            title="Article title",
+            cleaned_text="Clean text",
+            text_hash="hash",
+            status=ArticleStatus.ANALYZED,
+        )
+        return AnalyzeArticleResult(
+            article=article,
+            analysis=ArticleAnalysisResult(
+                id=1,
+                app_user_id=command.app_user_id,
+                article_id=command.article_id,
+                llm_model="fake-llm",
+                prompt_version="article-summary-v1",
+                result_text="## Кратко\nГотово.",
+            ),
+            created=True,
         )
 
 
@@ -201,10 +249,10 @@ class ProcessUrlCliTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
 
-    def test_run_telegram_bot_command_passes_use_case(self) -> None:
-        """Telegram adapter получает собранный use case."""
+    def test_run_telegram_bot_command_passes_processor(self) -> None:
+        """Telegram adapter получает processor вместо готового SQLite use case."""
         fake_use_case = FakeProcessArticleUrlUseCase()
-        fake_analysis_use_case = object()
+        fake_analysis_use_case = FakeAnalyzeArticleUseCase()
         with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot") as runner:
             with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as temporary_directory:
                 exit_code = run_telegram_bot_command(
@@ -215,37 +263,51 @@ class ProcessUrlCliTest(unittest.TestCase):
                     analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
                 )
 
-        incoming_use_case = runner.call_args.kwargs["incoming_message_use_case"]
-        self.assertIs(incoming_use_case._article_url_use_case, fake_use_case)
-        self.assertIs(
-            incoming_use_case._article_analysis_use_case,
-            fake_analysis_use_case,
-        )
+        processor = runner.call_args.kwargs["incoming_message_processor"]
+        self.assertTrue(callable(processor))
         self.assertEqual(exit_code, 0)
 
-    def test_run_telegram_bot_command_allows_cross_thread_sqlite(self) -> None:
-        """Telegram adapter открывает SQLite connection для worker thread."""
-        fake_use_case = FakeProcessArticleUrlUseCase()
-        with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot"):
-            with patch(
-                "obs_chat_bot.presentation.cli.main.connect_database",
-                wraps=__import__(
-                    "obs_chat_bot.data.sqlite.connection",
-                    fromlist=["connect_database"],
-                ).connect_database,
-            ) as connector:
-                with TemporaryDirectory(
-                    prefix="obs-chat-bot-telegram-"
-                ) as temporary_directory:
-                    exit_code = run_telegram_bot_command(
-                        database_path=Path(temporary_directory) / "test.db",
-                        token="token",
-                        logger=SilentLogger(),
-                        use_case_factory=lambda _connection: fake_use_case,
-                    )
+    def test_telegram_processor_opens_fresh_sqlite_connection(self) -> None:
+        """Telegram processor собирает dependencies внутри обработки сообщения."""
+        fake_use_case = FakeProcessArticleUrlUseCase(article_id=None)
+        fake_analysis_use_case = FakeAnalyzeArticleUseCase()
 
-        self.assertEqual(exit_code, 0)
-        self.assertTrue(connector.call_args.kwargs["allow_cross_thread"])
+        with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as temporary_directory:
+            database_path = Path(temporary_directory) / "test.db"
+            initialize_database(database_path, SilentLogger())
+            process_telegram_incoming_message(
+                database_path=database_path,
+                incoming_message=_telegram_message("/register"),
+                openai_base_url="https://llm.example/v1",
+                openai_api_key="token",
+                openai_model="fake-model",
+                use_case_factory=lambda _connection: fake_use_case,
+                analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
+            )
+            result = process_telegram_incoming_message(
+                database_path=database_path,
+                incoming_message=_telegram_message("https://example.com/article", "msg-2"),
+                openai_base_url="https://llm.example/v1",
+                openai_api_key="token",
+                openai_model="fake-model",
+                use_case_factory=lambda _connection: fake_use_case,
+                analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
+            )
+
+        self.assertEqual(result.type, IncomingMessageResultType.ARTICLE_PROCESSED)
+        self.assertEqual(fake_use_case.commands[0].source_url, "https://example.com/article")
+        self.assertEqual(fake_analysis_use_case.commands, [])
+
+
+def _telegram_message(text: str, message_id: str = "msg-1") -> IncomingMessage:
+    """Создаёт Telegram incoming message для CLI processor-тестов."""
+    return IncomingMessage(
+        channel="telegram",
+        chat_id="chat-1",
+        message_id=message_id,
+        text=text,
+        external_user_id="user-1",
+    )
 
 
 if __name__ == "__main__":

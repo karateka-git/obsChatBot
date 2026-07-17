@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from threading import Lock
+from collections.abc import Callable
 from typing import Any
 
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
-from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
+from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
 from obs_chat_bot.presentation.telegram.responses import (
     format_incoming_message_result,
 )
@@ -15,6 +15,7 @@ from obs_chat_bot.presentation.telegram.responses import (
 
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
 PROCESSING_ACK_TEXT = "Принял, обрабатываю. Это может занять немного времени."
+IncomingMessageProcessor = Callable[[IncomingMessage], ProcessIncomingMessageResult]
 
 
 class TelegramBotError(RuntimeError):
@@ -24,7 +25,7 @@ class TelegramBotError(RuntimeError):
 def run_telegram_bot(
     *,
     token: str,
-    incoming_message_use_case: ProcessIncomingMessageUseCase,
+    incoming_message_processor: IncomingMessageProcessor,
     logger: logging.Logger,
 ) -> None:
     """Запускает Telegram-бота в polling-режиме."""
@@ -32,7 +33,7 @@ def run_telegram_bot(
         asyncio.run(
             _run_telegram_bot(
                 token=token,
-                incoming_message_use_case=incoming_message_use_case,
+                incoming_message_processor=incoming_message_processor,
                 logger=logger,
             )
         )
@@ -45,7 +46,7 @@ def run_telegram_bot(
 async def _run_telegram_bot(
     *,
     token: str,
-    incoming_message_use_case: ProcessIncomingMessageUseCase,
+    incoming_message_processor: IncomingMessageProcessor,
     logger: logging.Logger,
 ) -> None:
     """Асинхронно запускает polling Telegram-бота."""
@@ -56,7 +57,7 @@ async def _run_telegram_bot(
     _register_handlers(
         dispatcher,
         aiogram,
-        incoming_message_use_case=incoming_message_use_case,
+        incoming_message_processor=incoming_message_processor,
         logger=logger,
     )
 
@@ -71,12 +72,11 @@ def _register_handlers(
     dispatcher: Any,
     aiogram: Any,
     *,
-    incoming_message_use_case: ProcessIncomingMessageUseCase,
+    incoming_message_processor: IncomingMessageProcessor,
     logger: logging.Logger,
 ) -> None:
     """Регистрирует минимальные handlers Telegram adapter."""
     router = aiogram.Router()
-    processing_lock = Lock()
 
     @router.message(aiogram.filters.Command("start"))
     async def handle_start(message: Any) -> None:
@@ -98,10 +98,8 @@ def _register_handlers(
             await message.answer(PROCESSING_ACK_TEXT)
 
         result = await asyncio.to_thread(
-            _execute_incoming_message_with_lock,
-            incoming_message_use_case,
+            incoming_message_processor,
             incoming_message,
-            processing_lock,
         )
         if result.error is not None:
             logger.error("Telegram incoming message processing failed: %s", result.error)
@@ -109,16 +107,6 @@ def _register_handlers(
         await send_telegram_reply(message, reply)
 
     dispatcher.include_router(router)
-
-
-def _execute_incoming_message_with_lock(
-    incoming_message_use_case: ProcessIncomingMessageUseCase,
-    incoming_message: IncomingMessage,
-    processing_lock: Lock,
-) -> object:
-    """Выполняет blocking use case в worker thread с сериализацией SQLite."""
-    with processing_lock:
-        return incoming_message_use_case.execute(incoming_message)
 
 
 def _incoming_message_from_telegram(message: Any) -> IncomingMessage:

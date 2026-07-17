@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
 from typing import Callable
 
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
@@ -39,21 +38,6 @@ AnalyzeArticleUseCaseFactory = Callable[
     [sqlite3.Connection],
     AnalyzeArticleUseCase,
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class TelegramBotDependencies:
-    """Группирует concrete dependencies Telegram adapter.
-
-    Composition root собирает зависимости в одном месте, чтобы CLI и будущие
-    entrypoints не знали о конкретных SQLite, HTTP, extraction и LLM adapters.
-    """
-
-    article_url_use_case: ProcessArticleUrlUseCase
-    article_analysis_use_case: AnalyzeArticleUseCase
-    incoming_message_repository: IncomingMessageRepository
-    user_identity_service: UserIdentityService
-    incoming_message_use_case: ProcessIncomingMessageUseCase
 
 
 def create_process_article_url_use_case(
@@ -134,46 +118,4 @@ def create_process_incoming_message_use_case(
         article_analysis_use_case=article_analysis_use_case,
         incoming_message_repository=incoming_message_repository,
         user_identity_service=user_identity_service,
-    )
-
-
-def create_telegram_bot_dependencies(
-    connection: sqlite3.Connection,
-    *,
-    openai_base_url: str,
-    openai_api_key: str,
-    openai_model: str,
-) -> TelegramBotDependencies:
-    """Собирает все concrete dependencies Telegram adapter.
-
-    Args:
-        connection: Открытое соединение SQLite.
-        openai_base_url: Базовый URL OpenAI-compatible API.
-        openai_api_key: API key провайдера LLM.
-        openai_model: Имя модели для анализа статей.
-
-    Returns:
-        Группа зависимостей для запуска Telegram adapter.
-    """
-    article_url_use_case = create_process_article_url_use_case(connection)
-    article_analysis_use_case = create_analyze_article_use_case(
-        connection,
-        openai_base_url=openai_base_url,
-        openai_api_key=openai_api_key,
-        openai_model=openai_model,
-    )
-    incoming_message_repository = create_incoming_message_repository(connection)
-    user_identity_service = create_user_identity_service(connection)
-
-    return TelegramBotDependencies(
-        article_url_use_case=article_url_use_case,
-        article_analysis_use_case=article_analysis_use_case,
-        incoming_message_repository=incoming_message_repository,
-        user_identity_service=user_identity_service,
-        incoming_message_use_case=create_process_incoming_message_use_case(
-            article_url_use_case=article_url_use_case,
-            article_analysis_use_case=article_analysis_use_case,
-            incoming_message_repository=incoming_message_repository,
-            user_identity_service=user_identity_service,
-        ),
     )

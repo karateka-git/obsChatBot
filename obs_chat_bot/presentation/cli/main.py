@@ -12,12 +12,16 @@ from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
 )
+from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
+from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
 from obs_chat_bot.bootstrap import (
     AnalyzeArticleUseCaseFactory,
     ProcessArticleUrlUseCaseFactory,
+    create_analyze_article_use_case,
+    create_incoming_message_repository,
     create_process_incoming_message_use_case,
     create_process_article_url_use_case,
-    create_telegram_bot_dependencies,
+    create_user_identity_service,
 )
 from obs_chat_bot.data.config import ConfigError, load_config
 from obs_chat_bot.data.config import AppConfig
@@ -387,35 +391,23 @@ def run_telegram_bot_command(
         Ноль при штатной остановке, иначе единицу.
     """
     try:
-        with connect_database(database_path, allow_cross_thread=True) as connection:
-            apply_migrations(connection)
-            dependencies = create_telegram_bot_dependencies(
-                connection,
-                openai_base_url=openai_base_url,
-                openai_api_key=openai_api_key,
-                openai_model=openai_model,
-            )
-            use_case = (
-                use_case_factory(connection)
-                if use_case_factory is not None
-                else dependencies.article_url_use_case
-            )
-            analysis_use_case = (
-                analysis_use_case_factory(connection)
-                if analysis_use_case_factory is not None
-                else dependencies.article_analysis_use_case
-            )
-            incoming_message_use_case = create_process_incoming_message_use_case(
-                article_url_use_case=use_case,
-                article_analysis_use_case=analysis_use_case,
-                incoming_message_repository=dependencies.incoming_message_repository,
-                user_identity_service=dependencies.user_identity_service,
-            )
-            run_telegram_bot(
-                token=token,
-                incoming_message_use_case=incoming_message_use_case,
-                logger=logger,
-            )
+        if not initialize_database(database_path, logger):
+            return 1
+        run_telegram_bot(
+            token=token,
+            incoming_message_processor=lambda incoming_message: (
+                process_telegram_incoming_message(
+                    database_path=database_path,
+                    incoming_message=incoming_message,
+                    openai_base_url=openai_base_url,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
+                    use_case_factory=use_case_factory,
+                    analysis_use_case_factory=analysis_use_case_factory,
+                )
+            ),
+            logger=logger,
+        )
     except KeyboardInterrupt:
         logger.info("Telegram bot stopped")
         return 0
@@ -427,3 +419,52 @@ def run_telegram_bot_command(
         return 1
 
     return 0
+
+
+def process_telegram_incoming_message(
+    *,
+    database_path: Path,
+    incoming_message: IncomingMessage,
+    openai_base_url: str,
+    openai_api_key: str,
+    openai_model: str,
+    use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
+    analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
+) -> ProcessIncomingMessageResult:
+    """Обрабатывает одно Telegram-сообщение внутри worker thread.
+
+    Args:
+        database_path: Путь к рабочему файлу SQLite.
+        incoming_message: Нормализованное сообщение Telegram.
+        openai_base_url: Базовый URL OpenAI-compatible API.
+        openai_api_key: API key провайдера LLM.
+        openai_model: Имя модели для анализа статей.
+        use_case_factory: Factory article use case для тестов.
+        analysis_use_case_factory: Factory analysis use case для тестов.
+
+    Returns:
+        Структурированный результат общего incoming-flow.
+    """
+    with connect_database(database_path) as connection:
+        article_url_use_case = (
+            use_case_factory(connection)
+            if use_case_factory is not None
+            else create_process_article_url_use_case(connection)
+        )
+        article_analysis_use_case = (
+            analysis_use_case_factory(connection)
+            if analysis_use_case_factory is not None
+            else create_analyze_article_use_case(
+                connection,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
+                openai_model=openai_model,
+            )
+        )
+        incoming_message_use_case = create_process_incoming_message_use_case(
+            article_url_use_case=article_url_use_case,
+            article_analysis_use_case=article_analysis_use_case,
+            incoming_message_repository=create_incoming_message_repository(connection),
+            user_identity_service=create_user_identity_service(connection),
+        )
+        return incoming_message_use_case.execute(incoming_message)
