@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import logging
 
 from obs_chat_bot.application.articles.analysis import (
     AnalyzeArticleCommand,
@@ -28,6 +29,9 @@ from obs_chat_bot.application.users.identity import (
     UserIdentityService,
 )
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class IncomingMessageResultType(StrEnum):
@@ -82,20 +86,48 @@ class ProcessIncomingMessageUseCase:
 
     def execute(self, incoming_message: IncomingMessage) -> ProcessIncomingMessageResult:
         """Выполняет общий flow регистрации, сохранения статьи и анализа."""
+        LOGGER.debug(
+            "Incoming message received: channel=%s chat_id=%s message_id=%s "
+            "external_user_id=%s text_kind=%s",
+            incoming_message.channel,
+            incoming_message.chat_id,
+            incoming_message.message_id,
+            incoming_message.external_user_id,
+            _text_kind(incoming_message.text),
+        )
         app_user_result = self._resolve_app_user(incoming_message)
         if isinstance(app_user_result, ProcessIncomingMessageResult):
+            _log_result(app_user_result)
             return app_user_result
 
         incoming_message = _with_app_user(incoming_message, app_user_result)
+        LOGGER.debug(
+            "Incoming identity resolved: app_user_id=%s channel=%s chat_id=%s",
+            app_user_result.id,
+            incoming_message.channel,
+            incoming_message.chat_id,
+        )
         url = extract_first_supported_url(incoming_message.text)
         if url is None:
-            return ProcessIncomingMessageResult(
+            result = ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_URL_MISSING,
                 app_user=app_user_result,
             )
+            _log_result(result)
+            return result
 
         saved_message = self._save_incoming_message(incoming_message)
         incoming_message_id = saved_message.id if saved_message is not None else None
+        if saved_message is not None:
+            LOGGER.debug(
+                "Incoming message saved: incoming_message_id=%s app_user_id=%s "
+                "channel=%s chat_id=%s message_id=%s",
+                saved_message.id,
+                saved_message.app_user_id,
+                saved_message.channel,
+                saved_message.chat_id,
+                saved_message.message_id,
+            )
 
         try:
             article_result = self._article_url_use_case.execute(
@@ -106,22 +138,35 @@ class ProcessIncomingMessageUseCase:
                 )
             )
         except ProcessArticleUrlError as error:
-            return ProcessIncomingMessageResult(
+            result = ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_PROCESSING_FAILED,
                 app_user=app_user_result,
                 saved_message=saved_message,
                 error=error,
             )
+            _log_result(result)
+            return result
 
         self._link_message_to_article(saved_message, article_result)
+        LOGGER.debug(
+            "Article flow completed: article_id=%s app_user_id=%s created=%s "
+            "extracted=%s status=%s",
+            article_result.article.id,
+            article_result.article.app_user_id,
+            article_result.created,
+            article_result.extracted,
+            article_result.article.status.value,
+        )
 
         if self._article_analysis_use_case is None or article_result.article.id is None:
-            return ProcessIncomingMessageResult(
+            result = ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_PROCESSED,
                 app_user=app_user_result,
                 saved_message=saved_message,
                 article_result=article_result,
             )
+            _log_result(result)
+            return result
 
         try:
             analysis_result = self._article_analysis_use_case.execute(
@@ -132,21 +177,33 @@ class ProcessIncomingMessageUseCase:
                 )
             )
         except AnalyzeArticleError as error:
-            return ProcessIncomingMessageResult(
+            result = ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_ANALYSIS_FAILED,
                 app_user=app_user_result,
                 saved_message=saved_message,
                 article_result=article_result,
                 error=error,
             )
+            _log_result(result)
+            return result
 
-        return ProcessIncomingMessageResult(
+        LOGGER.debug(
+            "Article analysis completed: article_id=%s analysis_id=%s created=%s "
+            "model=%s",
+            analysis_result.article.id,
+            analysis_result.analysis.id,
+            analysis_result.created,
+            analysis_result.analysis.llm_model,
+        )
+        result = ProcessIncomingMessageResult(
             type=IncomingMessageResultType.ARTICLE_ANALYZED,
             app_user=app_user_result,
             saved_message=saved_message,
             article_result=article_result,
             analysis_result=analysis_result,
         )
+        _log_result(result)
+        return result
 
     def _resolve_app_user(
         self,
@@ -161,6 +218,15 @@ class ProcessIncomingMessageUseCase:
 
         if text == "/register":
             app_user = self._user_identity_service.register(identity)
+            LOGGER.debug(
+                "User registered or reused: app_user_id=%s channel=%s "
+                "external_user_id=%s external_chat_id=%s username=%s",
+                app_user.id,
+                identity.channel,
+                identity.external_user_id,
+                identity.external_chat_id,
+                identity.username,
+            )
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.REGISTERED,
                 app_user=app_user,
@@ -173,6 +239,11 @@ class ProcessIncomingMessageUseCase:
                     type=IncomingMessageResultType.UNKNOWN_IDENTITY
                 )
             link_code = self._user_identity_service.create_link_code(app_user.id)
+            LOGGER.debug(
+                "Identity link code created: app_user_id=%s expires_at=%s",
+                app_user.id,
+                link_code.expires_at.isoformat(),
+            )
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.LINK_CODE_CREATED,
                 app_user=app_user,
@@ -189,6 +260,15 @@ class ProcessIncomingMessageUseCase:
                 app_user = self._user_identity_service.link(
                     code=parts[1],
                     identity=identity,
+                )
+                LOGGER.debug(
+                    "Identity linked: app_user_id=%s channel=%s external_user_id=%s "
+                    "external_chat_id=%s username=%s",
+                    app_user.id,
+                    identity.channel,
+                    identity.external_user_id,
+                    identity.external_chat_id,
+                    identity.username,
                 )
                 return ProcessIncomingMessageResult(
                     type=IncomingMessageResultType.LINKED,
@@ -311,4 +391,37 @@ def _with_app_user(incoming_message: IncomingMessage, app_user: AppUser) -> Inco
         external_user_id=incoming_message.external_user_id,
         username=incoming_message.username,
         display_name=incoming_message.display_name,
+    )
+
+
+def _text_kind(text: str) -> str:
+    stripped_text = text.strip()
+    if not stripped_text:
+        return "empty"
+    if stripped_text.startswith("/"):
+        command = stripped_text.split(maxsplit=1)[0]
+        return f"command:{command}"
+    if extract_first_supported_url(stripped_text) is not None:
+        return "url"
+    return "text"
+
+
+def _log_result(result: ProcessIncomingMessageResult) -> None:
+    LOGGER.debug(
+        "Incoming message processed: result=%s app_user_id=%s "
+        "incoming_message_id=%s article_id=%s analysis_id=%s error_type=%s",
+        result.type.value,
+        result.app_user.id if result.app_user is not None else None,
+        result.saved_message.id if result.saved_message is not None else None,
+        (
+            result.article_result.article.id
+            if result.article_result is not None
+            else None
+        ),
+        (
+            result.analysis_result.analysis.id
+            if result.analysis_result is not None
+            else None
+        ),
+        type(result.error).__name__ if result.error is not None else None,
     )

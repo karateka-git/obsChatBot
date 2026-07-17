@@ -23,6 +23,7 @@ from obs_chat_bot.data.config import AppConfig
 from obs_chat_bot.presentation.cli.main import (
     check_llm_config,
     check_telegram_config,
+    configure_debug_logging,
     parse_args,
     process_telegram_incoming_message,
     initialize_database,
@@ -185,6 +186,23 @@ class ProcessUrlCliTest(unittest.TestCase):
                 logger=SilentLogger(),
             )
         )
+
+    def test_configure_debug_logging_enables_debug_level(self) -> None:
+        """APP_DEBUG включает DEBUG для приложения."""
+        import logging
+
+        root_logger = logging.getLogger()
+        app_logger = logging.getLogger("obs_chat_bot")
+        old_root_level = root_logger.level
+        old_app_level = app_logger.level
+        try:
+            configure_debug_logging(True)
+
+            self.assertEqual(root_logger.level, logging.DEBUG)
+            self.assertEqual(app_logger.level, logging.DEBUG)
+        finally:
+            root_logger.setLevel(old_root_level)
+            app_logger.setLevel(old_app_level)
 
     def test_run_process_url_command_returns_zero_on_success(self) -> None:
         """Успешный pipeline возвращает нулевой exit code."""

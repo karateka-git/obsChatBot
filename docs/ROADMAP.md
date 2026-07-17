@@ -710,3 +710,5 @@
 Этап 7.1.5 Security и operations завершён: HTTP-загрузчик отклоняет localhost/private/link-local URL до запроса и после redirect, healthcheck проверяет SQLite/Telegram/LLM-конфигурацию, Telegram поддерживает `/status` и `/reanalyze <ID статьи>`; retention/backup SQLite вынесен в backlog.
 
 Следующий шаг: переходить к следующему этапу после 7.1.
+
+Этап 7.2 Debug observability завершён: добавлен `APP_DEBUG`, debug-уровень логирования и безопасные подробные события incoming-flow для регистрации, привязки каналов, сохранения входящих сообщений, обработки статей и LLM-анализа без вывода секретов, полного текста статей и prompt.

@@ -32,6 +32,7 @@ class AppConfig:
     openai_base_url: str
     openai_api_key: str
     openai_model: str
+    app_debug: bool = False
 
     @property
     def data_dir(self) -> Path:
@@ -45,6 +46,7 @@ class AppConfig:
             "openai_base_url": self.openai_base_url,
             "openai_api_key": _presence(self.openai_api_key),
             "openai_model": self.openai_model,
+            "app_debug": str(self.app_debug).lower(),
         }
 
 
@@ -64,6 +66,7 @@ def load_config() -> AppConfig:
         openai_base_url=_get_required("OPENAI_BASE_URL").rstrip("/"),
         openai_api_key=_get_required("OPENAI_API_KEY"),
         openai_model=_get_required("OPENAI_MODEL"),
+        app_debug=_get_bool("APP_DEBUG", default=False),
     )
 
 
@@ -76,3 +79,16 @@ def _get_required(name: str) -> str:
 
 def _presence(value: str) -> str:
     return "set" if value else "missing"
+
+
+def _get_bool(name: str, *, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigError(f"Environment variable {name} must be boolean")

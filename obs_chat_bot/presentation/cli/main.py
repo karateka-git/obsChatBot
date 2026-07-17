@@ -105,6 +105,7 @@ def main() -> int:
     except ConfigError as error:
         logger.error("Configuration error: %s", error)
         return 2
+    configure_debug_logging(config.app_debug)
 
     config.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -139,6 +140,14 @@ def main() -> int:
     logger.info("Configuration is ready")
 
     return 0
+
+
+def configure_debug_logging(enabled: bool) -> None:
+    """Включает расширенный debug-лог приложения по конфигурации."""
+    if not enabled:
+        return
+    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger("obs_chat_bot").setLevel(logging.DEBUG)
 
 
 TELEGRAM_TOKEN_PATTERN = re.compile(r"^\d+:[A-Za-z0-9_-]{20,}$")
