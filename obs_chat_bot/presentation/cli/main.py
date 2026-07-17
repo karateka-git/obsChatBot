@@ -334,7 +334,7 @@ def run_process_url_command(
     """
     try:
         factory = use_case_factory or create_process_article_url_use_case
-        with connect_database(database_path, allow_cross_thread=True) as connection:
+        with connect_database(database_path) as connection:
             apply_migrations(connection)
             use_case = factory(connection)
             result = use_case.execute(ProcessArticleUrlCommand(source_url=source_url))
@@ -387,7 +387,7 @@ def run_telegram_bot_command(
         Ноль при штатной остановке, иначе единицу.
     """
     try:
-        with connect_database(database_path) as connection:
+        with connect_database(database_path, allow_cross_thread=True) as connection:
             apply_migrations(connection)
             dependencies = create_telegram_bot_dependencies(
                 connection,

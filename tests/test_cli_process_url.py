@@ -223,6 +223,30 @@ class ProcessUrlCliTest(unittest.TestCase):
         )
         self.assertEqual(exit_code, 0)
 
+    def test_run_telegram_bot_command_allows_cross_thread_sqlite(self) -> None:
+        """Telegram adapter открывает SQLite connection для worker thread."""
+        fake_use_case = FakeProcessArticleUrlUseCase()
+        with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot"):
+            with patch(
+                "obs_chat_bot.presentation.cli.main.connect_database",
+                wraps=__import__(
+                    "obs_chat_bot.data.sqlite.connection",
+                    fromlist=["connect_database"],
+                ).connect_database,
+            ) as connector:
+                with TemporaryDirectory(
+                    prefix="obs-chat-bot-telegram-"
+                ) as temporary_directory:
+                    exit_code = run_telegram_bot_command(
+                        database_path=Path(temporary_directory) / "test.db",
+                        token="token",
+                        logger=SilentLogger(),
+                        use_case_factory=lambda _connection: fake_use_case,
+                    )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(connector.call_args.kwargs["allow_cross_thread"])
+
 
 if __name__ == "__main__":
     unittest.main()
