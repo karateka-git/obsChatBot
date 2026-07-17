@@ -5,33 +5,21 @@ import logging
 import sqlite3
 import tempfile
 from pathlib import Path
-from typing import Callable
 
 from obs_chat_bot import __version__
-from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
 from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlCommand,
     ProcessArticleUrlError,
-    ProcessArticleUrlUseCase,
 )
-from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
-    TrafilaturaArticleTextExtractor,
+from obs_chat_bot.bootstrap import (
+    AnalyzeArticleUseCaseFactory,
+    ProcessArticleUrlUseCaseFactory,
+    create_process_article_url_use_case,
+    create_telegram_bot_dependencies,
 )
 from obs_chat_bot.data.config import ConfigError, load_config
-from obs_chat_bot.data.http.article_html_fetcher import UrllibArticleHtmlFetcher
-from obs_chat_bot.data.llm.openai_article_analyzer import OpenAIArticleAnalyzer
-from obs_chat_bot.data.sqlite.analysis_result_repository import (
-    SQLiteArticleAnalysisResultRepository,
-)
-from obs_chat_bot.data.sqlite.article_repository import SQLiteArticleRepository
 from obs_chat_bot.data.sqlite.connection import connect_database
-from obs_chat_bot.data.sqlite.incoming_message_repository import (
-    SQLiteIncomingMessageRepository,
-)
 from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
-from obs_chat_bot.data.sqlite.processing_error_repository import (
-    SQLiteProcessingErrorRecorder,
-)
 from obs_chat_bot.presentation.telegram.bot import TelegramBotError, run_telegram_bot
 from obs_chat_bot.presentation.cli.smoke import (
     AnalysisSmokeError,
@@ -40,15 +28,6 @@ from obs_chat_bot.presentation.cli.smoke import (
     run_sqlite_smoke,
 )
 from obs_chat_bot.presentation.cli.smoke import PipelineSmokeError, run_pipeline_smoke
-
-ProcessArticleUrlUseCaseFactory = Callable[
-    [sqlite3.Connection],
-    ProcessArticleUrlUseCase,
-]
-AnalyzeArticleUseCaseFactory = Callable[
-    [sqlite3.Connection],
-    AnalyzeArticleUseCase,
-]
 
 
 def configure_logging() -> None:
@@ -333,55 +312,6 @@ def run_process_url_command(
     return 0
 
 
-def create_process_article_url_use_case(
-    connection: sqlite3.Connection,
-) -> ProcessArticleUrlUseCase:
-    """Собирает concrete dependencies для обработки URL статьи.
-
-    Args:
-        connection: Открытое соединение SQLite.
-
-    Returns:
-        Use case с SQLite, HTTP и trafilatura-реализациями ports.
-    """
-    return ProcessArticleUrlUseCase(
-        article_repository=SQLiteArticleRepository(connection),
-        html_fetcher=UrllibArticleHtmlFetcher(),
-        text_extractor=TrafilaturaArticleTextExtractor(),
-        error_recorder=SQLiteProcessingErrorRecorder(connection),
-    )
-
-
-def create_analyze_article_use_case(
-    connection: sqlite3.Connection,
-    *,
-    openai_base_url: str,
-    openai_api_key: str,
-    openai_model: str,
-) -> AnalyzeArticleUseCase:
-    """Собирает concrete dependencies для LLM-анализа статьи.
-
-    Args:
-        connection: Открытое соединение SQLite.
-        openai_base_url: Базовый URL OpenAI-compatible API.
-        openai_api_key: API key провайдера LLM.
-        openai_model: Имя модели для анализа статей.
-
-    Returns:
-        Use case с SQLite-хранилищем и OpenAI-compatible analyzer.
-    """
-    return AnalyzeArticleUseCase(
-        article_repository=SQLiteArticleRepository(connection),
-        analyzer=OpenAIArticleAnalyzer(
-            base_url=openai_base_url,
-            api_key=openai_api_key,
-            model=openai_model,
-        ),
-        analysis_result_repository=SQLiteArticleAnalysisResultRepository(connection),
-        error_recorder=SQLiteProcessingErrorRecorder(connection),
-    )
-
-
 def run_telegram_bot_command(
     *,
     database_path: Path,
@@ -409,24 +339,29 @@ def run_telegram_bot_command(
         Ноль при штатной остановке, иначе единицу.
     """
     try:
-        factory = use_case_factory or create_process_article_url_use_case
-        analysis_factory = analysis_use_case_factory or (
-            lambda connection: create_analyze_article_use_case(
+        with connect_database(database_path) as connection:
+            apply_migrations(connection)
+            dependencies = create_telegram_bot_dependencies(
                 connection,
                 openai_base_url=openai_base_url,
                 openai_api_key=openai_api_key,
                 openai_model=openai_model,
             )
-        )
-        with connect_database(database_path) as connection:
-            apply_migrations(connection)
-            use_case = factory(connection)
-            analysis_use_case = analysis_factory(connection)
+            use_case = (
+                use_case_factory(connection)
+                if use_case_factory is not None
+                else dependencies.article_url_use_case
+            )
+            analysis_use_case = (
+                analysis_use_case_factory(connection)
+                if analysis_use_case_factory is not None
+                else dependencies.article_analysis_use_case
+            )
             run_telegram_bot(
                 token=token,
                 article_url_use_case=use_case,
                 article_analysis_use_case=analysis_use_case,
-                incoming_message_repository=SQLiteIncomingMessageRepository(connection),
+                incoming_message_repository=dependencies.incoming_message_repository,
                 logger=logger,
             )
     except KeyboardInterrupt:

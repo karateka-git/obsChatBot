@@ -3,6 +3,7 @@ services:
     build:
       context: .
     image: obs-chat-bot:dev
+    command: ["python", "-m", "obs_chat_bot", "--telegram-bot"]
     env_file:
       - .env
     volumes:

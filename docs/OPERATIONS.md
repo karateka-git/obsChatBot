@@ -50,6 +50,15 @@ python -m obs_chat_bot --analysis-smoke
 Окно PowerShell должно остаться открытым. В логах ожидается старт polling без
 `TelegramConflictError`.
 
+Альтернативный основной запуск через Docker Compose:
+
+```powershell
+docker compose up --build
+```
+
+Этот режим тоже запускает Telegram polling и держит контейнер активным до
+остановки через `Ctrl+C`.
+
 ## Проверка пользовательского сценария
 
 1. Отправить боту HTTP/HTTPS-ссылку на статью.

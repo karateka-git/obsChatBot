@@ -56,8 +56,11 @@ GitHub CLI не обязателен, но удобен для авториза�
 - Python-зависимости проекта:
   - `aiogram`;
   - `trafilatura`;
-  - `openai` или `httpx`;
+  - `openai`;
   - `python-dotenv`.
+
+Версии runtime-зависимостей закреплены в `requirements.txt`, чтобы Docker build
+не менял поведение проекта из-за случайного обновления пакетов.
 - Системные пакеты, если их потребуют зависимости для HTML/XML parsing и article extraction.
 
 SQLite отдельно устанавливать не нужно для MVP: используем Python stdlib `sqlite3`, а файл базы хранится в `data/`.

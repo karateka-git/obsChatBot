@@ -1,5 +1,4 @@
-aiogram
-trafilatura
-openai
-python-dotenv
-
+aiogram==3.29.1
+openai==2.46.0
+python-dotenv==1.2.2
+trafilatura==2.1.0
