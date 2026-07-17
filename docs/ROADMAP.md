@@ -709,4 +709,4 @@
 
 Этап 7.1.5 Security и operations запланирован: добавить URL safety против SSRF, расширенный healthcheck для Telegram/LLM, дополнительные команды диагностики вроде `/status` и `/reanalyze`; retention/backup SQLite вынести в backlog.
 
-Следующий шаг: продолжить Этап 7.1 и добавить user identity модель без owner/admin: `/register`, `/link_code`, `/link <код>`, `app_user_id` для пользовательских данных и изоляцию статей по пользователю.
+Следующий шаг: продолжить Этап 7.1 с подпункта 7.1.2.
