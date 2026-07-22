@@ -1,6 +1,7 @@
 # Настройка GitHub App для Obsidian vault
 
-GitHub connector использует GitHub App только для чтения выбранных repository.
+GitHub connector читает выбранный repository и после явного подтверждения
+пользователя записывает изменения Obsidian vault прямым commit в default branch.
 Пользователь проходит Device Flow в браузере, а приложение сохраняет в SQLite
 только разрешённые installation IDs. Device code, user access token, App JWT и
 installation access token существуют только в памяти процесса.
@@ -13,12 +14,16 @@ installation access token существуют только в памяти пр
 2. Задать уникальное имя и Homepage URL проекта.
 3. В `Webhook` отключить `Active`: webhook отложен в backlog.
 4. В Repository permissions выбрать:
-   - `Contents: Read-only`;
+   - `Contents: Read and write`;
    - `Metadata: Read-only` — обязательное разрешение GitHub.
 5. Остальные permissions оставить `No access`.
 6. В `Where can this GitHub App be installed?` разрешить установку на любой
    account, если connector будет использоваться несколькими GitHub accounts.
 7. Создать приложение.
+
+Если `Contents` изменён с read-only после установки App, владелец installation
+должен отдельно одобрить новые permissions. Пока запрос не одобрен, существующая
+installation продолжает возвращать `Contents: read`.
 
 На странице созданного App включить Device Flow. Client secret для выбранного
 Device Flow не требуется.
@@ -72,3 +77,4 @@ GitHub connector считается выключенным, если все че
 - [Device Flow для GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app)
 - [JWT GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
 - [Installation access token](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
+- [Одобрение новых permissions установленного GitHub App](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app)

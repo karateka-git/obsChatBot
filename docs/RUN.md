@@ -224,7 +224,7 @@ VK adapter использует тот же incoming-flow, регистраци�
 
 ## 12. Подключить GitHub App
 
-Регистрация App, минимальные read-only permissions, Device Flow и PEM описаны в
+Регистрация App, минимальные write permissions, Device Flow и PEM описаны в
 `docs/GITHUB_APP.md`. После заполнения GitHub-группы настроек в `.env` и
 перезапуска ботов зарегистрированный пользователь отправляет в Telegram или VK:
 

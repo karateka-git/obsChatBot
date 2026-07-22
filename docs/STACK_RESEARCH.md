@@ -17,7 +17,7 @@
 | HTTP и LLM | OpenAI-совместимый Python SDK или тонкий HTTP-клиент с настраиваемыми `base_url`, `api_key`, `model`. | Можно заменить SDK на прямой HTTP adapter, если совместимый провайдер требует особой формы запроса. | Для MVP выбрать Python LLM adapter с OpenAI-compatible API через env. |
 | SQLite | stdlib `sqlite3` + простые SQL-миграции и repository layer. | SQLAlchemy добавить позже, если схема и запросы станут сложнее. | Для MVP выбрать stdlib `sqlite3`: достаточно, прозрачно, без лишнего ORM-слоя. |
 | Извлечение текста статей | `trafilatura` для main text/metadata extraction; при необходимости `httpx`/`aiohttp` для загрузки страниц. | `readability-lxml`, BeautifulSoup или кастомная очистка как fallback. | Python сразу закрывает самый рискованный слой: извлечение чистого текста статьи. |
-| Будущий RAG | Python-интерфейсы для chunking, embeddings provider и поиска; SQLite остаётся source of truth. | FAISS или другой vector index добавить позже как вторичный индекс. | Python удобнее для RAG/tooling, но RAG не фиксируем рано. |
+| Будущий RAG | Python-интерфейсы для chunking, embeddings provider и поиска; GitHub остаётся source of truth для vault, SQLite — для локального индекса и application workflow. | FAISS или другой vector index добавить позже как вторичный индекс. | Python удобнее для RAG/tooling, но RAG не фиксируем рано. |
 | Docker-first | Python service в Docker Compose, SQLite в `data/`, конфиг через `.env`. | VPS deployment тем же compose-файлом. | Docker-first сохраняется без изменений. |
 
 ## Риски Python-first
