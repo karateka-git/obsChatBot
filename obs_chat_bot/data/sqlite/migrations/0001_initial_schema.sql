@@ -132,17 +132,57 @@ CREATE INDEX idx_processing_errors_article_id
 CREATE INDEX idx_processing_errors_incoming_message_id
     ON processing_errors (incoming_message_id);
 
+CREATE TABLE github_accounts (
+    app_user_id INTEGER PRIMARY KEY,
+    github_user_id INTEGER NOT NULL,
+    login TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id) REFERENCES app_users (id) ON DELETE CASCADE,
+    CHECK (github_user_id > 0),
+    CHECK (length(trim(login)) > 0)
+);
+
+CREATE INDEX idx_github_accounts_github_user_id
+    ON github_accounts (github_user_id);
+
 CREATE TABLE github_installations (
     app_user_id INTEGER NOT NULL,
     installation_id INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (app_user_id, installation_id),
-    FOREIGN KEY (app_user_id) REFERENCES app_users (id) ON DELETE CASCADE,
+    FOREIGN KEY (app_user_id) REFERENCES github_accounts (app_user_id)
+        ON DELETE CASCADE,
     CHECK (installation_id > 0)
 );
 
 CREATE INDEX idx_github_installations_installation_id
     ON github_installations (installation_id);
+
+CREATE TABLE github_reconnect_confirmations (
+    app_user_id INTEGER PRIMARY KEY,
+    account_login TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id) REFERENCES github_accounts (app_user_id)
+        ON DELETE CASCADE,
+    CHECK (length(trim(account_login)) > 0)
+);
+
+CREATE INDEX idx_github_reconnect_confirmations_expires_at
+    ON github_reconnect_confirmations (expires_at);
+
+CREATE TABLE github_connection_attempts (
+    app_user_id INTEGER PRIMARY KEY,
+    owner TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (app_user_id) REFERENCES app_users (id) ON DELETE CASCADE,
+    CHECK (length(trim(owner)) > 0)
+);
+
+CREATE INDEX idx_github_connection_attempts_expires_at
+    ON github_connection_attempts (expires_at);
 
 CREATE TABLE obsidian_vaults (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

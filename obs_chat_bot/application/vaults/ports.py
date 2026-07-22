@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Protocol
 
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubAuthenticatedAccount,
     GitHubConnectionCompletion,
     GitHubConnectionStartResult,
     GitHubDeviceAuthorization,
@@ -13,6 +14,8 @@ from obs_chat_bot.application.vaults.github_models import (
 )
 
 from obs_chat_bot.domain.vaults.entities import (
+    GitHubAccount,
+    GitHubReconnectConfirmation,
     GitHubInstallation,
     ObsidianVault,
     VaultActionConfirmation,
@@ -174,6 +177,12 @@ class GitHubDeviceFlowGateway(Protocol):
     ) -> set[int]:
         """Возвращает installation IDs, доступные авторизованному пользователю."""
 
+    def get_authenticated_account(
+        self,
+        access_token: GitHubUserAccessToken,
+    ) -> GitHubAuthenticatedAccount:
+        """Возвращает публичные ID и login авторизованного GitHub-аккаунта."""
+
 
 class GitHubInstallationTokenProvider(Protocol):
     """Описывает выпуск краткоживущего installation access token."""
@@ -187,16 +196,61 @@ class GitHubInstallationTokenProvider(Protocol):
         """Создаёт read-only token установки, при необходимости для одного repo."""
 
 
-class GitHubInstallationAccessWriter(Protocol):
-    """Описывает потокобезопасную запись разрешённых installations."""
+class GitHubAccountAccessWriter(Protocol):
+    """Описывает потокобезопасную замену GitHub-аккаунта и его доступов."""
 
     def replace_for_user(
         self,
         *,
         app_user_id: int,
+        github_user_id: int,
+        login: str,
         installation_ids: set[int],
     ) -> None:
-        """Сохраняет актуальный набор разрешённых installation IDs."""
+        """Атомарно сохраняет аккаунт и актуальные installation IDs."""
+
+
+class GitHubConnectionStateStore(Protocol):
+    """Хранит безопасное межпроцессное состояние подключения GitHub."""
+
+    def get_account(self, app_user_id: int) -> GitHubAccount | None:
+        """Возвращает подключённый GitHub-аккаунт пользователя."""
+
+    def request_reconnect(
+        self,
+        *,
+        app_user_id: int,
+        account_login: str,
+        expires_at: datetime,
+    ) -> None:
+        """Сохраняет ожидающее подтверждение замены аккаунта."""
+
+    def find_reconnect_confirmation(
+        self,
+        *,
+        app_user_id: int,
+        now: datetime,
+    ) -> GitHubReconnectConfirmation | None:
+        """Возвращает активное подтверждение или удаляет истёкшее."""
+
+    def delete_reconnect_confirmation(self, app_user_id: int) -> None:
+        """Удаляет ожидающее подтверждение переподключения."""
+
+    def acquire_attempt(
+        self,
+        *,
+        app_user_id: int,
+        owner: str,
+        expires_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """Захватывает claim запуска Device Flow между процессами."""
+
+    def has_active_attempt(self, *, app_user_id: int, now: datetime) -> bool:
+        """Проверяет наличие незавершённого Device Flow в любом процессе."""
+
+    def release_attempt(self, *, app_user_id: int, owner: str) -> None:
+        """Освобождает claim только его владельцем."""
 
 
 class GitHubConnectionCompletionHandler(Protocol):
@@ -215,3 +269,16 @@ class GitHubConnectionStarter(Protocol):
         completion_handler: GitHubConnectionCompletionHandler | None = None,
     ) -> GitHubConnectionStartResult:
         """Запускает Device Flow или возвращает уже ожидающий challenge."""
+
+    def has_reconnect_confirmation(self, app_user_id: int) -> bool:
+        """Проверяет ожидание ответа `да`/`нет` на замену аккаунта."""
+
+    def confirm_reconnect(
+        self,
+        app_user_id: int,
+        completion_handler: GitHubConnectionCompletionHandler | None = None,
+    ) -> GitHubConnectionStartResult | None:
+        """Подтверждает замену и запускает новый Device Flow."""
+
+    def cancel_reconnect(self, app_user_id: int) -> bool:
+        """Отменяет ожидающую замену GitHub-аккаунта."""

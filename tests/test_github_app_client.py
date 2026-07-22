@@ -104,6 +104,22 @@ class GitHubAppClientTest(unittest.TestCase):
             "Bearer ghu-secret",
         )
 
+    def test_get_authenticated_account_reads_public_id_and_login(self) -> None:
+        """Авторизованный user endpoint определяет аккаунт без сохранения token."""
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            return_value=FakeResponse({"id": 777, "login": "octocat"}),
+        ) as opener:
+            account = _client().get_authenticated_account(
+                GitHubUserAccessToken("ghu-secret")
+            )
+
+        request = opener.call_args.args[0]
+        self.assertEqual(account.github_user_id, 777)
+        self.assertEqual(account.login, "octocat")
+        self.assertEqual(request.full_url, "https://api.github.com/user")
+        self.assertEqual(request.get_header("Authorization"), "Bearer ghu-secret")
+
     def test_create_installation_token_scopes_request_to_repository(self) -> None:
         """Installation token можно ограничить выбранным repository ID."""
         payload = {

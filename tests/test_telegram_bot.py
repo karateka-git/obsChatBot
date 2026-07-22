@@ -97,6 +97,7 @@ class TelegramBotHelpersTest(unittest.TestCase):
                 GitHubConnectionCompletion(
                     GitHubConnectionCompletionStatus.CONNECTED,
                     installation_count=1,
+                    account_login="octocat",
                 ),
             )
             for _attempt in range(10):
@@ -107,7 +108,7 @@ class TelegramBotHelpersTest(unittest.TestCase):
         asyncio.run(run())
 
         self.assertEqual(len(message.answers), 1)
-        self.assertIn("аккаунт успешно подключён", message.answers[0])
+        self.assertIn("`octocat` успешно подключён", message.answers[0])
         self.assertNotIn("установок", message.answers[0])
 
 

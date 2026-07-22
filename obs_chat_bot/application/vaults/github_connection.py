@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 from threading import Lock, Thread
 import time
+from uuid import uuid4
 
 from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionCompletion,
@@ -19,13 +20,16 @@ from obs_chat_bot.application.vaults.github_models import (
 )
 from obs_chat_bot.application.vaults.ports import (
     GitHubConnectionCompletionHandler,
+    GitHubAccountAccessWriter,
+    GitHubConnectionStateStore,
     GitHubConnectionStarter,
     GitHubDeviceFlowGateway,
-    GitHubInstallationAccessWriter,
 )
 
 
 LOGGER = logging.getLogger(__name__)
+RECONNECT_CONFIRMATION_TTL = timedelta(minutes=10)
+CONNECTION_ATTEMPT_TTL = timedelta(minutes=20)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,16 +38,18 @@ class _GitHubConnectionSession:
 
     authorization: GitHubDeviceAuthorization | None
     completion_handler: GitHubConnectionCompletionHandler | None
+    owner: str
 
 
 class GitHubConnectionCoordinator(GitHubConnectionStarter):
-    """Координирует Device Flow в памяти и сохраняет только installation IDs."""
+    """Координирует один GitHub-аккаунт и Device Flow между adapters."""
 
     def __init__(
         self,
         *,
         gateway: GitHubDeviceFlowGateway,
-        installation_writer: GitHubInstallationAccessWriter,
+        account_writer: GitHubAccountAccessWriter,
+        state_store: GitHubConnectionStateStore,
         installation_url: str,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] | None = None,
@@ -52,7 +58,8 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
         if not installation_url.strip():
             raise ValueError("installation_url must not be empty")
         self._gateway = gateway
-        self._installation_writer = installation_writer
+        self._account_writer = account_writer
+        self._state_store = state_store
         self._installation_url = installation_url
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper or time.sleep
@@ -68,6 +75,67 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
         """Возвращает challenge немедленно и запускает polling в daemon thread."""
         if app_user_id <= 0:
             raise ValueError("app_user_id must be positive")
+        pending = self._local_pending_result(app_user_id)
+        if pending is not None:
+            return pending
+
+        now = self._clock()
+        if self._state_store.has_active_attempt(app_user_id=app_user_id, now=now):
+            return GitHubConnectionStartResult(
+                status=GitHubConnectionStartStatus.IN_PROGRESS,
+                installation_url=self._installation_url,
+            )
+        account = self._state_store.get_account(app_user_id)
+        if account is not None:
+            self._state_store.request_reconnect(
+                app_user_id=app_user_id,
+                account_login=account.login,
+                expires_at=now + RECONNECT_CONFIRMATION_TTL,
+            )
+            return GitHubConnectionStartResult(
+                status=GitHubConnectionStartStatus.RECONNECT_CONFIRMATION_REQUIRED,
+                installation_url=self._installation_url,
+                connected_account_login=account.login,
+            )
+        return self._start_device_flow(app_user_id, completion_handler)
+
+    def has_reconnect_confirmation(self, app_user_id: int) -> bool:
+        """Проверяет shared подтверждение переподключения с учётом TTL."""
+        return (
+            self._state_store.find_reconnect_confirmation(
+                app_user_id=app_user_id,
+                now=self._clock(),
+            )
+            is not None
+        )
+
+    def confirm_reconnect(
+        self,
+        app_user_id: int,
+        completion_handler: GitHubConnectionCompletionHandler | None = None,
+    ) -> GitHubConnectionStartResult | None:
+        """Удаляет подтверждение и запускает заменяющий Device Flow."""
+        confirmation = self._state_store.find_reconnect_confirmation(
+            app_user_id=app_user_id,
+            now=self._clock(),
+        )
+        if confirmation is None:
+            return None
+        self._state_store.delete_reconnect_confirmation(app_user_id)
+        return self._start_device_flow(app_user_id, completion_handler)
+
+    def cancel_reconnect(self, app_user_id: int) -> bool:
+        """Отменяет активный запрос на замену GitHub-аккаунта."""
+        if not self.has_reconnect_confirmation(app_user_id):
+            return False
+        self._state_store.delete_reconnect_confirmation(app_user_id)
+        return True
+
+    def _local_pending_result(
+        self,
+        app_user_id: int,
+    ) -> GitHubConnectionStartResult | None:
+        """Возвращает challenge текущего процесса, если он уже существует."""
         with self._lock:
             if app_user_id in self._sessions:
                 authorization = self._sessions[app_user_id].authorization
@@ -81,9 +149,32 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
                     installation_url=self._installation_url,
                     authorization=authorization,
                 )
+        return None
+
+    def _start_device_flow(
+        self,
+        app_user_id: int,
+        completion_handler: GitHubConnectionCompletionHandler | None,
+    ) -> GitHubConnectionStartResult:
+        """Захватывает shared claim и запускает Device Flow в текущем процессе."""
+        owner = uuid4().hex
+        now = self._clock()
+        acquired = self._state_store.acquire_attempt(
+            app_user_id=app_user_id,
+            owner=owner,
+            expires_at=now + CONNECTION_ATTEMPT_TTL,
+            now=now,
+        )
+        if not acquired:
+            return GitHubConnectionStartResult(
+                status=GitHubConnectionStartStatus.IN_PROGRESS,
+                installation_url=self._installation_url,
+            )
+        with self._lock:
             session = _GitHubConnectionSession(
                 authorization=None,
                 completion_handler=completion_handler,
+                owner=owner,
             )
             self._sessions[app_user_id] = session
 
@@ -93,6 +184,7 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
             session = _GitHubConnectionSession(
                 authorization=authorization,
                 completion_handler=completion_handler,
+                owner=owner,
             )
             with self._lock:
                 self._sessions[app_user_id] = session
@@ -105,6 +197,7 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
             worker.start()
         except Exception as error:
             self._remove_session(app_user_id, expected=session)
+            self._state_store.release_attempt(app_user_id=app_user_id, owner=owner)
             if isinstance(error, GitHubGatewayError):
                 raise
             raise GitHubGatewayError(
@@ -186,6 +279,10 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
             )
         finally:
             self._remove_session(app_user_id, expected=session)
+            self._state_store.release_attempt(
+                app_user_id=app_user_id,
+                owner=session.owner,
+            )
             if completion is not None:
                 self._notify(session.completion_handler, completion, app_user_id)
 
@@ -197,9 +294,12 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
         if access_token is None:
             raise RuntimeError("Authorized Device Flow returned no access token")
         try:
+            account = self._gateway.get_authenticated_account(access_token)
             installation_ids = self._gateway.list_installation_ids(access_token)
-            self._installation_writer.replace_for_user(
+            self._account_writer.replace_for_user(
                 app_user_id=app_user_id,
+                github_user_id=account.github_user_id,
+                login=account.login,
                 installation_ids=installation_ids,
             )
         except GitHubGatewayError as error:
@@ -233,6 +333,7 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
         return GitHubConnectionCompletion(
             GitHubConnectionCompletionStatus.CONNECTED,
             installation_count=len(installation_ids),
+            account_login=account.login,
         )
 
     def _remove_session(

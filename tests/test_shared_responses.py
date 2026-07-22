@@ -271,7 +271,7 @@ class TelegramResponsesTest(unittest.TestCase):
     def test_format_github_completion_covers_all_final_statuses(self) -> None:
         """Каждый финал Device Flow получает понятный безопасный ответ."""
         cases = {
-            GitHubConnectionCompletionStatus.CONNECTED: "аккаунт успешно подключён",
+                GitHubConnectionCompletionStatus.CONNECTED: "`octocat` успешно подключён",
             GitHubConnectionCompletionStatus.NO_INSTALLATIONS: "ни к одному репозиторию",
             GitHubConnectionCompletionStatus.DENIED: "отклонена",
             GitHubConnectionCompletionStatus.EXPIRED: "истёк",
@@ -282,7 +282,11 @@ class TelegramResponsesTest(unittest.TestCase):
             with self.subTest(status=status):
                 count = 1 if status is GitHubConnectionCompletionStatus.CONNECTED else 0
                 reply = format_github_connection_completion(
-                    GitHubConnectionCompletion(status, installation_count=count)
+                    GitHubConnectionCompletion(
+                        status,
+                        installation_count=count,
+                        account_login="octocat" if count else None,
+                    )
                 )
                 self.assertIn(expected_text, reply)
                 self.assertNotIn("installation", reply.lower())

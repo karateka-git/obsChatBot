@@ -166,11 +166,12 @@ class VkBotTest(unittest.TestCase):
             GitHubConnectionCompletion(
                 GitHubConnectionCompletionStatus.CONNECTED,
                 installation_count=1,
+                account_login="octocat",
             )
         )
 
         self.assertEqual(client.messages[-1][0], 22)
-        self.assertIn("аккаунт успешно подключён", client.messages[-1][1])
+        self.assertIn("`octocat` успешно подключён", client.messages[-1][1])
         self.assertNotIn("установок", client.messages[-1][1])
 
     def test_api_call_sends_vk_method_params_in_post_body(self) -> None:

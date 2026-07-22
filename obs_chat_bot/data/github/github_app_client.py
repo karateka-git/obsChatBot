@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubAuthenticatedAccount,
     GitHubDeviceAuthorization,
     GitHubDevicePollResult,
     GitHubDevicePollStatus,
@@ -127,6 +128,23 @@ class UrllibGitHubAppClient(
             if len(installations) < 100 or len(installation_ids) >= total_count:
                 return installation_ids
             page += 1
+
+    def get_authenticated_account(
+        self,
+        access_token: GitHubUserAccessToken,
+    ) -> GitHubAuthenticatedAccount:
+        """Читает публичные ID и login авторизованного GitHub-аккаунта."""
+        payload = self._request_json(
+            Request(
+                f"{GITHUB_API_BASE_URL}/user",
+                headers=self._api_headers(access_token.value),
+                method="GET",
+            )
+        )
+        return GitHubAuthenticatedAccount(
+            github_user_id=_require_positive_int(payload, "id"),
+            login=_require_string(payload, "login"),
+        )
 
     def create_installation_token(
         self,

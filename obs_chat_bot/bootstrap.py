@@ -29,7 +29,10 @@ from obs_chat_bot.data.sqlite.incoming_message_repository import (
     SQLiteIncomingMessageRepository,
 )
 from obs_chat_bot.data.sqlite.github_installation_writer import (
-    SQLiteGitHubInstallationAccessWriter,
+    SQLiteGitHubAccountAccessWriter,
+)
+from obs_chat_bot.data.sqlite.github_connection_state_store import (
+    SQLiteGitHubConnectionStateStore,
 )
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
@@ -162,6 +165,7 @@ def create_github_connection_coordinator(
     )
     return GitHubConnectionCoordinator(
         gateway=gateway,
-        installation_writer=SQLiteGitHubInstallationAccessWriter(database_path),
+        account_writer=SQLiteGitHubAccountAccessWriter(database_path),
+        state_store=SQLiteGitHubConnectionStateStore(database_path),
         installation_url=config.installation_url,
     )

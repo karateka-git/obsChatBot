@@ -39,6 +39,7 @@ class VaultRepositoriesTest(unittest.TestCase):
                 apply_migrations(connection)
                 installations = SQLiteGitHubInstallationRepository(connection)
                 vaults = SQLiteObsidianVaultRepository(connection)
+                _ensure_github_account(connection, app_user_id=1)
 
                 installations.replace_for_user(
                     app_user_id=1,
@@ -66,6 +67,7 @@ class VaultRepositoriesTest(unittest.TestCase):
                 installations = SQLiteGitHubInstallationRepository(connection)
                 vaults = SQLiteObsidianVaultRepository(connection)
                 notes = SQLiteVaultNoteRepository(connection)
+                _ensure_github_account(connection, app_user_id=1)
                 installations.replace_for_user(
                     app_user_id=1,
                     installation_ids={101},
@@ -202,6 +204,7 @@ class VaultRepositoriesTest(unittest.TestCase):
         with TemporaryDirectory(prefix="obs-chat-bot-vault-confirm-") as directory:
             with connect_database(Path(directory) / "test.db") as connection:
                 apply_migrations(connection)
+                _ensure_github_account(connection, app_user_id=1)
                 SQLiteGitHubInstallationRepository(connection).replace_for_user(
                     app_user_id=1,
                     installation_ids={101},
@@ -305,6 +308,7 @@ def _prepare_vault(
     repository_id: int = 501,
 ) -> ObsidianVault:
     """Создаёт разрешённую installation и активный vault пользователя."""
+    _ensure_github_account(connection, app_user_id=app_user_id)
     SQLiteGitHubInstallationRepository(connection).replace_for_user(
         app_user_id=app_user_id,
         installation_ids={installation_id},
@@ -315,6 +319,19 @@ def _prepare_vault(
             installation_id=installation_id,
             repository_id=repository_id,
         )
+    )
+
+
+def _ensure_github_account(
+    connection: sqlite3.Connection,
+    *,
+    app_user_id: int,
+) -> None:
+    """Создаёт родительский GitHub-аккаунт для тестовых installations."""
+    connection.execute(
+        "INSERT OR IGNORE INTO github_accounts "
+        "(app_user_id, github_user_id, login) VALUES (?, ?, ?)",
+        (app_user_id, 700 + app_user_id, f"octocat-{app_user_id}"),
     )
 
 

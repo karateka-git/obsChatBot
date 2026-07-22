@@ -40,6 +40,20 @@ class GitHubUserAccessToken:
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubAuthenticatedAccount:
+    """Содержит публичную identity авторизованного GitHub-аккаунта."""
+
+    github_user_id: int
+    login: str
+
+    def __post_init__(self) -> None:
+        if self.github_user_id <= 0:
+            raise ValueError("github_user_id must be positive")
+        if not self.login.strip():
+            raise ValueError("login must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class GitHubInstallationAccessToken:
     """Обертывает краткоживущий installation token и срок его действия."""
 
@@ -84,6 +98,10 @@ class GitHubConnectionStartStatus(StrEnum):
     STARTED = "started"  # Новый Device Flow запущен.
     ALREADY_PENDING = "already_pending"  # Для пользователя уже ожидается код.
     PREPARING = "preparing"  # GitHub ещё выдаёт первый Device Flow challenge.
+    RECONNECT_CONFIRMATION_REQUIRED = (
+        "reconnect_confirmation_required"  # Уже подключён другой account.
+    )
+    IN_PROGRESS = "in_progress"  # Device Flow уже идёт в другом процессе.
 
 
 class GitHubConnectionCompletionStatus(StrEnum):
@@ -102,6 +120,7 @@ class GitHubConnectionCompletion:
 
     status: GitHubConnectionCompletionStatus
     installation_count: int = 0
+    account_login: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, GitHubConnectionCompletionStatus):
@@ -118,6 +137,11 @@ class GitHubConnectionCompletion:
             and self.installation_count != 0
         ):
             raise ValueError("installation_count is only allowed for connected status")
+        if self.status is GitHubConnectionCompletionStatus.CONNECTED:
+            if self.account_login is None or not self.account_login.strip():
+                raise ValueError("connected status requires account_login")
+        elif self.account_login is not None:
+            raise ValueError("account_login is only allowed for connected status")
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +151,7 @@ class GitHubConnectionStartResult:
     status: GitHubConnectionStartStatus
     installation_url: str
     authorization: GitHubDeviceAuthorization | None = None
+    connected_account_login: str | None = None
 
 
 class GitHubGatewayError(RuntimeError):

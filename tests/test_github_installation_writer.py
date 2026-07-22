@@ -9,7 +9,7 @@ from obs_chat_bot.data.sqlite.github_installation_repository import (
     SQLiteGitHubInstallationRepository,
 )
 from obs_chat_bot.data.sqlite.github_installation_writer import (
-    SQLiteGitHubInstallationAccessWriter,
+    SQLiteGitHubAccountAccessWriter,
 )
 from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
 
@@ -24,8 +24,10 @@ class GitHubInstallationWriterTest(unittest.TestCase):
             with connect_database(database_path) as connection:
                 apply_migrations(connection)
 
-            SQLiteGitHubInstallationAccessWriter(database_path).replace_for_user(
+            SQLiteGitHubAccountAccessWriter(database_path).replace_for_user(
                 app_user_id=1,
+                github_user_id=777,
+                login="octocat",
                 installation_ids={101, 102},
             )
 
@@ -33,11 +35,16 @@ class GitHubInstallationWriterTest(unittest.TestCase):
                 installations = SQLiteGitHubInstallationRepository(
                     connection
                 ).list_for_user(1)
+                account = connection.execute(
+                    "SELECT github_user_id, login FROM github_accounts "
+                    "WHERE app_user_id = 1"
+                ).fetchone()
 
         self.assertEqual(
             [installation.installation_id for installation in installations],
             [101, 102],
         )
+        self.assertEqual(tuple(account), (777, "octocat"))
 
 
 if __name__ == "__main__":

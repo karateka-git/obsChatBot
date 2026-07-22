@@ -173,6 +173,30 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 "Подключение GitHub уже запускается. "
                 "Повтори `/github_connect` через несколько секунд."
             )
+        case IncomingMessageResultType.GITHUB_CONNECT_IN_PROGRESS:
+            return (
+                "Подключение GitHub уже выполняется в другом привязанном канале. "
+                "Заверши его там или дождись истечения одноразового кода."
+            )
+        case IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_REQUIRED:
+            connection = result.github_connection
+            login = (
+                connection.connected_account_login
+                if connection is not None
+                else None
+            )
+            account = f" `{login}`" if login else ""
+            return (
+                f"К пользователю уже подключён GitHub-аккаунт{account}.\n"
+                "Заменить его другим GitHub-аккаунтом? Ответь `да` или `нет`."
+            )
+        case IncomingMessageResultType.GITHUB_RECONNECT_CANCELLED:
+            return "Переподключение отменено. Текущий GitHub-аккаунт сохранён."
+        case IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_MISSING:
+            return (
+                "Нет ожидающего переподключения GitHub. "
+                "Сначала отправь `/github_connect`."
+            )
         case IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE:
             return "GitHub connector пока не настроен на сервере."
         case IncomingMessageResultType.GITHUB_CONNECT_FAILED:
@@ -251,7 +275,7 @@ def format_github_connection_completion(
     match completion.status:
         case GitHubConnectionCompletionStatus.CONNECTED:
             return (
-                "GitHub-аккаунт успешно подключён.\n"
+                f"GitHub-аккаунт `{completion.account_login}` успешно подключён.\n"
                 "Бот получил доступ к выбранным репозиториям."
             )
         case GitHubConnectionCompletionStatus.NO_INSTALLATIONS:

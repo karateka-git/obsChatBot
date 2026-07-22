@@ -162,8 +162,8 @@
 - Выполнять polling Device Flow в daemon thread, соблюдая выданный GitHub
   interval и увеличивая его на пять секунд при `slow_down`.
 - Хранить device code и user access token только в памяти. После авторизации
-  записывать в SQLite только разрешённые installation IDs через новое соединение
-  background thread.
+  записывать в SQLite публичные GitHub user ID/login и разрешённые installation IDs
+  через новое соединение background thread.
 - Выпускать installation access token только по короткому App JWT и при
   необходимости ограничивать token одним repository ID.
 
@@ -181,7 +181,13 @@
 - `/github_connect` возвращает installation URL, Device Flow URL и одноразовый
   код, после чего authorization продолжается в фоне.
 - У пользователя приложения есть один активный подключённый GitHub-аккаунт;
-  повторная авторизация заменяет прежний набор разрешённых репозиториев.
+  SQLite хранит его публичные GitHub user ID и login, но не пользовательский token.
+- Повторный `/github_connect` не начинает новую авторизацию сразу: бот показывает
+  login текущего аккаунта и ждёт `да`/`нет`. Только `да` запускает Device Flow,
+  успешное завершение которого атомарно заменяет аккаунт и набор installations.
+- Ожидающее подтверждение и короткий claim активной попытки хранятся в SQLite по
+  `app_user_id`, поэтому ответ можно дать из любого привязанного канала, а Telegram
+  и VK не запускают две параллельные авторизации одного пользователя.
 - Telegram и VK identities, привязанные к одному `app_user_id` через `/link`,
   автоматически используют тот же GitHub-аккаунт и vault без повторной
   авторизации.

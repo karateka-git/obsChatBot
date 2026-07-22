@@ -40,8 +40,8 @@ def apply_migrations(
                 )
             continue
 
-        _apply_migration(connection, migration)
-        completed.append(migration)
+        if _apply_migration(connection, migration):
+            completed.append(migration)
 
     return completed
 
@@ -91,22 +91,56 @@ def _get_applied_migrations(connection: sqlite3.Connection) -> dict[int, str]:
 def _apply_migration(
     connection: sqlite3.Connection,
     migration: Migration,
-) -> None:
+) -> bool:
     sql = migration.path.read_text(encoding="utf-8")
-    migration_name = migration.name.replace("'", "''")
-    script = f"""
-        BEGIN IMMEDIATE;
-        {sql}
-        INSERT INTO schema_migrations (version, name)
-        VALUES ({migration.version}, '{migration_name}');
-        COMMIT;
-    """
 
     try:
-        connection.executescript(script)
+        connection.execute("BEGIN IMMEDIATE")
+        applied = connection.execute(
+            "SELECT name FROM schema_migrations WHERE version = ?",
+            (migration.version,),
+        ).fetchone()
+        if applied is not None:
+            if applied[0] != migration.name:
+                raise MigrationError(
+                    f"Migration version {migration.version:04d} is already recorded "
+                    f"as {applied[0]}, not {migration.name}"
+                )
+            connection.commit()
+            return False
+
+        for statement in _split_sql_statements(sql):
+            connection.execute(statement)
+        connection.execute(
+            "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
+            (migration.version, migration.name),
+        )
+        connection.commit()
+        return True
+    except MigrationError:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
     except sqlite3.Error as error:
         if connection.in_transaction:
             connection.rollback()
         raise MigrationError(
             f"Could not apply migration {migration.name}: {error}"
         ) from error
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Разделяет SQL script на полные statements без потери транзакционности."""
+    statements: list[str] = []
+    buffer: list[str] = []
+    for line in sql.splitlines(keepends=True):
+        buffer.append(line)
+        candidate = "".join(buffer).strip()
+        if candidate and sqlite3.complete_statement(candidate):
+            statements.append(candidate)
+            buffer.clear()
+
+    remainder = "".join(buffer).strip()
+    if remainder:
+        raise MigrationError("Migration SQL ends with an incomplete statement")
+    return statements

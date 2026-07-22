@@ -8,6 +8,7 @@ from obs_chat_bot.application.vaults.github_connection import (
     GitHubConnectionCoordinator,
 )
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubAuthenticatedAccount,
     GitHubConnectionCompletion,
     GitHubConnectionCompletionStatus,
     GitHubConnectionStartStatus,
@@ -15,6 +16,10 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollResult,
     GitHubDevicePollStatus,
     GitHubUserAccessToken,
+)
+from obs_chat_bot.domain.vaults.entities import (
+    GitHubAccount,
+    GitHubReconnectConfirmation,
 )
 
 
@@ -51,6 +56,14 @@ class FakeGateway:
         self.tokens: list[GitHubUserAccessToken] = []
         self.polled = Event()
 
+    def get_authenticated_account(
+        self,
+        access_token: GitHubUserAccessToken,
+    ) -> GitHubAuthenticatedAccount:
+        """Возвращает публичные данные тестового GitHub-аккаунта."""
+        self.tokens.append(access_token)
+        return GitHubAuthenticatedAccount(github_user_id=777, login="octocat")
+
     def request_device_authorization(self) -> GitHubDeviceAuthorization:
         """Возвращает тестовый challenge."""
         return GitHubDeviceAuthorization(
@@ -86,18 +99,90 @@ class FakeWriter:
     """Запоминает сохранённые installation IDs и сигнализирует о завершении."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[int, set[int]]] = []
+        self.calls: list[tuple[int, int, str, set[int]]] = []
         self.completed = Event()
 
     def replace_for_user(
         self,
         *,
         app_user_id: int,
+        github_user_id: int,
+        login: str,
         installation_ids: set[int],
     ) -> None:
         """Сохраняет только IDs без временного token."""
-        self.calls.append((app_user_id, installation_ids))
+        self.calls.append((app_user_id, github_user_id, login, installation_ids))
         self.completed.set()
+
+
+class FakeStateStore:
+    """Хранит безопасное состояние подключения GitHub в памяти теста."""
+
+    def __init__(self, account: GitHubAccount | None = None) -> None:
+        self.account = account
+        self.confirmation: GitHubReconnectConfirmation | None = None
+        self.attempt: tuple[int, str, datetime] | None = None
+
+    def get_account(self, app_user_id: int) -> GitHubAccount | None:
+        """Возвращает аккаунт указанного пользователя."""
+        if self.account is not None and self.account.app_user_id == app_user_id:
+            return self.account
+        return None
+
+    def request_reconnect(
+        self, *, app_user_id: int, account_login: str, expires_at: datetime
+    ) -> None:
+        """Сохраняет запрос подтверждения переподключения."""
+        self.confirmation = GitHubReconnectConfirmation(
+            app_user_id=app_user_id,
+            account_login=account_login,
+            expires_at=expires_at,
+        )
+
+    def find_reconnect_confirmation(
+        self, *, app_user_id: int, now: datetime
+    ) -> GitHubReconnectConfirmation | None:
+        """Возвращает активное подтверждение с учётом срока действия."""
+        if (
+            self.confirmation is not None
+            and self.confirmation.app_user_id == app_user_id
+            and self.confirmation.expires_at > now
+        ):
+            return self.confirmation
+        self.confirmation = None
+        return None
+
+    def delete_reconnect_confirmation(self, app_user_id: int) -> None:
+        """Удаляет подтверждение пользователя."""
+        if self.confirmation is not None and self.confirmation.app_user_id == app_user_id:
+            self.confirmation = None
+
+    def acquire_attempt(
+        self,
+        *,
+        app_user_id: int,
+        owner: str,
+        expires_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """Захватывает попытку, если активной попытки ещё нет."""
+        if self.has_active_attempt(app_user_id=app_user_id, now=now):
+            return False
+        self.attempt = (app_user_id, owner, expires_at)
+        return True
+
+    def has_active_attempt(self, *, app_user_id: int, now: datetime) -> bool:
+        """Проверяет наличие неистёкшей попытки пользователя."""
+        return bool(
+            self.attempt is not None
+            and self.attempt[0] == app_user_id
+            and self.attempt[2] > now
+        )
+
+    def release_attempt(self, *, app_user_id: int, owner: str) -> None:
+        """Освобождает попытку только её владельцу."""
+        if self.attempt is not None and self.attempt[:2] == (app_user_id, owner):
+            self.attempt = None
 
 
 class BlockingGateway(FakeGateway):
@@ -140,7 +225,8 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
 
         coordinator = GitHubConnectionCoordinator(
             gateway=gateway,
-            installation_writer=writer,
+            account_writer=writer,
+            state_store=FakeStateStore(),
             installation_url="https://github.com/apps/obs-chat-bot/installations/new",
             clock=clock,
             sleeper=clock.sleep,
@@ -153,7 +239,7 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
         self.assertEqual(result.status, GitHubConnectionStartStatus.STARTED)
         self.assertEqual(result.authorization.user_code, "ABCD-EFGH")
         self.assertEqual(clock.sleeps, [5.0, 5.0, 10.0])
-        self.assertEqual(writer.calls, [(42, {101, 102})])
+        self.assertEqual(writer.calls, [(42, 777, "octocat", {101, 102})])
         self.assertEqual(gateway.tokens[0].value, "ghu-secret")
         self.assertEqual(
             completions,
@@ -161,6 +247,7 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
                 GitHubConnectionCompletion(
                     GitHubConnectionCompletionStatus.CONNECTED,
                     installation_count=2,
+                    account_login="octocat",
                 )
             ],
         )
@@ -179,7 +266,8 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
 
         coordinator = GitHubConnectionCoordinator(
             gateway=gateway,
-            installation_writer=writer,
+            account_writer=writer,
+            state_store=FakeStateStore(),
             installation_url="https://github.com/apps/obs-chat-bot/installations/new",
             clock=clock,
             sleeper=clock.sleep,
@@ -212,7 +300,8 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
 
         coordinator = GitHubConnectionCoordinator(
             gateway=gateway,
-            installation_writer=writer,
+            account_writer=writer,
+            state_store=FakeStateStore(),
             installation_url="https://github.com/apps/obs-chat-bot/installations/new",
             clock=clock,
             sleeper=clock.sleep,
@@ -221,7 +310,7 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
         coordinator.start(42, notify)
         self.assertTrue(notification_sent.wait(timeout=1))
 
-        self.assertEqual(writer.calls, [(42, set())])
+        self.assertEqual(writer.calls, [(42, 777, "octocat", set())])
         self.assertEqual(
             completions,
             [
@@ -244,7 +333,8 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
 
         coordinator = GitHubConnectionCoordinator(
             gateway=gateway,
-            installation_writer=FakeWriter(),
+            account_writer=FakeWriter(),
+            state_store=FakeStateStore(),
             installation_url="https://github.com/apps/obs-chat-bot/installations/new",
             clock=clock,
             sleeper=clock.sleep,
@@ -263,7 +353,8 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
         gateway = BlockingGateway()
         coordinator = GitHubConnectionCoordinator(
             gateway=gateway,
-            installation_writer=FakeWriter(),
+            account_writer=FakeWriter(),
+            state_store=FakeStateStore(),
             installation_url="https://github.com/apps/obs-chat-bot/installations/new",
             sleeper=lambda _seconds: None,
         )
@@ -280,6 +371,82 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
             GitHubConnectionStartStatus.ALREADY_PENDING,
         )
         self.assertEqual(repeated.authorization, first.authorization)
+
+    def test_existing_account_requires_confirmation_before_new_device_flow(self) -> None:
+        """Повторная команда не заменяет подключённый аккаунт без явного `да`."""
+        state_store = FakeStateStore(
+            GitHubAccount(app_user_id=42, github_user_id=777, login="octocat")
+        )
+        gateway = FakeGateway([GitHubDevicePollStatus.DENIED])
+        coordinator = GitHubConnectionCoordinator(
+            gateway=gateway,
+            account_writer=FakeWriter(),
+            state_store=state_store,
+            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
+            sleeper=lambda _seconds: None,
+        )
+
+        result = coordinator.start(42)
+
+        self.assertEqual(
+            result.status,
+            GitHubConnectionStartStatus.RECONNECT_CONFIRMATION_REQUIRED,
+        )
+        self.assertEqual(result.connected_account_login, "octocat")
+        self.assertEqual(gateway.device_codes, [])
+        self.assertTrue(coordinator.has_reconnect_confirmation(42))
+
+    def test_confirmation_starts_replacement_and_cancel_preserves_account(self) -> None:
+        """`да` запускает Device Flow, а `нет` только удаляет подтверждение."""
+        account = GitHubAccount(app_user_id=42, github_user_id=777, login="octocat")
+        state_store = FakeStateStore(account)
+        gateway = BlockingGateway()
+        coordinator = GitHubConnectionCoordinator(
+            gateway=gateway,
+            account_writer=FakeWriter(),
+            state_store=state_store,
+            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
+            sleeper=lambda _seconds: None,
+        )
+
+        coordinator.start(42)
+        self.assertTrue(coordinator.cancel_reconnect(42))
+        self.assertEqual(state_store.get_account(42), account)
+        coordinator.start(42)
+        started = coordinator.confirm_reconnect(42)
+        self.assertTrue(gateway.polled.wait(timeout=1))
+        gateway.release_poll.set()
+        self.assertTrue(gateway.finished.wait(timeout=1))
+
+        self.assertEqual(started.status, GitHubConnectionStartStatus.STARTED)
+        self.assertFalse(coordinator.has_reconnect_confirmation(42))
+
+    def test_shared_attempt_blocks_second_coordinator(self) -> None:
+        """Общий claim не позволяет Telegram и VK начать два Device Flow одновременно."""
+        state_store = FakeStateStore()
+        gateway = BlockingGateway()
+        first = GitHubConnectionCoordinator(
+            gateway=gateway,
+            account_writer=FakeWriter(),
+            state_store=state_store,
+            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
+            sleeper=lambda _seconds: None,
+        )
+        second = GitHubConnectionCoordinator(
+            gateway=FakeGateway([GitHubDevicePollStatus.DENIED]),
+            account_writer=FakeWriter(),
+            state_store=state_store,
+            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
+            sleeper=lambda _seconds: None,
+        )
+
+        first.start(42)
+        self.assertTrue(gateway.polled.wait(timeout=1))
+        blocked = second.start(42)
+        gateway.release_poll.set()
+        self.assertTrue(gateway.finished.wait(timeout=1))
+
+        self.assertEqual(blocked.status, GitHubConnectionStartStatus.IN_PROGRESS)
 
 
 if __name__ == "__main__":

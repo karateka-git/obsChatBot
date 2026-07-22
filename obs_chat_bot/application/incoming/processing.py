@@ -75,6 +75,10 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_CONNECT_PREPARING = "github_connect_preparing"
     GITHUB_CONNECT_UNAVAILABLE = "github_connect_unavailable"
     GITHUB_CONNECT_FAILED = "github_connect_failed"
+    GITHUB_RECONNECT_CONFIRMATION_REQUIRED = "github_reconnect_confirmation_required"
+    GITHUB_RECONNECT_CANCELLED = "github_reconnect_cancelled"
+    GITHUB_RECONNECT_CONFIRMATION_MISSING = "github_reconnect_confirmation_missing"
+    GITHUB_CONNECT_IN_PROGRESS = "github_connect_in_progress"
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,20 +265,50 @@ class ProcessIncomingMessageUseCase:
         normalized_text = text.lower()
 
         if normalized_text in {"да", "yes", "y"}:
-            try:
-                app_user = self._user_identity_service.confirm_rebind(identity)
-                return ProcessIncomingMessageResult(
-                    type=IncomingMessageResultType.LINK_REBOUND,
-                    app_user=app_user,
+            if self._user_identity_service.has_pending_rebind(identity):
+                try:
+                    app_user = self._user_identity_service.confirm_rebind(identity)
+                    return ProcessIncomingMessageResult(
+                        type=IncomingMessageResultType.LINK_REBOUND,
+                        app_user=app_user,
+                    )
+                except InvalidLinkCodeError as error:
+                    return ProcessIncomingMessageResult(
+                        type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_MISSING,
+                        error=error,
+                    )
+            app_user = self._user_identity_service.resolve(identity)
+            if (
+                app_user is not None
+                and self._github_connection_starter is not None
+                and self._github_connection_starter.has_reconnect_confirmation(
+                    app_user.id
                 )
-            except InvalidLinkCodeError as error:
-                return ProcessIncomingMessageResult(
-                    type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_MISSING,
-                    error=error,
+            ):
+                return self._confirm_github_reconnect(
+                    app_user,
+                    github_completion_handler=github_completion_handler,
                 )
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_MISSING
+            )
 
         if normalized_text in {"нет", "no", "n"}:
-            self._user_identity_service.cancel_rebind(identity)
+            if self._user_identity_service.has_pending_rebind(identity):
+                self._user_identity_service.cancel_rebind(identity)
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.LINK_REBIND_CANCELLED
+                )
+            app_user = self._user_identity_service.resolve(identity)
+            if (
+                app_user is not None
+                and self._github_connection_starter is not None
+                and self._github_connection_starter.cancel_reconnect(app_user.id)
+            ):
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.GITHUB_RECONNECT_CANCELLED,
+                    app_user=app_user,
+                )
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.LINK_REBIND_CANCELLED
             )
@@ -446,6 +480,60 @@ class ProcessIncomingMessageUseCase:
             ),
             GitHubConnectionStartStatus.PREPARING: (
                 IncomingMessageResultType.GITHUB_CONNECT_PREPARING
+            ),
+            GitHubConnectionStartStatus.RECONNECT_CONFIRMATION_REQUIRED: (
+                IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_REQUIRED
+            ),
+            GitHubConnectionStartStatus.IN_PROGRESS: (
+                IncomingMessageResultType.GITHUB_CONNECT_IN_PROGRESS
+            ),
+        }
+        return ProcessIncomingMessageResult(
+            type=result_types[connection.status],
+            app_user=app_user,
+            github_connection=connection,
+        )
+
+    def _confirm_github_reconnect(
+        self,
+        app_user: AppUser,
+        *,
+        github_completion_handler: GitHubConnectionCompletionHandler | None,
+    ) -> ProcessIncomingMessageResult:
+        """Подтверждает замену GitHub-аккаунта и возвращает новый challenge."""
+        if self._github_connection_starter is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                app_user=app_user,
+            )
+        try:
+            connection = self._github_connection_starter.confirm_reconnect(
+                app_user.id,
+                github_completion_handler,
+            )
+        except (GitHubGatewayError, OSError, ValueError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        if connection is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_MISSING,
+                app_user=app_user,
+            )
+        result_types = {
+            GitHubConnectionStartStatus.STARTED: (
+                IncomingMessageResultType.GITHUB_CONNECT_STARTED
+            ),
+            GitHubConnectionStartStatus.ALREADY_PENDING: (
+                IncomingMessageResultType.GITHUB_CONNECT_ALREADY_PENDING
+            ),
+            GitHubConnectionStartStatus.PREPARING: (
+                IncomingMessageResultType.GITHUB_CONNECT_PREPARING
+            ),
+            GitHubConnectionStartStatus.IN_PROGRESS: (
+                IncomingMessageResultType.GITHUB_CONNECT_IN_PROGRESS
             ),
         }
         return ProcessIncomingMessageResult(

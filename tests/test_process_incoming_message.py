@@ -219,6 +219,28 @@ class FakeGitHubConnectionStarter:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
         self.app_user_ids: list[int] = []
+        self.reconnect_pending = False
+
+    def has_reconnect_confirmation(self, _app_user_id: int) -> bool:
+        """Возвращает состояние тестового подтверждения."""
+        return self.reconnect_pending
+
+    def confirm_reconnect(
+        self,
+        app_user_id: int,
+        _completion_handler=None,
+    ) -> GitHubConnectionStartResult | None:
+        """Подтверждает замену и запускает тестовый Device Flow."""
+        if not self.reconnect_pending:
+            return None
+        self.reconnect_pending = False
+        return self.start(app_user_id, _completion_handler)
+
+    def cancel_reconnect(self, _app_user_id: int) -> bool:
+        """Отменяет тестовое подтверждение."""
+        was_pending = self.reconnect_pending
+        self.reconnect_pending = False
+        return was_pending
 
     def start(
         self,
@@ -350,6 +372,41 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(result.type, IncomingMessageResultType.GITHUB_CONNECT_FAILED)
         self.assertEqual(article_use_case.commands, [])
 
+    def test_execute_yes_confirms_github_reconnect_for_shared_app_user(self) -> None:
+        """`да` запускает замену GitHub-аккаунта через общий `app_user_id`."""
+        starter = FakeGitHubConnectionStarter()
+        starter.reconnect_pending = True
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            github_connection_starter=starter,
+        )
+
+        result = use_case.execute(_telegram_message("да"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.GITHUB_CONNECT_STARTED)
+        self.assertEqual(starter.app_user_ids, [42])
+        self.assertFalse(starter.reconnect_pending)
+
+    def test_execute_no_cancels_github_reconnect_without_replacing_account(self) -> None:
+        """`нет` отменяет только pending-подтверждение GitHub."""
+        starter = FakeGitHubConnectionStarter()
+        starter.reconnect_pending = True
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            github_connection_starter=starter,
+        )
+
+        result = use_case.execute(_telegram_message("нет"))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.GITHUB_RECONNECT_CANCELLED,
+        )
+        self.assertEqual(starter.app_user_ids, [])
+        self.assertFalse(starter.reconnect_pending)
+
     def test_execute_registers_new_identity(self) -> None:
         """Команда `/register` создает пользователя для нового канала."""
         identity_service = FakeRegisteringIdentityService()
@@ -422,6 +479,7 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
     def test_execute_yes_confirms_pending_rebind(self) -> None:
         """Ответ `да` подтверждает ожидающую перепривязку канала."""
         identity_service = FakeRebindIdentityService()
+        identity_service.pending_rebind = True
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=identity_service,
@@ -436,6 +494,7 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
     def test_execute_no_cancels_pending_rebind(self) -> None:
         """Ответ `нет` отменяет ожидающую перепривязку канала."""
         identity_service = FakeRebindIdentityService()
+        identity_service.pending_rebind = True
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=identity_service,
