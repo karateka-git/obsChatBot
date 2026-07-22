@@ -813,6 +813,9 @@
 
 Этап 7.1.2 User identity и изоляция данных завершён: базовая схема SQLite теперь содержит `app_users`, `external_identities`, `identity_link_tokens`, статьи/сообщения/анализ/ошибки привязаны к `app_user_id`, одинаковые URL переиспользуются только внутри пользователя, Telegram поддерживает `/register`, `/link_code` и `/link <код>` для привязки нескольких каналов к одному пользователю.
 
+Начальная схема не создаёт технического `Legacy user`: новая development-база пуста,
+а первый пользователь, прошедший `/register`, получает `app_user_id=1`.
+
 Этап 7.1.3 Channel-agnostic incoming flow завершён: общий сценарий входящего сообщения вынесен в `ProcessIncomingMessageUseCase`, он возвращает structured result, а Telegram adapter теперь только преобразует Telegram message в application-модель, вызывает общий use case и форматирует результат для канала.
 
 Этап 7.1.4 Telegram UX и async hardening завершён: Telegram adapter отправляет быстрый ack перед долгой обработкой, выполняет общий blocking flow через worker thread, безопасно режет длинные ответы на chunks, LLM prompt/response ограничены, а пользовательские ошибки article pipeline опираются на типизированный stage.

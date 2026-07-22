@@ -27,6 +27,7 @@ from obs_chat_bot.domain.vaults.entities import (
     VaultConfirmationAction,
     VaultNote,
 )
+from tests.sqlite_helpers import ensure_app_user
 
 
 class VaultRepositoriesTest(unittest.TestCase):
@@ -328,6 +329,7 @@ def _ensure_github_account(
     app_user_id: int,
 ) -> None:
     """Создаёт родительский GitHub-аккаунт для тестовых installations."""
+    ensure_app_user(connection, app_user_id=app_user_id)
     connection.execute(
         "INSERT OR IGNORE INTO github_accounts "
         "(app_user_id, github_user_id, login) VALUES (?, ?, ?)",

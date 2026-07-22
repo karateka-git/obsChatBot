@@ -114,6 +114,7 @@ def _run_sqlite_scenario(database_path: Path) -> None:
         if second_run:
             raise SQLiteSmokeError("Migrations were applied more than once")
 
+        _create_smoke_user(connection)
         repository = SQLiteArticleRepository(connection)
         expected = Article(
             source_url="https://example.com/article?utm_source=smoke",
@@ -137,6 +138,7 @@ def _run_pipeline_scenario(database_path: Path) -> None:
     """Выполняет article pipeline на временной базе и fake зависимостях."""
     with connect_database(database_path) as connection:
         apply_migrations(connection)
+        _create_smoke_user(connection)
 
         repository = SQLiteArticleRepository(connection)
         fetcher = _FakeArticleHtmlFetcher()
@@ -181,6 +183,7 @@ def _run_analysis_scenario(database_path: Path) -> None:
     """Выполняет analysis pipeline на временной базе и fake LLM."""
     with connect_database(database_path) as connection:
         apply_migrations(connection)
+        _create_smoke_user(connection)
 
         article_repository = SQLiteArticleRepository(connection)
         analysis_repository = SQLiteArticleAnalysisResultRepository(connection)
@@ -221,6 +224,14 @@ def _run_analysis_scenario(database_path: Path) -> None:
         repeated = use_case.execute(AnalyzeArticleCommand(article_id=article.id))
         if repeated.created:
             raise AnalysisSmokeError("Analysis smoke created duplicate result")
+
+
+def _create_smoke_user(connection: sqlite3.Connection) -> None:
+    """Создаёт явного пользователя для smoke-данных на пустой development-схеме."""
+    connection.execute(
+        "INSERT INTO app_users (display_name) VALUES (?)",
+        ("Smoke user",),
+    )
 
 
 class _FakeArticleHtmlFetcher:

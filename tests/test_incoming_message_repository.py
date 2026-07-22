@@ -12,6 +12,7 @@ from obs_chat_bot.data.sqlite.incoming_message_repository import (
 )
 from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
 from obs_chat_bot.domain.articles.entities import Article
+from tests.sqlite_helpers import ensure_app_user
 
 
 class SQLiteIncomingMessageRepositoryTest(unittest.TestCase):
@@ -22,6 +23,7 @@ class SQLiteIncomingMessageRepositoryTest(unittest.TestCase):
         with TemporaryDirectory(prefix="obs-chat-bot-messages-") as directory:
             with connect_database(Path(directory) / "test.db") as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
                 repository = SQLiteIncomingMessageRepository(connection)
 
                 saved = repository.save(_message())
@@ -44,6 +46,7 @@ class SQLiteIncomingMessageRepositoryTest(unittest.TestCase):
         with TemporaryDirectory(prefix="obs-chat-bot-messages-") as directory:
             with connect_database(Path(directory) / "test.db") as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
                 repository = SQLiteIncomingMessageRepository(connection)
 
                 first = repository.save(_message())
@@ -61,6 +64,7 @@ class SQLiteIncomingMessageRepositoryTest(unittest.TestCase):
         with TemporaryDirectory(prefix="obs-chat-bot-messages-") as directory:
             with connect_database(Path(directory) / "test.db") as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
                 message_repository = SQLiteIncomingMessageRepository(connection)
                 article = SQLiteArticleRepository(connection).create(
                     Article(

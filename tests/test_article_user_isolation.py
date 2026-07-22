@@ -8,6 +8,7 @@ from obs_chat_bot.data.sqlite.article_repository import SQLiteArticleRepository
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
 from obs_chat_bot.domain.articles.entities import Article
+from tests.sqlite_helpers import ensure_app_user
 
 
 class ArticleUserIsolationTest(unittest.TestCase):
@@ -18,6 +19,7 @@ class ArticleUserIsolationTest(unittest.TestCase):
         with TemporaryDirectory(prefix="obs-chat-bot-article-scope-") as directory:
             with connect_database(Path(directory) / "test.db") as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
                 connection.execute(
                     "INSERT INTO app_users (id, display_name) VALUES (2, 'Second user')"
                 )

@@ -13,6 +13,7 @@ from obs_chat_bot.data.sqlite.github_installation_writer import (
     SQLiteGitHubAccountAccessWriter,
 )
 from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
+from tests.sqlite_helpers import ensure_app_user
 
 
 class GitHubConnectionStateStoreTest(unittest.TestCase):
@@ -20,11 +21,12 @@ class GitHubConnectionStateStoreTest(unittest.TestCase):
 
     def test_account_confirmation_and_attempt_are_shared(self) -> None:
         """Два экземпляра видят один аккаунт, TTL-подтверждение и один claim."""
-        now = datetime(2026, 7, 22, 10, 0, tzinfo=UTC)
+        now = datetime.now(UTC)
         with TemporaryDirectory(prefix="obs-chat-bot-github-state-") as directory:
             database_path = Path(directory) / "test.db"
             with connect_database(database_path) as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
             SQLiteGitHubAccountAccessWriter(database_path).replace_for_user(
                 app_user_id=1,
                 github_user_id=777,

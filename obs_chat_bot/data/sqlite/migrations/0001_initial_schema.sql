@@ -51,9 +51,6 @@ CREATE TABLE identity_rebind_confirmations (
 CREATE INDEX idx_identity_rebind_confirmations_expires_at
     ON identity_rebind_confirmations (expires_at);
 
-INSERT INTO app_users (id, display_name)
-VALUES (1, 'Legacy user');
-
 CREATE TABLE articles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     app_user_id INTEGER NOT NULL,

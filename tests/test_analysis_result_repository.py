@@ -13,6 +13,7 @@ from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
+from tests.sqlite_helpers import ensure_app_user
 
 
 class SQLiteArticleAnalysisResultRepositoryTest(unittest.TestCase):
@@ -104,6 +105,7 @@ class SQLiteArticleAnalysisResultRepositoryTest(unittest.TestCase):
 
 def _create_article(connection: sqlite3.Connection) -> int:
     """Создаёт статью для проверки внешнего ключа результатов анализа."""
+    ensure_app_user(connection)
     article = SQLiteArticleRepository(connection).create(
         Article(
             source_url="https://example.com/article",

@@ -31,6 +31,7 @@ class SQLiteUserIdentityRepositoryTest(unittest.TestCase):
                 resolved = service.resolve(_identity("telegram", "tg-1", "chat-1"))
 
         self.assertEqual(resolved, user)
+        self.assertEqual(user.id, 1)
 
     def test_link_code_binds_second_channel_to_same_user(self) -> None:
         """Одноразовый код привязывает новый канал к существующему пользователю."""

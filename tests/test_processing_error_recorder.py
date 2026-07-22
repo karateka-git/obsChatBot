@@ -16,6 +16,7 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
 from obs_chat_bot.domain.articles.entities import Article
+from tests.sqlite_helpers import ensure_app_user
 
 
 class SQLiteProcessingErrorRecorderTest(unittest.TestCase):
@@ -28,6 +29,7 @@ class SQLiteProcessingErrorRecorderTest(unittest.TestCase):
 
             with connect_database(database_path) as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
                 article = SQLiteArticleRepository(connection).create(
                     Article(
                         source_url="https://example.com/article",
@@ -70,6 +72,7 @@ class SQLiteProcessingErrorRecorderTest(unittest.TestCase):
 
             with connect_database(database_path) as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
                 incoming_message = SQLiteIncomingMessageRepository(connection).save(
                     IncomingMessage(
                         channel="telegram",

@@ -12,6 +12,7 @@ from obs_chat_bot.data.sqlite.github_installation_writer import (
     SQLiteGitHubAccountAccessWriter,
 )
 from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
+from tests.sqlite_helpers import ensure_app_user
 
 
 class GitHubInstallationWriterTest(unittest.TestCase):
@@ -23,6 +24,7 @@ class GitHubInstallationWriterTest(unittest.TestCase):
             database_path = Path(directory) / "test.db"
             with connect_database(database_path) as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
 
             SQLiteGitHubAccountAccessWriter(database_path).replace_for_user(
                 app_user_id=1,

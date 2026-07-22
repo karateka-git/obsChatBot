@@ -26,6 +26,7 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.presentation.shared.responses import format_incoming_message_result
+from tests.sqlite_helpers import ensure_app_user
 
 
 class SilentLogger:
@@ -44,6 +45,7 @@ class TelegramFlowSmokeTest(unittest.TestCase):
             database_path = Path(directory) / "telegram-flow.db"
             with connect_database(database_path) as connection:
                 apply_migrations(connection)
+                ensure_app_user(connection)
                 fetcher = FakeArticleHtmlFetcher()
                 analyzer = FakeArticleAnalyzer()
                 article_repository = SQLiteArticleRepository(connection)
