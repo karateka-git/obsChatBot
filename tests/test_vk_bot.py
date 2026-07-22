@@ -170,7 +170,8 @@ class VkBotTest(unittest.TestCase):
         )
 
         self.assertEqual(client.messages[-1][0], 22)
-        self.assertIn("успешно подключён", client.messages[-1][1])
+        self.assertIn("аккаунт успешно подключён", client.messages[-1][1])
+        self.assertNotIn("установок", client.messages[-1][1])
 
     def test_api_call_sends_vk_method_params_in_post_body(self) -> None:
         """VK API methods send params in POST body, not in request URI."""

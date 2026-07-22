@@ -107,7 +107,8 @@ class TelegramBotHelpersTest(unittest.TestCase):
         asyncio.run(run())
 
         self.assertEqual(len(message.answers), 1)
-        self.assertIn("успешно подключён", message.answers[0])
+        self.assertIn("аккаунт успешно подключён", message.answers[0])
+        self.assertNotIn("установок", message.answers[0])
 
 
 if __name__ == "__main__":

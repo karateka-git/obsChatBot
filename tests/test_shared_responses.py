@@ -271,8 +271,8 @@ class TelegramResponsesTest(unittest.TestCase):
     def test_format_github_completion_covers_all_final_statuses(self) -> None:
         """Каждый финал Device Flow получает понятный безопасный ответ."""
         cases = {
-            GitHubConnectionCompletionStatus.CONNECTED: "успешно подключён",
-            GitHubConnectionCompletionStatus.NO_INSTALLATIONS: "не найдено",
+            GitHubConnectionCompletionStatus.CONNECTED: "аккаунт успешно подключён",
+            GitHubConnectionCompletionStatus.NO_INSTALLATIONS: "ни к одному репозиторию",
             GitHubConnectionCompletionStatus.DENIED: "отклонена",
             GitHubConnectionCompletionStatus.EXPIRED: "истёк",
             GitHubConnectionCompletionStatus.FAILED: "Не удалось",
@@ -285,6 +285,8 @@ class TelegramResponsesTest(unittest.TestCase):
                     GitHubConnectionCompletion(status, installation_count=count)
                 )
                 self.assertIn(expected_text, reply)
+                self.assertNotIn("installation", reply.lower())
+                self.assertNotIn("установок", reply.lower())
 
     def test_format_incoming_message_result_reports_reanalysis(self) -> None:
         """Повторный анализ форматируется как полезный Markdown-ответ."""

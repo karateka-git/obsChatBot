@@ -250,15 +250,16 @@ def format_github_connection_completion(
     """Формирует итоговый ответ фонового GitHub Device Flow."""
     match completion.status:
         case GitHubConnectionCompletionStatus.CONNECTED:
-            count = completion.installation_count
             return (
-                "GitHub успешно подключён.\n"
-                f"Доступных установок GitHub App: {count}."
+                "GitHub-аккаунт успешно подключён.\n"
+                "Бот получил доступ к выбранным репозиториям."
             )
         case GitHubConnectionCompletionStatus.NO_INSTALLATIONS:
             return (
-                "Авторизация GitHub завершена, но доступных установок App не найдено.\n"
-                "Установи GitHub App на нужный repository и повтори `/github_connect`."
+                "GitHub-аккаунт авторизован, но бот не получил доступ ни к одному "
+                "репозиторию.\n"
+                "Разреши нужный репозиторий для GitHub App и повтори "
+                "`/github_connect`."
             )
         case GitHubConnectionCompletionStatus.DENIED:
             return "Авторизация GitHub отклонена. Для повтора отправь `/github_connect`."
