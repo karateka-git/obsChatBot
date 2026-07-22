@@ -160,6 +160,19 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 f"ID пользователя: {result.app_user.id}\n"
                 "Можно прислать ссылку на статью, `/link_code` или `/reanalyze <ID статьи>`."
             )
+        case IncomingMessageResultType.GITHUB_CONNECT_STARTED:
+            return _format_github_connect_response(result, repeated=False)
+        case IncomingMessageResultType.GITHUB_CONNECT_ALREADY_PENDING:
+            return _format_github_connect_response(result, repeated=True)
+        case IncomingMessageResultType.GITHUB_CONNECT_PREPARING:
+            return (
+                "Подключение GitHub уже запускается. "
+                "Повтори `/github_connect` через несколько секунд."
+            )
+        case IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE:
+            return "GitHub connector пока не настроен на сервере."
+        case IncomingMessageResultType.GITHUB_CONNECT_FAILED:
+            return "Не удалось начать подключение GitHub. Попробуй позже."
         case IncomingMessageResultType.REANALYZE_COMMAND_INVALID:
             return "Пришли команду в формате `/reanalyze <ID статьи>`."
         case IncomingMessageResultType.ARTICLE_REANALYZED:
@@ -199,6 +212,32 @@ def _article_action_text(result: ProcessArticleUrlResult) -> str:
     if result.extracted:
         return "Готово: статья обновлена."
     return "Эта статья уже была сохранена."
+
+
+def _format_github_connect_response(
+    result: ProcessIncomingMessageResult,
+    *,
+    repeated: bool,
+) -> str:
+    """Формирует безопасную инструкцию GitHub App + Device Flow."""
+    connection = result.github_connection
+    if connection is None or connection.authorization is None:
+        return "Подключение GitHub запускается. Повтори команду через несколько секунд."
+    prefix = (
+        "Авторизация уже ожидает подтверждения."
+        if repeated
+        else "Начинаю подключение GitHub."
+    )
+    authorization = connection.authorization
+    return (
+        f"{prefix}\n\n"
+        "1. Установи GitHub App и выбери repository с Obsidian vault:\n"
+        f"{connection.installation_url}\n\n"
+        "2. Открой Device Flow:\n"
+        f"{authorization.verification_uri}\n\n"
+        f"3. Введи одноразовый код: `{authorization.user_code}`\n\n"
+        "Проверка продолжится в фоне. Временный GitHub token не сохраняется."
+    )
 
 
 def format_reanalysis_result(analysis_result: AnalyzeArticleResult) -> str:

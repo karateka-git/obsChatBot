@@ -18,6 +18,12 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageUseCase,
 )
+from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionStartResult,
+    GitHubConnectionStartStatus,
+    GitHubDeviceAuthorization,
+    GitHubGatewayError,
+)
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
@@ -207,6 +213,33 @@ class FakeRegisteringIdentityService:
         return self.app_user
 
 
+class FakeGitHubConnectionStarter:
+    """Возвращает предсказуемый Device Flow challenge."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.app_user_ids: list[int] = []
+
+    def start(self, app_user_id: int) -> GitHubConnectionStartResult:
+        """Запоминает пользователя или поднимает настроенную ошибку."""
+        self.app_user_ids.append(app_user_id)
+        if self.error is not None:
+            raise self.error
+        return GitHubConnectionStartResult(
+            status=GitHubConnectionStartStatus.STARTED,
+            installation_url=(
+                "https://github.com/apps/obs-chat-bot/installations/new"
+            ),
+            authorization=GitHubDeviceAuthorization(
+                device_code="device-secret",
+                user_code="ABCD-EFGH",
+                verification_uri="https://github.com/login/device",
+                expires_in=900,
+                interval=5,
+            ),
+        )
+
+
 class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
     """Проверяет общий application-flow без Telegram adapter."""
 
@@ -266,6 +299,52 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
 
         self.assertEqual(result.type, IncomingMessageResultType.STATUS)
         self.assertEqual(result.app_user.id, 42)
+
+    def test_execute_starts_github_connect_for_registered_user(self) -> None:
+        """`/github_connect` использует внутренний app_user, а не channel ID."""
+        starter = FakeGitHubConnectionStarter()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            github_connection_starter=starter,
+        )
+
+        result = use_case.execute(_telegram_message("/github_connect"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.GITHUB_CONNECT_STARTED)
+        self.assertEqual(result.github_connection.authorization.user_code, "ABCD-EFGH")
+        self.assertEqual(starter.app_user_ids, [42])
+
+    def test_execute_reports_unconfigured_github_connector(self) -> None:
+        """Команда сообщает об отключённой GitHub App конфигурации."""
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+        )
+
+        result = use_case.execute(_telegram_message("/github_connect"))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+        )
+
+    def test_execute_hides_github_gateway_failure_behind_typed_result(self) -> None:
+        """Сетевая ошибка GitHub не запускает article pipeline."""
+        starter = FakeGitHubConnectionStarter(
+            error=GitHubGatewayError("GitHub request failed with HTTP 503")
+        )
+        article_use_case = FakeArticleUrlUseCase()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            user_identity_service=FakeUserIdentityService(),
+            github_connection_starter=starter,
+        )
+
+        result = use_case.execute(_telegram_message("/github_connect"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.GITHUB_CONNECT_FAILED)
+        self.assertEqual(article_use_case.commands, [])
 
     def test_execute_registers_new_identity(self) -> None:
         """Команда `/register` создает пользователя для нового канала."""

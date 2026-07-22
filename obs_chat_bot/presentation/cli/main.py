@@ -14,17 +14,20 @@ from obs_chat_bot.application.articles.processing import (
 )
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
+from obs_chat_bot.application.vaults.ports import GitHubConnectionStarter
+from obs_chat_bot.application.vaults.github_models import GitHubGatewayError
 from obs_chat_bot.bootstrap import (
     AnalyzeArticleUseCaseFactory,
     ProcessArticleUrlUseCaseFactory,
     create_analyze_article_use_case,
+    create_github_connection_coordinator,
     create_incoming_message_repository,
     create_process_incoming_message_use_case,
     create_process_article_url_use_case,
     create_user_identity_service,
 )
-from obs_chat_bot.data.config import ConfigError, load_config
-from obs_chat_bot.data.config import AppConfig
+from obs_chat_bot.data.config import AppConfig, ConfigError, GitHubAppConfig, load_config
+from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
 from obs_chat_bot.data.http.url_safety import UnsafeUrlError, validate_public_http_url
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.migration_runner import MigrationError, apply_migrations
@@ -140,6 +143,7 @@ def main() -> int:
             openai_base_url=config.openai_base_url,
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
+            github_app_config=config.github_app,
             logger=logger,
         )
 
@@ -151,6 +155,7 @@ def main() -> int:
             openai_base_url=config.openai_base_url,
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
+            github_app_config=config.github_app,
             logger=logger,
         )
 
@@ -201,6 +206,8 @@ def run_healthcheck(config: AppConfig, logger: logging.Logger) -> int:
         model=config.openai_model,
         logger=logger,
     ):
+        return 1
+    if not check_github_config(config.github_app, logger):
         return 1
 
     logger.info("Health check passed")
@@ -253,6 +260,26 @@ def check_vk_config(
         logger.error("VK group id is missing or invalid")
         return False
     logger.info("VK configuration is ready")
+    return True
+
+
+def check_github_config(
+    config: GitHubAppConfig | None,
+    logger: logging.Logger,
+) -> bool:
+    """Проверяет наличие PEM GitHub App без вывода ключа или пути."""
+    if config is None:
+        logger.info("GitHub App configuration is disabled")
+        return True
+    try:
+        PyJwtGitHubAppSigner(
+            client_id=config.client_id,
+            private_key_path=config.private_key_path,
+        ).create()
+    except GitHubGatewayError as error:
+        logger.error("GitHub App configuration is invalid: %s", error)
+        return False
+    logger.info("GitHub App configuration is ready")
     return True
 
 
@@ -414,9 +441,11 @@ def run_telegram_bot_command(
     openai_base_url: str = "",
     openai_api_key: str = "",
     openai_model: str = "",
+    github_app_config: GitHubAppConfig | None = None,
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
+    github_connection_starter: GitHubConnectionStarter | None = None,
 ) -> int:
     """Запускает Telegram adapter как CLI-команду.
 
@@ -426,9 +455,11 @@ def run_telegram_bot_command(
         openai_base_url: Базовый URL OpenAI-compatible API.
         openai_api_key: API key провайдера LLM.
         openai_model: Имя модели для анализа статей.
+        github_app_config: Настройки GitHub App или `None`.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case, полезная для тестов без polling.
         analysis_use_case_factory: Factory use case анализа, полезная для тестов.
+        github_connection_starter: Готовый coordinator для тестов.
 
     Returns:
         Ноль при штатной остановке, иначе единицу.
@@ -436,6 +467,12 @@ def run_telegram_bot_command(
     try:
         if not initialize_database(database_path, logger):
             return 1
+        connection_starter = github_connection_starter
+        if connection_starter is None and github_app_config is not None:
+            connection_starter = create_github_connection_coordinator(
+                database_path=database_path,
+                config=github_app_config,
+            )
         run_telegram_bot(
             token=token,
             incoming_message_processor=lambda incoming_message: (
@@ -447,6 +484,7 @@ def run_telegram_bot_command(
                     openai_model=openai_model,
                     use_case_factory=use_case_factory,
                     analysis_use_case_factory=analysis_use_case_factory,
+                    github_connection_starter=connection_starter,
                 )
             ),
             logger=logger,
@@ -472,9 +510,11 @@ def run_vk_bot_command(
     openai_base_url: str = "",
     openai_api_key: str = "",
     openai_model: str = "",
+    github_app_config: GitHubAppConfig | None = None,
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
+    github_connection_starter: GitHubConnectionStarter | None = None,
 ) -> int:
     """Запускает VK adapter как CLI-команду.
 
@@ -485,9 +525,11 @@ def run_vk_bot_command(
         openai_base_url: Базовый URL OpenAI-compatible API.
         openai_api_key: API key провайдера LLM.
         openai_model: Имя модели для анализа статей.
+        github_app_config: Настройки GitHub App или `None`.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case для тестов.
         analysis_use_case_factory: Factory analysis use case для тестов.
+        github_connection_starter: Готовый coordinator для тестов.
 
     Returns:
         Ноль при штатной остановке, иначе единицу.
@@ -498,6 +540,12 @@ def run_vk_bot_command(
     try:
         if not initialize_database(database_path, logger):
             return 1
+        connection_starter = github_connection_starter
+        if connection_starter is None and github_app_config is not None:
+            connection_starter = create_github_connection_coordinator(
+                database_path=database_path,
+                config=github_app_config,
+            )
         run_vk_bot(
             token=token,
             group_id=group_id,
@@ -510,6 +558,7 @@ def run_vk_bot_command(
                     openai_model=openai_model,
                     use_case_factory=use_case_factory,
                     analysis_use_case_factory=analysis_use_case_factory,
+                    github_connection_starter=connection_starter,
                 )
             ),
             logger=logger,
@@ -536,6 +585,7 @@ def process_channel_incoming_message(
     openai_model: str,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
+    github_connection_starter: GitHubConnectionStarter | None = None,
 ) -> ProcessIncomingMessageResult:
     """Обрабатывает одно сообщение внешнего канала внутри worker thread.
 
@@ -547,6 +597,7 @@ def process_channel_incoming_message(
         openai_model: Имя модели для анализа статей.
         use_case_factory: Factory article use case для тестов.
         analysis_use_case_factory: Factory analysis use case для тестов.
+        github_connection_starter: Процессный coordinator GitHub Device Flow.
 
     Returns:
         Структурированный результат общего incoming-flow.
@@ -572,5 +623,6 @@ def process_channel_incoming_message(
             article_analysis_use_case=article_analysis_use_case,
             incoming_message_repository=create_incoming_message_repository(connection),
             user_identity_service=create_user_identity_service(connection),
+            github_connection_starter=github_connection_starter,
         )
         return incoming_message_use_case.execute(incoming_message)

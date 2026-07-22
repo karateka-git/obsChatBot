@@ -28,6 +28,12 @@ from obs_chat_bot.application.users.identity import (
     InvalidLinkCodeError,
     UserIdentityService,
 )
+from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionStartResult,
+    GitHubConnectionStartStatus,
+    GitHubGatewayError,
+)
+from obs_chat_bot.application.vaults.ports import GitHubConnectionStarter
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 
 
@@ -61,6 +67,11 @@ class IncomingMessageResultType(StrEnum):
     ARTICLE_ANALYZED = "article_analyzed"
     ARTICLE_PROCESSING_FAILED = "article_processing_failed"
     ARTICLE_ANALYSIS_FAILED = "article_analysis_failed"
+    GITHUB_CONNECT_STARTED = "github_connect_started"
+    GITHUB_CONNECT_ALREADY_PENDING = "github_connect_already_pending"
+    GITHUB_CONNECT_PREPARING = "github_connect_preparing"
+    GITHUB_CONNECT_UNAVAILABLE = "github_connect_unavailable"
+    GITHUB_CONNECT_FAILED = "github_connect_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +84,7 @@ class ProcessIncomingMessageResult:
     link_code: CreatedLinkCode | None = None
     article_result: ProcessArticleUrlResult | None = None
     analysis_result: AnalyzeArticleResult | None = None
+    github_connection: GitHubConnectionStartResult | None = None
     error: Exception | None = None
 
 
@@ -86,11 +98,13 @@ class ProcessIncomingMessageUseCase:
         article_analysis_use_case: AnalyzeArticleUseCase | None = None,
         incoming_message_repository: IncomingMessageRepository | None = None,
         user_identity_service: UserIdentityService | None = None,
+        github_connection_starter: GitHubConnectionStarter | None = None,
     ) -> None:
         self._article_url_use_case = article_url_use_case
         self._article_analysis_use_case = article_analysis_use_case
         self._incoming_message_repository = incoming_message_repository
         self._user_identity_service = user_identity_service
+        self._github_connection_starter = github_connection_starter
 
     def execute(self, incoming_message: IncomingMessage) -> ProcessIncomingMessageResult:
         """Выполняет общий flow регистрации, сохранения статьи и анализа."""
@@ -370,9 +384,43 @@ class ProcessIncomingMessageUseCase:
                 type=IncomingMessageResultType.STATUS,
                 app_user=app_user,
             )
+        if text == "/github_connect":
+            return self._start_github_connection(app_user)
         if text.startswith("/reanalyze"):
             return self._reanalyze_article(text, incoming_message, app_user)
         return app_user
+
+    def _start_github_connection(self, app_user: AppUser) -> ProcessIncomingMessageResult:
+        """Запускает общий для Telegram/VK GitHub Device Flow."""
+        if self._github_connection_starter is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                app_user=app_user,
+            )
+        try:
+            connection = self._github_connection_starter.start(app_user.id)
+        except (GitHubGatewayError, OSError, ValueError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        result_types = {
+            GitHubConnectionStartStatus.STARTED: (
+                IncomingMessageResultType.GITHUB_CONNECT_STARTED
+            ),
+            GitHubConnectionStartStatus.ALREADY_PENDING: (
+                IncomingMessageResultType.GITHUB_CONNECT_ALREADY_PENDING
+            ),
+            GitHubConnectionStartStatus.PREPARING: (
+                IncomingMessageResultType.GITHUB_CONNECT_PREPARING
+            ),
+        }
+        return ProcessIncomingMessageResult(
+            type=result_types[connection.status],
+            app_user=app_user,
+            github_connection=connection,
+        )
 
     def _reanalyze_article(
         self,

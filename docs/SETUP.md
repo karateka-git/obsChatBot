@@ -48,6 +48,8 @@ GitHub CLI не обязателен, но удобен для авториза�
 - OpenAI-compatible API key.
 - OpenAI-compatible base URL.
 - Имя модели.
+- App ID, Client ID, app slug и локальный PEM GitHub App, если включается
+  Obsidian connector. Пошаговая настройка описана в `docs/GITHUB_APP.md`.
 
 ## Внутри Docker-образа
 
@@ -58,6 +60,7 @@ GitHub CLI не обязателен, но удобен для авториза�
   - `aiogram`;
   - `trafilatura`;
   - `openai`;
+  - `PyJWT[crypto]`;
   - `python-dotenv`.
 
 Версии runtime-зависимостей закреплены в `requirements.txt`, чтобы Docker build

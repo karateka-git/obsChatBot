@@ -14,6 +14,11 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
+from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionStartResult,
+    GitHubConnectionStartStatus,
+    GitHubDeviceAuthorization,
+)
 from obs_chat_bot.application.users.identity import CreatedLinkCode
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
@@ -232,6 +237,33 @@ class TelegramResponsesTest(unittest.TestCase):
 
         self.assertIn("Бот работает", reply)
         self.assertIn("ID пользователя: 42", reply)
+
+    def test_format_github_connect_returns_install_url_device_url_and_code(self) -> None:
+        """Оба channel adapters получают полную безопасную инструкцию Device Flow."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_STARTED,
+                app_user=AppUser(id=42),
+                github_connection=GitHubConnectionStartResult(
+                    status=GitHubConnectionStartStatus.STARTED,
+                    installation_url=(
+                        "https://github.com/apps/obs-chat-bot/installations/new"
+                    ),
+                    authorization=GitHubDeviceAuthorization(
+                        device_code="device-secret",
+                        user_code="ABCD-EFGH",
+                        verification_uri="https://github.com/login/device",
+                        expires_in=900,
+                        interval=5,
+                    ),
+                ),
+            )
+        )
+
+        self.assertIn("installations/new", reply)
+        self.assertIn("https://github.com/login/device", reply)
+        self.assertIn("ABCD-EFGH", reply)
+        self.assertNotIn("device-secret", reply)
 
     def test_format_incoming_message_result_reports_reanalysis(self) -> None:
         """Повторный анализ форматируется как полезный Markdown-ответ."""

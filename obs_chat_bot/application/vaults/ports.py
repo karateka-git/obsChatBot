@@ -3,6 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionStartResult,
+    GitHubDeviceAuthorization,
+    GitHubDevicePollResult,
+    GitHubInstallationAccessToken,
+    GitHubUserAccessToken,
+)
+
 from obs_chat_bot.domain.vaults.entities import (
     GitHubInstallation,
     ObsidianVault,
@@ -148,3 +156,50 @@ class VaultActionConfirmationRepository(Protocol):
 
     def delete(self, app_user_id: int) -> None:
         """Удаляет ожидающее подтверждение пользователя."""
+
+
+class GitHubDeviceFlowGateway(Protocol):
+    """Описывает внешние операции GitHub Device Flow."""
+
+    def request_device_authorization(self) -> GitHubDeviceAuthorization:
+        """Запрашивает новый Device Flow challenge у GitHub."""
+
+    def poll_device_token(self, device_code: str) -> GitHubDevicePollResult:
+        """Выполняет одну проверку состояния Device Flow."""
+
+    def list_installation_ids(
+        self,
+        access_token: GitHubUserAccessToken,
+    ) -> set[int]:
+        """Возвращает installation IDs, доступные авторизованному пользователю."""
+
+
+class GitHubInstallationTokenProvider(Protocol):
+    """Описывает выпуск краткоживущего installation access token."""
+
+    def create_installation_token(
+        self,
+        *,
+        installation_id: int,
+        repository_id: int | None = None,
+    ) -> GitHubInstallationAccessToken:
+        """Создаёт read-only token установки, при необходимости для одного repo."""
+
+
+class GitHubInstallationAccessWriter(Protocol):
+    """Описывает потокобезопасную запись разрешённых installations."""
+
+    def replace_for_user(
+        self,
+        *,
+        app_user_id: int,
+        installation_ids: set[int],
+    ) -> None:
+        """Сохраняет актуальный набор разрешённых installation IDs."""
+
+
+class GitHubConnectionStarter(Protocol):
+    """Описывает запуск фоновой авторизации из общего incoming-flow."""
+
+    def start(self, app_user_id: int) -> GitHubConnectionStartResult:
+        """Запускает Device Flow или возвращает уже ожидающий challenge."""

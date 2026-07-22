@@ -19,8 +19,9 @@ from obs_chat_bot.application.incoming.processing import IncomingMessageResultTy
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
-from obs_chat_bot.data.config import AppConfig
+from obs_chat_bot.data.config import AppConfig, GitHubAppConfig
 from obs_chat_bot.presentation.cli.main import (
+    check_github_config,
     check_llm_config,
     check_telegram_config,
     check_vk_config,
@@ -209,6 +210,33 @@ class ProcessUrlCliTest(unittest.TestCase):
             check_vk_config(token="token", group_id=None, logger=SilentLogger())
         )
 
+    def test_check_github_config_validates_private_key_file(self) -> None:
+        """Healthcheck принимает PEM и отклоняет отсутствующий private key."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        with TemporaryDirectory(prefix="obs-chat-bot-github-health-") as directory:
+            key_path = Path(directory) / "app.pem"
+            config = GitHubAppConfig(
+                app_id=123,
+                client_id="Iv1.client",
+                app_slug="obs-chat-bot",
+                private_key_path=key_path,
+            )
+            self.assertFalse(check_github_config(config, SilentLogger()))
+            private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+            )
+            key_path.write_bytes(
+                private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            )
+            self.assertTrue(check_github_config(config, SilentLogger()))
+
     def test_configure_debug_logging_enables_debug_level(self) -> None:
         """APP_DEBUG включает DEBUG для приложения."""
         import logging
@@ -305,6 +333,30 @@ class ProcessUrlCliTest(unittest.TestCase):
 
         processor = runner.call_args.kwargs["incoming_message_processor"]
         self.assertTrue(callable(processor))
+        self.assertEqual(exit_code, 0)
+
+    def test_run_telegram_bot_builds_one_process_github_coordinator(self) -> None:
+        """Telegram runtime не пересоздаёт in-memory Device Flow на сообщение."""
+        fake_use_case = FakeProcessArticleUrlUseCase()
+        github_config = GitHubAppConfig(
+            app_id=123,
+            client_id="Iv1.client",
+            app_slug="obs-chat-bot",
+            private_key_path=Path("data/github-app.pem"),
+        )
+        with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot"), patch(
+            "obs_chat_bot.presentation.cli.main.create_github_connection_coordinator"
+        ) as coordinator_factory:
+            with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as directory:
+                exit_code = run_telegram_bot_command(
+                    database_path=Path(directory) / "test.db",
+                    token="token",
+                    github_app_config=github_config,
+                    logger=SilentLogger(),
+                    use_case_factory=lambda _connection: fake_use_case,
+                )
+
+        coordinator_factory.assert_called_once()
         self.assertEqual(exit_code, 0)
 
     def test_run_vk_bot_command_passes_processor(self) -> None:

@@ -805,5 +805,17 @@ lease. Начальная схема хранит полный Markdown и front
 замену vault, каскадную очистку, обновление заметок, подтверждения и конкуренцию
 `tg_catcher`/`vk_catcher` за lease.
 
-Следующий шаг Этапа 9: конфигурация GitHub App, HTTP-клиент и Device Flow без
-сохранения временных tokens.
+Этап 9.2 программный контур GitHub App завершён: добавлена all-or-none
+конфигурация App ID, Client ID, slug и PEM; healthcheck проверяет реальную RS256
+подпись App JWT. HTTP adapter реализует Device Flow, пагинацию разрешённых
+installations и выпуск repository-scoped installation token по REST API version
+`2026-03-10`. Общая команда `/github_connect` работает через один in-memory
+coordinator на процесс Telegram/VK, возвращает installation URL, Device Flow URL
+и одноразовый код, а polling выполняет в background thread. Device code и tokens
+не сохраняются и скрыты из `repr`; SQLite получает только installation IDs через
+отдельное соединение worker.
+
+Для live-завершения 9.2 осталось зарегистрировать GitHub App, включить Device
+Flow, создать PEM и проверить `/github_connect` на реальном GitHub account по
+инструкции `docs/GITHUB_APP.md`. После этого следующий программный шаг — выбор
+repository и vault path через `/github_vault`.

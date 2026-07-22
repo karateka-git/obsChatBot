@@ -221,3 +221,17 @@ docker compose run --rm --entrypoint python vk_catcher -m obs_chat_bot --vk-bot
 
 VK adapter использует тот же incoming-flow, регистрацию, привязку каналов,
 сохранение статей и LLM-анализ, что и Telegram.
+
+## 12. Подключить GitHub App
+
+Регистрация App, минимальные read-only permissions, Device Flow и PEM описаны в
+`docs/GITHUB_APP.md`. После заполнения GitHub-группы настроек в `.env` и
+перезапуска ботов зарегистрированный пользователь отправляет в Telegram или VK:
+
+```text
+/github_connect
+```
+
+Бот возвращает installation URL, Device Flow URL и одноразовый код. Polling
+авторизации выполняется в background thread и не хранит временные tokens в
+SQLite. При перезапуске до завершения авторизации команду нужно повторить.

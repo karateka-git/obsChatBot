@@ -145,3 +145,42 @@
 - Отзыв installation удаляет связанный vault, только если installation
   действительно исчезла из разрешённого пользователю набора.
 - Access tokens, device codes и приватный PEM-ключ в этих таблицах не хранятся.
+
+## 2026-07-22. GitHub App authentication runtime
+
+Решение:
+
+- Считать GitHub App connector выключенным, если вся группа GitHub-настроек
+  отсутствует, и отклонять частично заполненную конфигурацию.
+- Использовать Client ID для Device Flow и для claim `iss` App JWT; App ID
+  хранить как обязательный идентификатор регистрации.
+- Подписывать App JWT алгоритмом RS256 через `PyJWT[crypto]`, с `iat` на минуту в
+  прошлом и `exp` через девять минут.
+- Использовать GitHub REST API version `2026-03-10` и
+  `application/vnd.github+json` для API-запросов.
+- Создавать один in-memory Device Flow coordinator на процесс adapter.
+- Выполнять polling Device Flow в daemon thread, соблюдая выданный GitHub
+  interval и увеличивая его на пять секунд при `slow_down`.
+- Хранить device code и user access token только в памяти. После авторизации
+  записывать в SQLite только разрешённые installation IDs через новое соединение
+  background thread.
+- Выпускать installation access token только по короткому App JWT и при
+  необходимости ограничивать token одним repository ID.
+
+Причины:
+
+- Device Flow подходит headless Telegram/VK сервису и не требует callback URL
+  или Client secret.
+- Отдельное соединение SQLite не передаёт connection входящего сообщения между
+  потоками после закрытия request scope.
+- Короткие App/installation tokens и скрытый `repr` уменьшают риск утечки через
+  хранение, диагностику и исключения.
+
+Последствия:
+
+- `/github_connect` возвращает installation URL, Device Flow URL и одноразовый
+  код, после чего authorization продолжается в фоне.
+- Перезапуск процесса удаляет незавершённую Device Flow session; пользователь
+  повторяет команду.
+- Live-подключение требует зарегистрированного GitHub App, включённого Device
+  Flow и читаемого локального PEM.

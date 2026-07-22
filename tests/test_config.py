@@ -38,6 +38,45 @@ class ConfigTest(unittest.TestCase):
 
         self.assertFalse(config.app_debug)
 
+    def test_load_config_reads_optional_github_app_group(self) -> None:
+        """GitHub App включается только полным набором безопасных настроек."""
+        with patch.dict(
+            os.environ,
+            _env(
+                GITHUB_APP_ID="12345",
+                GITHUB_CLIENT_ID="Iv1.client",
+                GITHUB_APP_SLUG="obs-chat-bot",
+                GITHUB_PRIVATE_KEY_PATH="data/github-app.pem",
+            ),
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertEqual(config.github_app.app_id, 12345)
+        self.assertEqual(config.github_app.client_id, "Iv1.client")
+        self.assertEqual(
+            config.github_app.installation_url,
+            "https://github.com/apps/obs-chat-bot/installations/new",
+        )
+        self.assertNotIn("Iv1.client", config.safe_summary().values())
+
+    def test_load_config_leaves_github_disabled_when_group_is_empty(self) -> None:
+        """Пустая GitHub-группа не мешает запускать ещё не настроенный connector."""
+        with patch.dict(os.environ, _env(), clear=True):
+            config = load_config()
+
+        self.assertIsNone(config.github_app)
+
+    def test_load_config_rejects_partial_github_app_group(self) -> None:
+        """Частичная GitHub-конфигурация не допускает неоднозначный runtime."""
+        with patch.dict(
+            os.environ,
+            _env(GITHUB_APP_ID="12345", GITHUB_CLIENT_ID="Iv1.client"),
+            clear=True,
+        ):
+            with self.assertRaises(ConfigError):
+                load_config()
+
     def test_load_config_rejects_invalid_debug_flag(self) -> None:
         """Некорректное boolean-значение APP_DEBUG считается ошибкой конфига."""
         with patch.dict(os.environ, _env(APP_DEBUG="maybe"), clear=True):
