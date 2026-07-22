@@ -4,7 +4,12 @@ import asyncio
 import logging
 import unittest
 
+from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
+)
 from obs_chat_bot.presentation.telegram.bot import (
+    _create_telegram_github_completion_handler,
     safe_send_telegram_reply,
     split_telegram_message,
 )
@@ -23,6 +28,24 @@ class FailingTelegramMessage:
     async def answer(self, _text: str) -> None:
         """Имитирует ошибку Telegram API при отправке ответа."""
         raise RuntimeError("send failed")
+
+
+class TelegramMessage:
+    """Fake Telegram message, сохраняющий отправленные ответы."""
+
+    class Chat:
+        """Минимальная модель Telegram chat для helper-теста."""
+
+        id = 42
+
+    chat = Chat()
+
+    def __init__(self) -> None:
+        self.answers: list[str] = []
+
+    async def answer(self, text: str) -> None:
+        """Сохраняет отправленный текст."""
+        self.answers.append(text)
 
 
 class TelegramBotHelpersTest(unittest.TestCase):
@@ -57,6 +80,34 @@ class TelegramBotHelpersTest(unittest.TestCase):
         with self.assertLogs(logger, level="ERROR") as logs:
             asyncio.run(run())
         self.assertIn("Telegram message send failed", logs.output[0])
+
+    def test_github_completion_callback_replies_in_telegram_loop(self) -> None:
+        """Фоновый callback безопасно возвращается в Telegram event loop."""
+        message = TelegramMessage()
+        logger = logging.getLogger("test.telegram.github_completion")
+
+        async def run() -> None:
+            handler = _create_telegram_github_completion_handler(
+                message,
+                loop=asyncio.get_running_loop(),
+                logger=logger,
+            )
+            await asyncio.to_thread(
+                handler,
+                GitHubConnectionCompletion(
+                    GitHubConnectionCompletionStatus.CONNECTED,
+                    installation_count=1,
+                ),
+            )
+            for _attempt in range(10):
+                if message.answers:
+                    break
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+
+        self.assertEqual(len(message.answers), 1)
+        self.assertIn("успешно подключён", message.answers[0])
 
 
 if __name__ == "__main__":

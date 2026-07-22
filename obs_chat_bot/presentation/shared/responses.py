@@ -7,6 +7,10 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
+from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
+)
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
 
@@ -238,6 +242,37 @@ def _format_github_connect_response(
         f"3. Введи одноразовый код: `{authorization.user_code}`\n\n"
         "Проверка продолжится в фоне. Временный GitHub token не сохраняется."
     )
+
+
+def format_github_connection_completion(
+    completion: GitHubConnectionCompletion,
+) -> str:
+    """Формирует итоговый ответ фонового GitHub Device Flow."""
+    match completion.status:
+        case GitHubConnectionCompletionStatus.CONNECTED:
+            count = completion.installation_count
+            return (
+                "GitHub успешно подключён.\n"
+                f"Доступных установок GitHub App: {count}."
+            )
+        case GitHubConnectionCompletionStatus.NO_INSTALLATIONS:
+            return (
+                "Авторизация GitHub завершена, но доступных установок App не найдено.\n"
+                "Установи GitHub App на нужный repository и повтори `/github_connect`."
+            )
+        case GitHubConnectionCompletionStatus.DENIED:
+            return "Авторизация GitHub отклонена. Для повтора отправь `/github_connect`."
+        case GitHubConnectionCompletionStatus.EXPIRED:
+            return (
+                "Код авторизации GitHub истёк. "
+                "Отправь `/github_connect`, чтобы получить новый."
+            )
+        case GitHubConnectionCompletionStatus.FAILED:
+            return (
+                "Не удалось завершить подключение GitHub. "
+                "Попробуй ещё раз через `/github_connect`."
+            )
+    raise ValueError(f"Unsupported GitHub completion status: {completion.status}")
 
 
 def format_reanalysis_result(analysis_result: AnalyzeArticleResult) -> str:

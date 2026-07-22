@@ -8,7 +8,10 @@ from typing import Any
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
+from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletion
+from obs_chat_bot.application.vaults.ports import GitHubConnectionCompletionHandler
 from obs_chat_bot.presentation.shared.responses import (
+    format_github_connection_completion,
     format_incoming_message_result,
 )
 from obs_chat_bot.presentation.shared.safe_send import safe_send_async
@@ -16,7 +19,10 @@ from obs_chat_bot.presentation.shared.safe_send import safe_send_async
 
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
 PROCESSING_ACK_TEXT = "Принял, обрабатываю. Это может занять немного времени."
-IncomingMessageProcessor = Callable[[IncomingMessage], ProcessIncomingMessageResult]
+IncomingMessageProcessor = Callable[
+    [IncomingMessage, GitHubConnectionCompletionHandler | None],
+    ProcessIncomingMessageResult,
+]
 
 
 class TelegramBotError(RuntimeError):
@@ -91,6 +97,11 @@ def _register_handlers(
             return
 
         incoming_message = _incoming_message_from_telegram(message)
+        completion_handler = _create_telegram_github_completion_handler(
+            message,
+            loop=asyncio.get_running_loop(),
+            logger=logger,
+        )
         if _should_send_processing_ack(message.text):
             await safe_send_telegram_reply(
                 message,
@@ -101,6 +112,7 @@ def _register_handlers(
         result = await asyncio.to_thread(
             incoming_message_processor,
             incoming_message,
+            completion_handler,
         )
         if result.error is not None:
             logger.error("Telegram incoming message processing failed: %s", result.error)
@@ -108,6 +120,30 @@ def _register_handlers(
         await safe_send_telegram_reply(message, reply, logger=logger)
 
     dispatcher.include_router(router)
+
+
+def _create_telegram_github_completion_handler(
+    message: Any,
+    *,
+    loop: asyncio.AbstractEventLoop,
+    logger: logging.Logger,
+) -> GitHubConnectionCompletionHandler:
+    """Создаёт thread-safe callback итогового ответа в исходный Telegram chat."""
+
+    def notify(completion: GitHubConnectionCompletion) -> None:
+        text = format_github_connection_completion(completion)
+        try:
+            asyncio.run_coroutine_threadsafe(
+                safe_send_telegram_reply(message, text, logger=logger),
+                loop,
+            )
+        except RuntimeError as error:
+            logger.error(
+                "Telegram GitHub completion scheduling failed: %s",
+                error,
+            )
+
+    return notify
 
 
 def _incoming_message_from_telegram(message: Any) -> IncomingMessage:

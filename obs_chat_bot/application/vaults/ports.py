@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Protocol
 
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
     GitHubConnectionStartResult,
     GitHubDeviceAuthorization,
     GitHubDevicePollResult,
@@ -198,8 +199,19 @@ class GitHubInstallationAccessWriter(Protocol):
         """Сохраняет актуальный набор разрешённых installation IDs."""
 
 
+class GitHubConnectionCompletionHandler(Protocol):
+    """Принимает безопасный итог фоновой GitHub-авторизации."""
+
+    def __call__(self, completion: GitHubConnectionCompletion) -> None:
+        """Передаёт итог presentation-слою для отправки пользователю."""
+
+
 class GitHubConnectionStarter(Protocol):
     """Описывает запуск фоновой авторизации из общего incoming-flow."""
 
-    def start(self, app_user_id: int) -> GitHubConnectionStartResult:
+    def start(
+        self,
+        app_user_id: int,
+        completion_handler: GitHubConnectionCompletionHandler | None = None,
+    ) -> GitHubConnectionStartResult:
         """Запускает Device Flow или возвращает уже ожидающий challenge."""

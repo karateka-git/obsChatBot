@@ -98,6 +98,10 @@ def _env(**overrides: str) -> dict[str, str]:
         "OPENAI_BASE_URL": "https://llm.example/v1",
         "OPENAI_API_KEY": "token",
         "OPENAI_MODEL": "fake-model",
+        "GITHUB_APP_ID": "",
+        "GITHUB_CLIENT_ID": "",
+        "GITHUB_APP_SLUG": "",
+        "GITHUB_PRIVATE_KEY_PATH": "",
     }
     values.update(overrides)
     return values

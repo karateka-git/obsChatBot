@@ -15,6 +15,8 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageResult,
 )
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
     GitHubConnectionStartResult,
     GitHubConnectionStartStatus,
     GitHubDeviceAuthorization,
@@ -27,6 +29,7 @@ from obs_chat_bot.domain.users.entities import AppUser
 from obs_chat_bot.presentation.shared.responses import (
     format_article_analysis_result,
     format_article_processing_result,
+    format_github_connection_completion,
     format_incoming_message_result,
 )
 
@@ -265,6 +268,24 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("ABCD-EFGH", reply)
         self.assertNotIn("device-secret", reply)
 
+    def test_format_github_completion_covers_all_final_statuses(self) -> None:
+        """Каждый финал Device Flow получает понятный безопасный ответ."""
+        cases = {
+            GitHubConnectionCompletionStatus.CONNECTED: "успешно подключён",
+            GitHubConnectionCompletionStatus.NO_INSTALLATIONS: "не найдено",
+            GitHubConnectionCompletionStatus.DENIED: "отклонена",
+            GitHubConnectionCompletionStatus.EXPIRED: "истёк",
+            GitHubConnectionCompletionStatus.FAILED: "Не удалось",
+        }
+
+        for status, expected_text in cases.items():
+            with self.subTest(status=status):
+                count = 1 if status is GitHubConnectionCompletionStatus.CONNECTED else 0
+                reply = format_github_connection_completion(
+                    GitHubConnectionCompletion(status, installation_count=count)
+                )
+                self.assertIn(expected_text, reply)
+
     def test_format_incoming_message_result_reports_reanalysis(self) -> None:
         """Повторный анализ форматируется как полезный Markdown-ответ."""
         reply = format_incoming_message_result(
@@ -302,3 +323,4 @@ def _article() -> Article:
 
 if __name__ == "__main__":
     unittest.main()
+    format_github_connection_completion,

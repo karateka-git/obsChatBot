@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import logging
 from threading import Lock, Thread
 import time
 
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
     GitHubConnectionStartResult,
     GitHubConnectionStartStatus,
     GitHubDeviceAuthorization,
@@ -15,6 +18,7 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubUserAccessToken,
 )
 from obs_chat_bot.application.vaults.ports import (
+    GitHubConnectionCompletionHandler,
     GitHubConnectionStarter,
     GitHubDeviceFlowGateway,
     GitHubInstallationAccessWriter,
@@ -22,6 +26,14 @@ from obs_chat_bot.application.vaults.ports import (
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _GitHubConnectionSession:
+    """Хранит in-memory challenge и callback исходного чата."""
+
+    authorization: GitHubDeviceAuthorization | None
+    completion_handler: GitHubConnectionCompletionHandler | None
 
 
 class GitHubConnectionCoordinator(GitHubConnectionStarter):
@@ -45,16 +57,20 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper or time.sleep
         self._thread_factory = thread_factory or Thread
-        self._sessions: dict[int, GitHubDeviceAuthorization | None] = {}
+        self._sessions: dict[int, _GitHubConnectionSession] = {}
         self._lock = Lock()
 
-    def start(self, app_user_id: int) -> GitHubConnectionStartResult:
+    def start(
+        self,
+        app_user_id: int,
+        completion_handler: GitHubConnectionCompletionHandler | None = None,
+    ) -> GitHubConnectionStartResult:
         """Возвращает challenge немедленно и запускает polling в daemon thread."""
         if app_user_id <= 0:
             raise ValueError("app_user_id must be positive")
         with self._lock:
             if app_user_id in self._sessions:
-                authorization = self._sessions[app_user_id]
+                authorization = self._sessions[app_user_id].authorization
                 status = (
                     GitHubConnectionStartStatus.ALREADY_PENDING
                     if authorization is not None
@@ -65,22 +81,30 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
                     installation_url=self._installation_url,
                     authorization=authorization,
                 )
-            self._sessions[app_user_id] = None
+            session = _GitHubConnectionSession(
+                authorization=None,
+                completion_handler=completion_handler,
+            )
+            self._sessions[app_user_id] = session
 
         authorization: GitHubDeviceAuthorization | None = None
         try:
             authorization = self._gateway.request_device_authorization()
+            session = _GitHubConnectionSession(
+                authorization=authorization,
+                completion_handler=completion_handler,
+            )
             with self._lock:
-                self._sessions[app_user_id] = authorization
+                self._sessions[app_user_id] = session
             worker = self._thread_factory(
                 target=self._poll_until_complete,
-                args=(app_user_id, authorization),
+                args=(app_user_id, session),
                 name=f"github-device-flow-{app_user_id}",
                 daemon=True,
             )
             worker.start()
         except Exception as error:
-            self._remove_session(app_user_id, expected=authorization)
+            self._remove_session(app_user_id, expected=session)
             if isinstance(error, GitHubGatewayError):
                 raise
             raise GitHubGatewayError(
@@ -96,10 +120,14 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
     def _poll_until_complete(
         self,
         app_user_id: int,
-        authorization: GitHubDeviceAuthorization,
+        session: _GitHubConnectionSession,
     ) -> None:
+        authorization = session.authorization
+        if authorization is None:
+            raise RuntimeError("Background GitHub session has no authorization")
         deadline = self._clock() + timedelta(seconds=authorization.expires_in)
         interval = float(authorization.interval)
+        completion: GitHubConnectionCompletion | None = None
         try:
             while self._clock() < deadline:
                 self._sleeper(interval)
@@ -123,12 +151,18 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
                     interval += 5
                     continue
                 if result.status is GitHubDevicePollStatus.AUTHORIZED:
-                    self._complete_authorization(app_user_id, result.access_token)
+                    completion = self._complete_authorization(
+                        app_user_id,
+                        result.access_token,
+                    )
                     return
                 if result.status is GitHubDevicePollStatus.DENIED:
                     LOGGER.info(
                         "GitHub Device Flow denied for app_user_id=%s",
                         app_user_id,
+                    )
+                    completion = GitHubConnectionCompletion(
+                        GitHubConnectionCompletionStatus.DENIED
                     )
                     return
                 if result.status is GitHubDevicePollStatus.EXPIRED:
@@ -138,14 +172,28 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
                 "GitHub Device Flow expired for app_user_id=%s",
                 app_user_id,
             )
+            completion = GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.EXPIRED
+            )
+        except Exception as error:
+            LOGGER.error(
+                "GitHub Device Flow failed for app_user_id=%s error_type=%s",
+                app_user_id,
+                type(error).__name__,
+            )
+            completion = GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.FAILED
+            )
         finally:
-            self._remove_session(app_user_id, expected=authorization)
+            self._remove_session(app_user_id, expected=session)
+            if completion is not None:
+                self._notify(session.completion_handler, completion, app_user_id)
 
     def _complete_authorization(
         self,
         app_user_id: int,
         access_token: GitHubUserAccessToken | None,
-    ) -> None:
+    ) -> GitHubConnectionCompletion:
         if access_token is None:
             raise RuntimeError("Authorized Device Flow returned no access token")
         try:
@@ -160,7 +208,9 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
                 app_user_id,
                 error,
             )
-            return
+            return GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.FAILED
+            )
         except Exception as error:
             LOGGER.error(
                 "GitHub installation storage failed for app_user_id=%s "
@@ -168,20 +218,49 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
                 app_user_id,
                 type(error).__name__,
             )
-            return
+            return GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.FAILED
+            )
         LOGGER.info(
             "GitHub Device Flow completed: app_user_id=%s installation_count=%s",
             app_user_id,
             len(installation_ids),
+        )
+        if not installation_ids:
+            return GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.NO_INSTALLATIONS
+            )
+        return GitHubConnectionCompletion(
+            GitHubConnectionCompletionStatus.CONNECTED,
+            installation_count=len(installation_ids),
         )
 
     def _remove_session(
         self,
         app_user_id: int,
         *,
-        expected: GitHubDeviceAuthorization | None,
+        expected: _GitHubConnectionSession,
     ) -> None:
         with self._lock:
             current = self._sessions.get(app_user_id)
             if current is expected:
                 self._sessions.pop(app_user_id, None)
+
+    @staticmethod
+    def _notify(
+        handler: GitHubConnectionCompletionHandler | None,
+        completion: GitHubConnectionCompletion,
+        app_user_id: int,
+    ) -> None:
+        """Вызывает callback, не позволяя ошибке канала уронить worker."""
+        if handler is None:
+            return
+        try:
+            handler(completion)
+        except Exception as error:
+            LOGGER.error(
+                "GitHub completion notification failed for app_user_id=%s "
+                "error_type=%s",
+                app_user_id,
+                type(error).__name__,
+            )

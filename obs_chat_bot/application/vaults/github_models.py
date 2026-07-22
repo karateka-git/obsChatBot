@@ -86,6 +86,40 @@ class GitHubConnectionStartStatus(StrEnum):
     PREPARING = "preparing"  # GitHub ещё выдаёт первый Device Flow challenge.
 
 
+class GitHubConnectionCompletionStatus(StrEnum):
+    """Итог фоновой GitHub-авторизации для уведомления пользователя."""
+
+    CONNECTED = "connected"  # Найдена хотя бы одна доступная installation.
+    NO_INSTALLATIONS = "no_installations"  # App не установлено в доступный account.
+    DENIED = "denied"  # Пользователь отклонил Device Flow.
+    EXPIRED = "expired"  # Одноразовый Device Flow code истёк.
+    FAILED = "failed"  # Авторизация или сохранение завершились ошибкой.
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubConnectionCompletion:
+    """Описывает безопасный итог фонового подключения без token и code."""
+
+    status: GitHubConnectionCompletionStatus
+    installation_count: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, GitHubConnectionCompletionStatus):
+            raise TypeError("status must be a GitHubConnectionCompletionStatus")
+        if self.installation_count < 0:
+            raise ValueError("installation_count must not be negative")
+        if (
+            self.status is GitHubConnectionCompletionStatus.CONNECTED
+            and self.installation_count == 0
+        ):
+            raise ValueError("connected status requires at least one installation")
+        if (
+            self.status is not GitHubConnectionCompletionStatus.CONNECTED
+            and self.installation_count != 0
+        ):
+            raise ValueError("installation_count is only allowed for connected status")
+
+
 @dataclass(frozen=True, slots=True)
 class GitHubConnectionStartResult:
     """Возвращает пользователю installation URL и Device Flow challenge."""

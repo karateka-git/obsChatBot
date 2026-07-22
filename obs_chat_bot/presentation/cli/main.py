@@ -14,7 +14,10 @@ from obs_chat_bot.application.articles.processing import (
 )
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
-from obs_chat_bot.application.vaults.ports import GitHubConnectionStarter
+from obs_chat_bot.application.vaults.ports import (
+    GitHubConnectionCompletionHandler,
+    GitHubConnectionStarter,
+)
 from obs_chat_bot.application.vaults.github_models import GitHubGatewayError
 from obs_chat_bot.bootstrap import (
     AnalyzeArticleUseCaseFactory,
@@ -475,7 +478,7 @@ def run_telegram_bot_command(
             )
         run_telegram_bot(
             token=token,
-            incoming_message_processor=lambda incoming_message: (
+            incoming_message_processor=lambda incoming_message, completion_handler: (
                 process_channel_incoming_message(
                     database_path=database_path,
                     incoming_message=incoming_message,
@@ -485,6 +488,7 @@ def run_telegram_bot_command(
                     use_case_factory=use_case_factory,
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
+                    github_completion_handler=completion_handler,
                 )
             ),
             logger=logger,
@@ -549,7 +553,7 @@ def run_vk_bot_command(
         run_vk_bot(
             token=token,
             group_id=group_id,
-            incoming_message_processor=lambda incoming_message: (
+            incoming_message_processor=lambda incoming_message, completion_handler: (
                 process_channel_incoming_message(
                     database_path=database_path,
                     incoming_message=incoming_message,
@@ -559,6 +563,7 @@ def run_vk_bot_command(
                     use_case_factory=use_case_factory,
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
+                    github_completion_handler=completion_handler,
                 )
             ),
             logger=logger,
@@ -586,6 +591,7 @@ def process_channel_incoming_message(
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
     github_connection_starter: GitHubConnectionStarter | None = None,
+    github_completion_handler: GitHubConnectionCompletionHandler | None = None,
 ) -> ProcessIncomingMessageResult:
     """Обрабатывает одно сообщение внешнего канала внутри worker thread.
 
@@ -598,6 +604,7 @@ def process_channel_incoming_message(
         use_case_factory: Factory article use case для тестов.
         analysis_use_case_factory: Factory analysis use case для тестов.
         github_connection_starter: Процессный coordinator GitHub Device Flow.
+        github_completion_handler: Callback итогового ответа в исходный чат.
 
     Returns:
         Структурированный результат общего incoming-flow.
@@ -625,4 +632,7 @@ def process_channel_incoming_message(
             user_identity_service=create_user_identity_service(connection),
             github_connection_starter=github_connection_starter,
         )
-        return incoming_message_use_case.execute(incoming_message)
+        return incoming_message_use_case.execute(
+            incoming_message,
+            github_completion_handler,
+        )

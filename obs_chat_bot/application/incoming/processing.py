@@ -33,7 +33,10 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionStartStatus,
     GitHubGatewayError,
 )
-from obs_chat_bot.application.vaults.ports import GitHubConnectionStarter
+from obs_chat_bot.application.vaults.ports import (
+    GitHubConnectionCompletionHandler,
+    GitHubConnectionStarter,
+)
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 
 
@@ -106,8 +109,21 @@ class ProcessIncomingMessageUseCase:
         self._user_identity_service = user_identity_service
         self._github_connection_starter = github_connection_starter
 
-    def execute(self, incoming_message: IncomingMessage) -> ProcessIncomingMessageResult:
-        """Выполняет общий flow регистрации, сохранения статьи и анализа."""
+    def execute(
+        self,
+        incoming_message: IncomingMessage,
+        github_completion_handler: GitHubConnectionCompletionHandler | None = None,
+    ) -> ProcessIncomingMessageResult:
+        """Выполняет общий flow регистрации, сохранения статьи и анализа.
+
+        Args:
+            incoming_message: Нормализованное сообщение внешнего канала.
+            github_completion_handler: Callback итогового ответа Device Flow в
+                исходный чат или `None`, если фоновый ответ не поддерживается.
+
+        Returns:
+            Структурированный результат синхронной части обработки.
+        """
         LOGGER.debug(
             "Incoming message received: channel=%s chat_id=%s message_id=%s "
             "external_user_id=%s text_kind=%s",
@@ -117,7 +133,10 @@ class ProcessIncomingMessageUseCase:
             incoming_message.external_user_id,
             _text_kind(incoming_message.text),
         )
-        app_user_result = self._resolve_app_user(incoming_message)
+        app_user_result = self._resolve_app_user(
+            incoming_message,
+            github_completion_handler=github_completion_handler,
+        )
         if isinstance(app_user_result, ProcessIncomingMessageResult):
             _log_result(app_user_result)
             return app_user_result
@@ -230,6 +249,8 @@ class ProcessIncomingMessageUseCase:
     def _resolve_app_user(
         self,
         incoming_message: IncomingMessage,
+        *,
+        github_completion_handler: GitHubConnectionCompletionHandler | None,
     ) -> AppUser | ProcessIncomingMessageResult:
         """Определяет пользователя приложения или возвращает результат onboarding."""
         if self._user_identity_service is None:
@@ -385,12 +406,20 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
         if text == "/github_connect":
-            return self._start_github_connection(app_user)
+            return self._start_github_connection(
+                app_user,
+                github_completion_handler=github_completion_handler,
+            )
         if text.startswith("/reanalyze"):
             return self._reanalyze_article(text, incoming_message, app_user)
         return app_user
 
-    def _start_github_connection(self, app_user: AppUser) -> ProcessIncomingMessageResult:
+    def _start_github_connection(
+        self,
+        app_user: AppUser,
+        *,
+        github_completion_handler: GitHubConnectionCompletionHandler | None,
+    ) -> ProcessIncomingMessageResult:
         """Запускает общий для Telegram/VK GitHub Device Flow."""
         if self._github_connection_starter is None:
             return ProcessIncomingMessageResult(
@@ -398,7 +427,10 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
         try:
-            connection = self._github_connection_starter.start(app_user.id)
+            connection = self._github_connection_starter.start(
+                app_user.id,
+                github_completion_handler,
+            )
         except (GitHubGatewayError, OSError, ValueError) as error:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.GITHUB_CONNECT_FAILED,

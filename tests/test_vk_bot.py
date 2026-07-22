@@ -9,6 +9,10 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
+from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
+)
 from obs_chat_bot.presentation.vk.bot import (
     VkApiClient,
     VkBotError,
@@ -66,7 +70,10 @@ class VkBotTest(unittest.TestCase):
         client = FakeVkClient()
         processed: list[IncomingMessage] = []
 
-        def processor(message: IncomingMessage) -> ProcessIncomingMessageResult:
+        def processor(
+            message: IncomingMessage,
+            _completion_handler,
+        ) -> ProcessIncomingMessageResult:
             processed.append(message)
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_URL_MISSING
@@ -101,7 +108,10 @@ class VkBotTest(unittest.TestCase):
         client = FailingVkClient()
         logger = logging.getLogger("test.vk.safe_send")
 
-        def processor(_message: IncomingMessage) -> ProcessIncomingMessageResult:
+        def processor(
+            _message: IncomingMessage,
+            _completion_handler,
+        ) -> ProcessIncomingMessageResult:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_URL_MISSING
             )
@@ -124,6 +134,43 @@ class VkBotTest(unittest.TestCase):
                 logger=logger,
             )
         self.assertIn("VK message send failed", logs.output[0])
+
+    def test_handle_update_completion_callback_replies_to_same_peer(self) -> None:
+        """Фоновый GitHub callback отправляет итог в исходный VK peer."""
+        client = FakeVkClient()
+        completion_handlers = []
+
+        def processor(_message, completion_handler):
+            completion_handlers.append(completion_handler)
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_STARTED
+            )
+
+        _handle_update(
+            {
+                "type": "message_new",
+                "object": {
+                    "message": {
+                        "id": 11,
+                        "peer_id": 22,
+                        "from_id": 33,
+                        "text": "/github_connect",
+                    }
+                },
+            },
+            incoming_message_processor=processor,
+            client=client,
+            logger=logging.getLogger("test.vk.github_completion"),
+        )
+        completion_handlers[0](
+            GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.CONNECTED,
+                installation_count=1,
+            )
+        )
+
+        self.assertEqual(client.messages[-1][0], 22)
+        self.assertIn("успешно подключён", client.messages[-1][1])
 
     def test_api_call_sends_vk_method_params_in_post_body(self) -> None:
         """VK API methods send params in POST body, not in request URI."""

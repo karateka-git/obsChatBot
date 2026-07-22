@@ -220,7 +220,11 @@ class FakeGitHubConnectionStarter:
         self.error = error
         self.app_user_ids: list[int] = []
 
-    def start(self, app_user_id: int) -> GitHubConnectionStartResult:
+    def start(
+        self,
+        app_user_id: int,
+        _completion_handler=None,
+    ) -> GitHubConnectionStartResult:
         """Запоминает пользователя или поднимает настроенную ошибку."""
         self.app_user_ids.append(app_user_id)
         if self.error is not None:

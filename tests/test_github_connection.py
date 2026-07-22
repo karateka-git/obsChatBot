@@ -8,6 +8,8 @@ from obs_chat_bot.application.vaults.github_connection import (
     GitHubConnectionCoordinator,
 )
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
     GitHubConnectionStartStatus,
     GitHubDeviceAuthorization,
     GitHubDevicePollResult,
@@ -35,8 +37,16 @@ class FakeClock:
 class FakeGateway:
     """Возвращает предсказуемую последовательность Device Flow статусов."""
 
-    def __init__(self, statuses: list[GitHubDevicePollStatus]) -> None:
+    def __init__(
+        self,
+        statuses: list[GitHubDevicePollStatus],
+        *,
+        installation_ids: set[int] | None = None,
+    ) -> None:
         self.statuses = statuses
+        self.installation_ids = (
+            installation_ids if installation_ids is not None else {101, 102}
+        )
         self.device_codes: list[str] = []
         self.tokens: list[GitHubUserAccessToken] = []
         self.polled = Event()
@@ -69,7 +79,7 @@ class FakeGateway:
     ) -> set[int]:
         """Возвращает installations и запоминает временный user token."""
         self.tokens.append(access_token)
-        return {101, 102}
+        return self.installation_ids
 
 
 class FakeWriter:
@@ -121,6 +131,13 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
             ]
         )
         writer = FakeWriter()
+        completions: list[GitHubConnectionCompletion] = []
+        notification_sent = Event()
+
+        def notify(completion: GitHubConnectionCompletion) -> None:
+            completions.append(completion)
+            notification_sent.set()
+
         coordinator = GitHubConnectionCoordinator(
             gateway=gateway,
             installation_writer=writer,
@@ -129,20 +146,37 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
             sleeper=clock.sleep,
         )
 
-        result = coordinator.start(42)
+        result = coordinator.start(42, notify)
         self.assertTrue(writer.completed.wait(timeout=1))
+        self.assertTrue(notification_sent.wait(timeout=1))
 
         self.assertEqual(result.status, GitHubConnectionStartStatus.STARTED)
         self.assertEqual(result.authorization.user_code, "ABCD-EFGH")
         self.assertEqual(clock.sleeps, [5.0, 5.0, 10.0])
         self.assertEqual(writer.calls, [(42, {101, 102})])
         self.assertEqual(gateway.tokens[0].value, "ghu-secret")
+        self.assertEqual(
+            completions,
+            [
+                GitHubConnectionCompletion(
+                    GitHubConnectionCompletionStatus.CONNECTED,
+                    installation_count=2,
+                )
+            ],
+        )
 
     def test_denied_authorization_does_not_save_installations(self) -> None:
         """Отказ пользователя очищает session без записи в SQLite writer."""
         clock = FakeClock()
         writer = FakeWriter()
         gateway = FakeGateway([GitHubDevicePollStatus.DENIED])
+        completions: list[GitHubConnectionCompletion] = []
+        notification_sent = Event()
+
+        def notify(completion: GitHubConnectionCompletion) -> None:
+            completions.append(completion)
+            notification_sent.set()
+
         coordinator = GitHubConnectionCoordinator(
             gateway=gateway,
             installation_writer=writer,
@@ -151,11 +185,78 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
             sleeper=clock.sleep,
         )
 
-        first = coordinator.start(42)
-        self.assertTrue(gateway.polled.wait(timeout=1))
+        first = coordinator.start(42, notify)
+        self.assertTrue(notification_sent.wait(timeout=1))
 
         self.assertEqual(first.status, GitHubConnectionStartStatus.STARTED)
         self.assertEqual(writer.calls, [])
+        self.assertEqual(
+            completions,
+            [GitHubConnectionCompletion(GitHubConnectionCompletionStatus.DENIED)],
+        )
+
+    def test_authorized_without_installations_notifies_user(self) -> None:
+        """Успешный OAuth без installation получает отдельный понятный итог."""
+        clock = FakeClock()
+        gateway = FakeGateway(
+            [GitHubDevicePollStatus.AUTHORIZED],
+            installation_ids=set(),
+        )
+        writer = FakeWriter()
+        completions: list[GitHubConnectionCompletion] = []
+        notification_sent = Event()
+
+        def notify(completion: GitHubConnectionCompletion) -> None:
+            completions.append(completion)
+            notification_sent.set()
+
+        coordinator = GitHubConnectionCoordinator(
+            gateway=gateway,
+            installation_writer=writer,
+            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
+            clock=clock,
+            sleeper=clock.sleep,
+        )
+
+        coordinator.start(42, notify)
+        self.assertTrue(notification_sent.wait(timeout=1))
+
+        self.assertEqual(writer.calls, [(42, set())])
+        self.assertEqual(
+            completions,
+            [
+                GitHubConnectionCompletion(
+                    GitHubConnectionCompletionStatus.NO_INSTALLATIONS
+                )
+            ],
+        )
+
+    def test_expired_authorization_notifies_user(self) -> None:
+        """Истёкший Device Flow code получает итоговый ответ для повтора."""
+        clock = FakeClock()
+        gateway = FakeGateway([GitHubDevicePollStatus.EXPIRED])
+        completions: list[GitHubConnectionCompletion] = []
+        notification_sent = Event()
+
+        def notify(completion: GitHubConnectionCompletion) -> None:
+            completions.append(completion)
+            notification_sent.set()
+
+        coordinator = GitHubConnectionCoordinator(
+            gateway=gateway,
+            installation_writer=FakeWriter(),
+            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
+            clock=clock,
+            sleeper=clock.sleep,
+        )
+
+        coordinator.start(42, notify)
+        self.assertTrue(notification_sent.wait(timeout=1))
+
+        self.assertEqual(
+            completions,
+            [GitHubConnectionCompletion(GitHubConnectionCompletionStatus.EXPIRED)],
+        )
 
     def test_repeated_start_returns_same_pending_challenge(self) -> None:
         """Повторная команда не создаёт второй Device Flow для пользователя."""
