@@ -25,9 +25,25 @@ class FailingTelegramMessage:
 
     chat = Chat()
 
+    def __init__(self) -> None:
+        self.attempts = 0
+
     async def answer(self, _text: str) -> None:
         """Имитирует ошибку Telegram API при отправке ответа."""
+        self.attempts += 1
         raise RuntimeError("send failed")
+
+
+class TelegramNetworkError(RuntimeError):
+    """Имитирует типизированную временную сетевую ошибку aiogram."""
+
+
+class TelegramRetryAfter(RuntimeError):
+    """Имитирует Telegram rate limit с обязательной серверной задержкой."""
+
+    def __init__(self, retry_after: float) -> None:
+        super().__init__("rate limited")
+        self.retry_after = retry_after
 
 
 class TelegramMessage:
@@ -45,6 +61,39 @@ class TelegramMessage:
 
     async def answer(self, text: str) -> None:
         """Сохраняет отправленный текст."""
+        self.answers.append(text)
+
+
+class FlakyTelegramMessage(TelegramMessage):
+    """Один раз роняет выбранный chunk, затем принимает повтор."""
+
+    def __init__(self, failing_chunk: str) -> None:
+        super().__init__()
+        self.failing_chunk = failing_chunk
+        self.calls: list[str] = []
+        self.failed = False
+
+    async def answer(self, text: str) -> None:
+        """Сохраняет попытку и один раз имитирует временный сетевой сбой."""
+        self.calls.append(text)
+        if text == self.failing_chunk and not self.failed:
+            self.failed = True
+            raise TelegramNetworkError("temporary failure")
+        self.answers.append(text)
+
+
+class RateLimitedTelegramMessage(TelegramMessage):
+    """Один раз возвращает Telegram `RetryAfter`, затем принимает сообщение."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def answer(self, text: str) -> None:
+        """Требует задержку 2.5 секунды перед успешным повтором."""
+        self.attempts += 1
+        if self.attempts == 1:
+            raise TelegramRetryAfter(2.5)
         self.answers.append(text)
 
 
@@ -80,6 +129,57 @@ class TelegramBotHelpersTest(unittest.TestCase):
         with self.assertLogs(logger, level="ERROR") as logs:
             asyncio.run(run())
         self.assertIn("Telegram message send failed", logs.output[0])
+        self.assertEqual(message.attempts, 1)
+
+    def test_safe_send_retries_only_failed_telegram_chunk(self) -> None:
+        """Временный сбой не дублирует уже отправленные части длинного ответа."""
+        message = FlakyTelegramMessage("efgh")
+        logger = logging.getLogger("test.telegram.retry")
+        delays: list[float] = []
+
+        async def sleeper(delay: float) -> None:
+            delays.append(delay)
+
+        async def run() -> None:
+            await safe_send_telegram_reply(
+                message,
+                "abcdefghij",
+                logger=logger,
+                limit=4,
+                sleeper=sleeper,
+            )
+
+        with self.assertLogs(logger, level="WARNING") as logs:
+            asyncio.run(run())
+
+        self.assertEqual(message.calls, ["abcd", "efgh", "efgh", "ij"])
+        self.assertEqual(message.answers, ["abcd", "efgh", "ij"])
+        self.assertEqual(delays, [0.5])
+        self.assertIn("failed_attempt=1/3", logs.output[0])
+
+    def test_safe_send_respects_telegram_retry_after(self) -> None:
+        """Rate limit Telegram задаёт задержку вместо стандартного backoff."""
+        message = RateLimitedTelegramMessage()
+        logger = logging.getLogger("test.telegram.retry_after")
+        delays: list[float] = []
+
+        async def sleeper(delay: float) -> None:
+            delays.append(delay)
+
+        async def run() -> None:
+            await safe_send_telegram_reply(
+                message,
+                "hello",
+                logger=logger,
+                sleeper=sleeper,
+            )
+
+        with self.assertLogs(logger, level="WARNING"):
+            asyncio.run(run())
+
+        self.assertEqual(message.answers, ["hello"])
+        self.assertEqual(message.attempts, 2)
+        self.assertEqual(delays, [2.5])
 
     def test_github_completion_callback_replies_in_telegram_loop(self) -> None:
         """Фоновый callback безопасно возвращается в Telegram event loop."""

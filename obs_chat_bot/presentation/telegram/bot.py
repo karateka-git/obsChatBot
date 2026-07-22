@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
@@ -14,7 +14,10 @@ from obs_chat_bot.presentation.shared.responses import (
     format_github_connection_completion,
     format_incoming_message_result,
 )
-from obs_chat_bot.presentation.shared.safe_send import safe_send_async
+from obs_chat_bot.presentation.shared.safe_send import (
+    exponential_retry_delay,
+    safe_send_async,
+)
 
 
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
@@ -198,14 +201,43 @@ async def safe_send_telegram_reply(
     *,
     logger: logging.Logger,
     limit: int = TELEGRAM_SAFE_MESSAGE_LIMIT,
+    sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
-    """Отправляет Telegram-ответ и не даёт ошибке отправки уронить handler."""
-    await safe_send_async(
-        lambda: send_telegram_reply(message, text, limit=limit),
-        logger=logger,
-        channel="Telegram",
-        target_id=str(message.chat.id),
-    )
+    """Отправляет Telegram-ответ с per-chunk retries временных ошибок.
+
+    Args:
+        message: Aiogram message или совместимый fake.
+        text: Текст ответа.
+        logger: Logger Telegram adapter'а.
+        limit: Безопасный предел длины одного сообщения.
+        sleeper: Асинхронное ожидание между тестируемыми retry-попытками.
+    """
+    for chunk in split_telegram_message(text, limit=limit):
+        sent = await safe_send_async(
+            lambda chunk=chunk: message.answer(chunk),
+            logger=logger,
+            channel="Telegram",
+            target_id=str(message.chat.id),
+            retry_delay_resolver=_telegram_retry_delay,
+            sleeper=sleeper,
+        )
+        if not sent:
+            return
+
+
+def _telegram_retry_delay(error: Exception, failed_attempt: int) -> float | None:
+    """Возвращает задержку только для временных ошибок Telegram API и сети."""
+    class_names = {base.__name__ for base in type(error).__mro__}
+    if "TelegramRetryAfter" in class_names:
+        retry_after = getattr(error, "retry_after", None)
+        if isinstance(retry_after, (int, float)) and retry_after >= 0:
+            return float(retry_after)
+        return exponential_retry_delay(failed_attempt)
+    if class_names.intersection({"TelegramNetworkError", "TelegramServerError"}):
+        return exponential_retry_delay(failed_attempt)
+    if isinstance(error, (ConnectionError, TimeoutError, OSError)):
+        return exponential_retry_delay(failed_attempt)
+    return None
 
 
 def split_telegram_message(text: str, *, limit: int = TELEGRAM_SAFE_MESSAGE_LIMIT) -> list[str]:

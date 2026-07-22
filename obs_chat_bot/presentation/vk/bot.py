@@ -20,13 +20,17 @@ from obs_chat_bot.presentation.shared.responses import (
     format_github_connection_completion,
     format_incoming_message_result,
 )
-from obs_chat_bot.presentation.shared.safe_send import safe_send
+from obs_chat_bot.presentation.shared.safe_send import (
+    exponential_retry_delay,
+    safe_send,
+)
 
 
 VK_API_VERSION = "5.199"
 VK_API_BASE_URL = "https://api.vk.com/method"
 VK_SAFE_MESSAGE_LIMIT = 3500
 VK_LONG_POLL_WAIT_SECONDS = 25
+VK_TRANSIENT_API_ERROR_CODES = frozenset({1, 6, 9, 10, 29})
 IncomingMessageProcessor = Callable[
     [IncomingMessage, GitHubConnectionCompletionHandler | None],
     ProcessIncomingMessageResult,
@@ -35,6 +39,10 @@ IncomingMessageProcessor = Callable[
 
 class VkBotError(RuntimeError):
     """Ошибка запуска или работы VK adapter."""
+
+
+class VkTransientError(VkBotError):
+    """Временная сетевая или серверная ошибка VK, допускающая повтор запроса."""
 
 
 def run_vk_bot(
@@ -133,15 +141,33 @@ class VkApiClient:
         )
         return self._request_json(f"{long_poll.server}?{params}")
 
-    def send_message(self, *, peer_id: int, text: str) -> None:
-        """Отправляет текстовое сообщение VK peer."""
-        for chunk in split_vk_message(text):
+    def send_message(
+        self,
+        *,
+        peer_id: int,
+        text: str,
+        random_id: int | None = None,
+    ) -> None:
+        """Отправляет сообщение VK с опциональным idempotency `random_id`.
+
+        Args:
+            peer_id: ID диалога-получателя.
+            text: Текст сообщения.
+            random_id: Стабильный ID одной retry-серии или `None` для нового ID.
+        """
+        chunks = split_vk_message(text)
+        for chunk in chunks:
+            chunk_random_id = (
+                random_id
+                if random_id is not None and len(chunks) == 1
+                else randint(1, 2_147_483_647)
+            )
             self._api_call(
                 "messages.send",
                 {
                     "peer_id": str(peer_id),
                     "message": chunk,
-                    "random_id": str(randint(1, 2_147_483_647)),
+                    "random_id": str(chunk_random_id),
                 },
             )
 
@@ -162,13 +188,38 @@ class VkApiClient:
         try:
             with urlopen(request, timeout=VK_LONG_POLL_WAIT_SECONDS + 5) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as error:
-            raise VkBotError(f"VK request failed: {error}") from error
+        except HTTPError as error:
+            error_type = (
+                VkTransientError
+                if error.code == 429 or error.code >= 500
+                else VkBotError
+            )
+            raise error_type(f"VK request failed with HTTP {error.code}") from error
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            raise VkTransientError(
+                f"VK request temporarily failed: {type(error).__name__}"
+            ) from error
 
         if not isinstance(payload, dict):
             raise VkBotError("VK response is not an object")
         if "error" in payload:
-            raise VkBotError(f"VK API error: {payload['error']}")
+            error_payload = payload["error"]
+            error_code = (
+                error_payload.get("error_code")
+                if isinstance(error_payload, dict)
+                else None
+            )
+            error_message = (
+                error_payload.get("error_msg")
+                if isinstance(error_payload, dict)
+                else "unexpected error format"
+            )
+            error_type = (
+                VkTransientError
+                if error_code in VK_TRANSIENT_API_ERROR_CODES
+                else VkBotError
+            )
+            raise error_type(f"VK API error {error_code}: {error_message}")
         return payload
 
 
@@ -258,14 +309,32 @@ def _safe_send_vk_message(
     peer_id: int,
     text: str,
     logger: logging.Logger,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Отправляет VK-сообщение и не даёт ошибке отправки уронить polling."""
-    safe_send(
-        lambda: client.send_message(peer_id=peer_id, text=text),
-        logger=logger,
-        channel="VK",
-        target_id=str(peer_id),
-    )
+    """Отправляет VK-сообщение с per-chunk retries и стабильным `random_id`."""
+    for chunk in split_vk_message(text):
+        random_id = randint(1, 2_147_483_647)
+        sent = safe_send(
+            lambda chunk=chunk, random_id=random_id: client.send_message(
+                peer_id=peer_id,
+                text=chunk,
+                random_id=random_id,
+            ),
+            logger=logger,
+            channel="VK",
+            target_id=str(peer_id),
+            retry_delay_resolver=_vk_retry_delay,
+            sleeper=sleeper,
+        )
+        if not sent:
+            return
+
+
+def _vk_retry_delay(error: Exception, failed_attempt: int) -> float | None:
+    """Возвращает задержку только для типизированных временных ошибок VK."""
+    if isinstance(error, VkTransientError):
+        return exponential_retry_delay(failed_attempt)
+    return None
 
 
 def _create_vk_github_completion_handler(

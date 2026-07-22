@@ -3,6 +3,7 @@
 import logging
 import unittest
 from unittest.mock import patch
+from urllib.error import URLError
 
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.incoming.processing import (
@@ -16,7 +17,9 @@ from obs_chat_bot.application.vaults.github_models import (
 from obs_chat_bot.presentation.vk.bot import (
     VkApiClient,
     VkBotError,
+    VkTransientError,
     _handle_update,
+    _safe_send_vk_message,
     split_vk_message,
 )
 
@@ -26,18 +29,55 @@ class FakeVkClient:
 
     def __init__(self) -> None:
         self.messages: list[tuple[int, str]] = []
+        self.random_ids: list[int | None] = []
 
-    def send_message(self, *, peer_id: int, text: str) -> None:
+    def send_message(
+        self,
+        *,
+        peer_id: int,
+        text: str,
+        random_id: int | None = None,
+    ) -> None:
         """Запоминает отправленное сообщение."""
+        self.random_ids.append(random_id)
         self.messages.append((peer_id, text))
 
 
 class FailingVkClient(FakeVkClient):
     """Fake VK client, который имитирует ошибку отправки."""
 
-    def send_message(self, *, peer_id: int, text: str) -> None:
+    def send_message(
+        self,
+        *,
+        peer_id: int,
+        text: str,
+        random_id: int | None = None,
+    ) -> None:
         """Имитирует ошибку VK API при отправке сообщения."""
+        self.random_ids.append(random_id)
         raise VkBotError("send failed")
+
+
+class FlakyVkClient(FakeVkClient):
+    """Дважды имитирует временный сетевой сбой перед успешной отправкой."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    def send_message(
+        self,
+        *,
+        peer_id: int,
+        text: str,
+        random_id: int | None = None,
+    ) -> None:
+        """Сохраняет `random_id` каждой попытки и завершается с третьей."""
+        self.attempts += 1
+        self.random_ids.append(random_id)
+        if self.attempts < 3:
+            raise VkTransientError("temporary failure")
+        self.messages.append((peer_id, text))
 
 
 class FakeHttpResponse:
@@ -134,6 +174,29 @@ class VkBotTest(unittest.TestCase):
                 logger=logger,
             )
         self.assertIn("VK message send failed", logs.output[0])
+        self.assertEqual(len(client.random_ids), 1)
+
+    def test_safe_send_retries_vk_with_stable_random_id(self) -> None:
+        """VK retry использует один idempotency ID и экспоненциальные задержки."""
+        client = FlakyVkClient()
+        logger = logging.getLogger("test.vk.retry")
+        delays: list[float] = []
+
+        with self.assertLogs(logger, level="WARNING") as logs:
+            _safe_send_vk_message(
+                client,
+                peer_id=22,
+                text="hello",
+                logger=logger,
+                sleeper=delays.append,
+            )
+
+        self.assertEqual(client.messages, [(22, "hello")])
+        self.assertEqual(client.attempts, 3)
+        self.assertEqual(delays, [0.5, 1.0])
+        self.assertEqual(len(set(client.random_ids)), 1)
+        self.assertIsNotNone(client.random_ids[0])
+        self.assertIn("failed_attempt=2/3", logs.output[-1])
 
     def test_handle_update_completion_callback_replies_to_same_peer(self) -> None:
         """Фоновый GitHub callback отправляет итог в исходный VK peer."""
@@ -192,6 +255,17 @@ class VkBotTest(unittest.TestCase):
         self.assertEqual(request.full_url, "https://api.vk.com/method/messages.send")
         self.assertIn(b"message=hello", request.data)
         self.assertIn(b"access_token=token", request.data)
+
+    def test_api_call_classifies_network_failure_as_transient(self) -> None:
+        """Оборванное соединение VK допускает безопасный повтор отправки."""
+        client = VkApiClient(token="token")
+
+        with patch(
+            "obs_chat_bot.presentation.vk.bot.urlopen",
+            side_effect=URLError("connection closed"),
+        ):
+            with self.assertRaises(VkTransientError):
+                client.send_message(peer_id=22, text="hello", random_id=123)
 
 
 if __name__ == "__main__":
