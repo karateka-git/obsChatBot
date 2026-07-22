@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Protocol
+
+from obs_chat_bot.domain.vaults.entities import (
+    GitHubInstallation,
+    ObsidianVault,
+    VaultActionConfirmation,
+    VaultNote,
+    VaultSyncLease,
+)
+
+
+class GitHubInstallationRepository(Protocol):
+    """Описывает хранение разрешённых пользователю установок GitHub App."""
+
+    def replace_for_user(
+        self,
+        *,
+        app_user_id: int,
+        installation_ids: set[int],
+    ) -> list[GitHubInstallation]:
+        """Синхронизирует разрешённые installation IDs пользователя."""
+
+    def list_for_user(self, app_user_id: int) -> list[GitHubInstallation]:
+        """Возвращает разрешённые установки пользователя."""
+
+    def contains(self, *, app_user_id: int, installation_id: int) -> bool:
+        """Проверяет доступ пользователя к установке GitHub App."""
+
+    def delete_for_user(self, app_user_id: int) -> None:
+        """Удаляет все разрешённые установки пользователя."""
+
+
+class ObsidianVaultRepository(Protocol):
+    """Описывает хранение единственного активного vault пользователя."""
+
+    def replace(self, vault: ObsidianVault) -> ObsidianVault:
+        """Заменяет активный vault и удаляет данные предыдущего подключения."""
+
+    def get_by_id(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+    ) -> ObsidianVault | None:
+        """Возвращает vault по ID внутри области пользователя."""
+
+    def get_for_user(self, app_user_id: int) -> ObsidianVault | None:
+        """Возвращает активный vault пользователя или `None`."""
+
+    def update_sync_state(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        head_commit_sha: str | None,
+        tree_sha: str | None,
+        head_etag: str | None,
+        last_checked_at: datetime,
+        last_synced_at: datetime | None,
+    ) -> ObsidianVault | None:
+        """Обновляет зафиксированное состояние источника после проверки."""
+
+    def delete_for_user(self, app_user_id: int) -> None:
+        """Удаляет активный vault пользователя и зависимые локальные данные."""
+
+
+class VaultNoteRepository(Protocol):
+    """Описывает хранение Markdown-заметок подключённого vault."""
+
+    def upsert(self, note: VaultNote) -> VaultNote:
+        """Создаёт или атомарно обновляет заметку и её metadata."""
+
+    def get_by_path(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        path: str,
+    ) -> VaultNote | None:
+        """Возвращает заметку по пути внутри vault пользователя."""
+
+    def list_for_vault(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+    ) -> list[VaultNote]:
+        """Возвращает все заметки vault в порядке пути."""
+
+    def delete_paths(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        paths: set[str],
+    ) -> int:
+        """Удаляет перечисленные заметки и возвращает число удалённых строк."""
+
+
+class VaultSyncLeaseRepository(Protocol):
+    """Описывает межпроцессный lease синхронизации vault."""
+
+    def acquire(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        owner: str,
+        now: datetime,
+        expires_at: datetime,
+    ) -> VaultSyncLease | None:
+        """Захватывает свободный или истёкший lease, иначе возвращает `None`."""
+
+    def get(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+    ) -> VaultSyncLease | None:
+        """Возвращает текущий lease vault или `None`."""
+
+    def release(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        owner: str,
+    ) -> bool:
+        """Освобождает lease только для захватившего его владельца."""
+
+
+class VaultActionConfirmationRepository(Protocol):
+    """Описывает хранение подтверждений замены и отключения vault."""
+
+    def save(self, confirmation: VaultActionConfirmation) -> None:
+        """Сохраняет подтверждение, заменяя предыдущее действие пользователя."""
+
+    def find_active(
+        self,
+        *,
+        app_user_id: int,
+        now: datetime,
+    ) -> VaultActionConfirmation | None:
+        """Возвращает неистёкшее подтверждение пользователя или `None`."""
+
+    def delete(self, app_user_id: int) -> None:
+        """Удаляет ожидающее подтверждение пользователя."""

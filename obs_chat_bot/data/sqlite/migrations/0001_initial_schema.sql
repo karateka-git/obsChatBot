@@ -131,3 +131,145 @@ CREATE INDEX idx_processing_errors_article_id
     ON processing_errors (article_id);
 CREATE INDEX idx_processing_errors_incoming_message_id
     ON processing_errors (incoming_message_id);
+
+CREATE TABLE github_installations (
+    app_user_id INTEGER NOT NULL,
+    installation_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (app_user_id, installation_id),
+    FOREIGN KEY (app_user_id) REFERENCES app_users (id) ON DELETE CASCADE,
+    CHECK (installation_id > 0)
+);
+
+CREATE INDEX idx_github_installations_installation_id
+    ON github_installations (installation_id);
+
+CREATE TABLE obsidian_vaults (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_user_id INTEGER NOT NULL UNIQUE,
+    installation_id INTEGER NOT NULL,
+    repository_id INTEGER NOT NULL,
+    owner TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    root_path TEXT NOT NULL DEFAULT '',
+    head_commit_sha TEXT,
+    tree_sha TEXT,
+    head_etag TEXT,
+    last_checked_at TEXT,
+    last_synced_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id, installation_id)
+        REFERENCES github_installations (app_user_id, installation_id)
+        ON DELETE CASCADE,
+    UNIQUE (app_user_id, id),
+    CHECK (repository_id > 0)
+);
+
+CREATE INDEX idx_obsidian_vaults_installation_id
+    ON obsidian_vaults (installation_id);
+CREATE INDEX idx_obsidian_vaults_repository_id
+    ON obsidian_vaults (repository_id);
+
+CREATE TABLE obsidian_vault_confirmations (
+    app_user_id INTEGER NOT NULL PRIMARY KEY,
+    action TEXT NOT NULL,
+    installation_id INTEGER,
+    repository_id INTEGER,
+    owner TEXT,
+    repository TEXT,
+    branch TEXT,
+    root_path TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id) REFERENCES app_users (id) ON DELETE CASCADE,
+    FOREIGN KEY (app_user_id, installation_id)
+        REFERENCES github_installations (app_user_id, installation_id)
+        ON DELETE CASCADE,
+    CHECK (
+        (
+            action = 'replace'
+            AND installation_id IS NOT NULL
+            AND repository_id IS NOT NULL
+            AND owner IS NOT NULL
+            AND repository IS NOT NULL
+            AND branch IS NOT NULL
+            AND root_path IS NOT NULL
+        )
+        OR (
+            action = 'disconnect'
+            AND installation_id IS NULL
+            AND repository_id IS NULL
+            AND owner IS NULL
+            AND repository IS NULL
+            AND branch IS NULL
+            AND root_path IS NULL
+        )
+    )
+);
+
+CREATE INDEX idx_obsidian_vault_confirmations_expires_at
+    ON obsidian_vault_confirmations (expires_at);
+
+CREATE TABLE obsidian_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    title TEXT,
+    markdown TEXT NOT NULL,
+    frontmatter TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id, vault_id)
+        REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE,
+    UNIQUE (vault_id, path),
+    UNIQUE (app_user_id, id)
+);
+
+CREATE INDEX idx_obsidian_notes_app_user_vault
+    ON obsidian_notes (app_user_id, vault_id);
+CREATE INDEX idx_obsidian_notes_vault_blob_sha
+    ON obsidian_notes (vault_id, blob_sha);
+
+CREATE TABLE obsidian_note_tags (
+    app_user_id INTEGER NOT NULL,
+    note_id INTEGER NOT NULL,
+    tag TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (note_id, tag),
+    FOREIGN KEY (app_user_id, note_id)
+        REFERENCES obsidian_notes (app_user_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_obsidian_note_tags_app_user_tag
+    ON obsidian_note_tags (app_user_id, tag);
+
+CREATE TABLE obsidian_note_wikilinks (
+    app_user_id INTEGER NOT NULL,
+    note_id INTEGER NOT NULL,
+    target TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (note_id, target),
+    FOREIGN KEY (app_user_id, note_id)
+        REFERENCES obsidian_notes (app_user_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_obsidian_note_wikilinks_app_user_target
+    ON obsidian_note_wikilinks (app_user_id, target);
+
+CREATE TABLE obsidian_vault_sync_leases (
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL PRIMARY KEY,
+    owner TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (app_user_id, vault_id)
+        REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_obsidian_vault_sync_leases_expires_at
+    ON obsidian_vault_sync_leases (expires_at);
