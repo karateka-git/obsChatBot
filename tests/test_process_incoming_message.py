@@ -330,6 +330,18 @@ class FakeVaultSelectionManager:
 class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
     """Проверяет общий application-flow без Telegram adapter."""
 
+    def test_execute_help_is_available_without_registered_identity(self) -> None:
+        """`/help` возвращает список команд до регистрации пользователя."""
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeRegisteringIdentityService(),
+        )
+
+        result = use_case.execute(_telegram_message("/help"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.HELP)
+        self.assertIsNone(result.app_user)
+
     def test_execute_processes_url_and_links_saved_message(self) -> None:
         """Сообщение со ссылкой проходит общий flow и возвращает structured result."""
         article_use_case = FakeArticleUrlUseCase()

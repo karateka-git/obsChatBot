@@ -85,12 +85,33 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
     match result.type:
         case IncomingMessageResultType.UNKNOWN_IDENTITY:
             return _format_unknown_identity_response()
+        case IncomingMessageResultType.HELP:
+            return (
+                "Доступные команды:\n\n"
+                "Основные:\n"
+                "`/start` — проверить подключение бота и канала\n"
+                "`/help` — показать этот список\n"
+                "`/register` — создать нового пользователя\n"
+                "`/status` — показать ID текущего пользователя\n\n"
+                "Связь Telegram и VK:\n"
+                "`/link_code` — создать код привязки второго канала\n"
+                "`/link <код>` — привязать канал по полученному коду\n\n"
+                "GitHub и Obsidian:\n"
+                "`/github_connect` — подключить или заменить GitHub-аккаунт\n"
+                "`/github_vault <repository-url> [vault-path]` — выбрать vault\n\n"
+                "Статьи:\n"
+                "Пришли HTTP/HTTPS-ссылку — сохранить и проанализировать статью\n"
+                "`/reanalyze <ID статьи>` — выполнить анализ повторно\n\n"
+                "Ответы `да` и `нет` используются, когда бот просит подтвердить "
+                "перепривязку или замену."
+            )
         case IncomingMessageResultType.START_UNREGISTERED:
             return (
                 "obsChatBot запущен.\n"
                 "Этот канал пока не зарегистрирован.\n"
                 "Отправь `/register`, чтобы создать нового пользователя, или `/link <код>`, "
-                "чтобы привязать этот канал к уже существующему пользователю."
+                "чтобы привязать этот канал к уже существующему пользователю.\n"
+                "Все команды: `/help`."
             )
         case IncomingMessageResultType.START_REGISTERED:
             if result.app_user is None:
@@ -98,7 +119,7 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             return (
                 "obsChatBot запущен.\n"
                 f"Этот канал уже привязан к пользователю ID {result.app_user.id}.\n"
-                "Можешь прислать ссылку на статью или отправить `/link_code` для привязки другого канала."
+                "Можешь прислать ссылку на статью или отправить `/help`."
             )
         case IncomingMessageResultType.REGISTERED:
             return "Готово, я зарегистрировал тебя. Теперь пришли ссылку на статью."

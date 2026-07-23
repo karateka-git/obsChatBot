@@ -42,6 +42,28 @@ from obs_chat_bot.presentation.shared.responses import (
 class TelegramResponsesTest(unittest.TestCase):
     """Проверяет пользовательский текст по результату обработки статьи."""
 
+    def test_format_help_lists_only_currently_available_commands(self) -> None:
+        """`/help` перечисляет общий набор реализованных Telegram/VK-команд."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(type=IncomingMessageResultType.HELP)
+        )
+
+        for command in (
+            "/start",
+            "/help",
+            "/register",
+            "/status",
+            "/link_code",
+            "/link <код>",
+            "/github_connect",
+            "/github_vault",
+            "/reanalyze",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, reply)
+        self.assertNotIn("/github_sync", reply)
+        self.assertNotIn("/github_disconnect", reply)
+
     def test_format_article_processing_result_reports_created_article(self) -> None:
         """Новая статья получает понятный текст с названием, статусом, ID и длиной."""
         reply = format_article_processing_result(

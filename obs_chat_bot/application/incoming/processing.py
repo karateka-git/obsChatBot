@@ -55,6 +55,7 @@ class IncomingMessageResultType(StrEnum):
     """Тип результата обработки входящего сообщения."""
 
     UNKNOWN_IDENTITY = "unknown_identity"
+    HELP = "help"
     START_UNREGISTERED = "start_unregistered"
     START_REGISTERED = "start_registered"
     REGISTERED = "registered"
@@ -281,6 +282,8 @@ class ProcessIncomingMessageUseCase:
         github_completion_handler: GitHubConnectionCompletionHandler | None,
     ) -> AppUser | ProcessIncomingMessageResult:
         """Определяет пользователя приложения или возвращает результат onboarding."""
+        if incoming_message.text.strip() == "/help":
+            return ProcessIncomingMessageResult(type=IncomingMessageResultType.HELP)
         if self._user_identity_service is None:
             return AppUser(id=incoming_message.app_user_id)
 
