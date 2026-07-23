@@ -98,23 +98,51 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 return "obsChatBot запущен. Пришли ссылку на статью."
             return (
                 "obsChatBot запущен.\n"
-                f"Этот канал уже привязан к пользователю ID {result.app_user.id}.\n"
+                f"Рад тебя видеть, {_display_name(result)}.\n"
                 "Можешь прислать ссылку на статью или отправить `/help`."
             )
         case IncomingMessageResultType.REGISTERED:
             return (
                 "Готово, я зарегистрировал тебя.\n"
+                "Как к тебе обращаться? Пришли имя или название профиля."
+            )
+        case IncomingMessageResultType.REGISTRATION_NAME_REQUIRED:
+            return (
+                "Регистрация ещё не завершена.\n"
+                "Как к тебе обращаться? Пришли имя или название профиля."
+            )
+        case IncomingMessageResultType.REGISTRATION_NAME_SAVED:
+            if result.selected_vault is not None:
+                return (
+                    f"Приятно познакомиться, {_display_name(result)}.\n"
+                    f"{_format_selected_vault(result)}\n"
+                    "Регистрация завершена — можешь присылать ссылки на статьи."
+                )
+            return (
+                f"Приятно познакомиться, {_display_name(result)}.\n"
                 "Теперь пришли ссылку на GitHub-репозиторий с Obsidian vault.\n"
                 "Если vault находится во вложенной папке, добавь путь после ссылки."
             )
-        case IncomingMessageResultType.ALREADY_REGISTERED:
-            if result.app_user is None:
-                return "Ты уже зарегистрирован. Пришли ссылку на GitHub repository."
+        case IncomingMessageResultType.NAME_COMMAND_INVALID:
             return (
-                "Ты уже зарегистрирован.\n"
-                f"ID пользователя: {result.app_user.id}\n"
-                "Пришли ссылку на GitHub-репозиторий с Obsidian vault, "
-                "чтобы продолжить или изменить настройку."
+                "Не получилось сохранить имя. Используй от 1 до 80 символов "
+                "без ссылки или команды.\n"
+                "Например: `/name Влад`."
+            )
+        case IncomingMessageResultType.NAME_UPDATED:
+            return f"Готово. Теперь буду обращаться к тебе: {_display_name(result)}."
+        case IncomingMessageResultType.CONFIRMATION_MISSING:
+            return (
+                "Сейчас нет действия, которое нужно подтвердить.\n"
+                "Сначала пришли ссылку на другой repository или `/link <код>`."
+            )
+        case IncomingMessageResultType.ALREADY_REGISTERED:
+            vault = _format_selected_vault(result)
+            return (
+                f"{_display_name(result)}, ты уже зарегистрирован.\n"
+                f"{vault}\n"
+                "Можешь присылать статьи. Чтобы заменить vault, пришли ссылку "
+                "на другой GitHub-репозиторий."
             )
         case IncomingMessageResultType.LINK_CODE_CREATED:
             if result.link_code is None:
@@ -140,7 +168,7 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 )
             return (
                 "Этот канал уже привязан к другому пользователю.\n"
-                f"Перепривязать его к пользователю ID {result.app_user.id}?\n"
+                f"Перепривязать его к профилю «{_display_name(result)}»?\n"
                 "Ответь `да` или `нет`."
             )
         case IncomingMessageResultType.LINK_REBOUND:
@@ -148,7 +176,7 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 return "Готово, я перепривязал этот канал."
             return (
                 "Готово, я перепривязал этот канал.\n"
-                f"Теперь он связан с пользователем ID {result.app_user.id}."
+                f"Теперь он связан с профилем «{_display_name(result)}»."
             )
         case IncomingMessageResultType.LINK_REBIND_CANCELLED:
             return "Ок, оставляю текущую привязку без изменений."
@@ -165,9 +193,17 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
         case IncomingMessageResultType.STATUS:
             if result.app_user is None:
                 return "Бот работает, но пользователь не определен."
+            if result.selected_vault is None:
+                return (
+                    "Бот работает.\n"
+                    f"Профиль: {_display_name(result)}.\n"
+                    "Obsidian vault ещё не подключён.\n"
+                    "Пришли ссылку на GitHub-репозиторий с vault."
+                )
             return (
                 "Бот работает.\n"
-                f"ID пользователя: {result.app_user.id}\n"
+                f"Профиль: {_display_name(result)}.\n"
+                f"{_format_selected_vault(result)}\n"
                 "Можно прислать ссылку на статью, `/link_code` или `/reanalyze <ID статьи>`."
             )
         case IncomingMessageResultType.GITHUB_CONNECT_STARTED:
@@ -200,7 +236,8 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             )
         case IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED:
             return (
-                "Сначала заверши регистрацию: пришли ссылку на GitHub-репозиторий "
+                f"{_display_name(result)}, осталось подключить Obsidian vault.\n"
+                "Пришли ссылку на GitHub-репозиторий "
                 "с Obsidian vault."
             )
         case IncomingMessageResultType.GITHUB_VAULT_COMMAND_INVALID:
@@ -303,6 +340,22 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 "Статью удалось сохранить, но анализ пока не получился. "
                 "Попробуй отправить ссылку позже."
             )
+
+
+def _display_name(result: ProcessIncomingMessageResult) -> str:
+    """Возвращает пользовательское имя без раскрытия внутреннего ID."""
+    if result.app_user is None or result.app_user.display_name is None:
+        return "пользователь"
+    return result.app_user.display_name
+
+
+def _format_selected_vault(result: ProcessIncomingMessageResult) -> str:
+    """Форматирует активный vault понятным пользователю образом."""
+    vault = result.selected_vault
+    if vault is None:
+        return "Obsidian vault ещё не подключён."
+    root = f", папка: `{vault.root_path}`" if vault.root_path else ""
+    return f"Подключён vault: `{vault.owner}/{vault.repository}`{root}."
 
 
 def _article_action_text(result: ProcessArticleUrlResult) -> str:

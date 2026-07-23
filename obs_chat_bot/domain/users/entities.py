@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime
 
 
+MAX_DISPLAY_NAME_LENGTH = 80
+
+
 @dataclass(frozen=True, slots=True)
 class AppUser:
     """Представляет внутреннего пользователя приложения, общего для всех каналов."""
@@ -17,6 +20,13 @@ class AppUser:
             raise ValueError("id must be positive")
         if self.display_name is not None and not self.display_name.strip():
             raise ValueError("display_name must not be empty")
+        if (
+            self.display_name is not None
+            and len(self.display_name) > MAX_DISPLAY_NAME_LENGTH
+        ):
+            raise ValueError(
+                f"display_name must not exceed {MAX_DISPLAY_NAME_LENGTH} characters"
+            )
 
 
 @dataclass(frozen=True, slots=True)

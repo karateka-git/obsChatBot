@@ -12,7 +12,11 @@ from obs_chat_bot.application.users.ports import (
     IdentityRebindConfirmationRepository,
     IdentityLinkTokenRepository,
 )
-from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
+from obs_chat_bot.domain.users.entities import (
+    MAX_DISPLAY_NAME_LENGTH,
+    AppUser,
+    IncomingIdentity,
+)
 
 
 class UserIdentityError(RuntimeError):
@@ -25,6 +29,10 @@ class IdentityAlreadyBoundError(UserIdentityError):
 
 class InvalidLinkCodeError(UserIdentityError):
     """Ошибка использования несуществующего, просроченного или погашенного кода."""
+
+
+class InvalidDisplayNameError(UserIdentityError):
+    """Ошибка недопустимого имени внутреннего профиля пользователя."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,12 +80,33 @@ class UserIdentityService:
         if existing is not None:
             return existing
 
-        app_user = self._app_user_repository.create(display_name=identity.display_name)
+        app_user = self._app_user_repository.create()
         self._external_identity_repository.create(
             app_user_id=app_user.id,
             identity=identity,
         )
         return app_user
+
+    def update_display_name(
+        self,
+        *,
+        app_user_id: int,
+        display_name: str,
+    ) -> AppUser:
+        """Проверяет и сохраняет имя внутреннего профиля пользователя."""
+        normalized = " ".join(display_name.split())
+        if not normalized:
+            raise InvalidDisplayNameError("Display name must not be empty")
+        if len(normalized) > MAX_DISPLAY_NAME_LENGTH:
+            raise InvalidDisplayNameError(
+                f"Display name must not exceed {MAX_DISPLAY_NAME_LENGTH} characters"
+            )
+        if normalized.startswith("/") or "://" in normalized:
+            raise InvalidDisplayNameError("Display name looks like a command or URL")
+        return self._app_user_repository.update_display_name(
+            app_user_id=app_user_id,
+            display_name=normalized,
+        )
 
     def create_link_code(self, app_user_id: int) -> CreatedLinkCode:
         """Создает одноразовый код для привязки нового канала к пользователю."""

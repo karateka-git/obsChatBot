@@ -147,16 +147,16 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("Пришли ссылку", reply)
 
     def test_format_incoming_message_result_reports_start_registered(self) -> None:
-        """`/start` для зарегистрированного канала показывает user id."""
+        """`/start` приветствует зарегистрированного пользователя по имени."""
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.START_REGISTERED,
-                app_user=AppUser(id=42),
+                app_user=AppUser(id=42, display_name="Влад"),
             )
         )
 
-        self.assertIn("уже привязан", reply)
-        self.assertIn("ID 42", reply)
+        self.assertIn("Влад", reply)
+        self.assertNotIn("42", reply)
 
     def test_format_incoming_message_result_reports_start_unregistered(self) -> None:
         """`/start` для нового канала объясняет регистрацию и привязку."""
@@ -174,12 +174,44 @@ class TelegramResponsesTest(unittest.TestCase):
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ALREADY_REGISTERED,
-                app_user=AppUser(id=42),
+                app_user=AppUser(id=42, display_name="Влад"),
+                selected_vault=ObsidianVault(
+                    id=1,
+                    app_user_id=42,
+                    installation_id=10,
+                    repository_id=20,
+                    owner="karateka-git",
+                    repository="my_obs_data",
+                    branch="main",
+                ),
             )
         )
 
         self.assertIn("уже зарегистрирован", reply)
-        self.assertIn("ID пользователя: 42", reply)
+        self.assertIn("Влад", reply)
+        self.assertIn("karateka-git/my_obs_data", reply)
+        self.assertNotIn("42", reply)
+
+    def test_name_completion_preserves_existing_vault(self) -> None:
+        """После ввода имени уже подключённый vault не требуется выбирать снова."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.REGISTRATION_NAME_SAVED,
+                app_user=AppUser(id=42, display_name="Влад"),
+                selected_vault=ObsidianVault(
+                    id=1,
+                    app_user_id=42,
+                    installation_id=10,
+                    repository_id=20,
+                    owner="karateka-git",
+                    repository="my_obs_data",
+                    branch="main",
+                ),
+            )
+        )
+
+        self.assertIn("Регистрация завершена", reply)
+        self.assertIn("karateka-git/my_obs_data", reply)
 
     def test_format_incoming_message_result_reports_link_code(self) -> None:
         """Код привязки форматируется как команда для второго канала."""
@@ -201,12 +233,13 @@ class TelegramResponsesTest(unittest.TestCase):
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_REQUIRED,
-                app_user=AppUser(id=99),
+                app_user=AppUser(id=99, display_name="Основной профиль"),
             )
         )
 
         self.assertIn("Перепривязать", reply)
-        self.assertIn("ID 99", reply)
+        self.assertIn("Основной профиль", reply)
+        self.assertNotIn("99", reply)
         self.assertIn("да", reply)
         self.assertIn("нет", reply)
 
@@ -215,12 +248,13 @@ class TelegramResponsesTest(unittest.TestCase):
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.LINK_REBOUND,
-                app_user=AppUser(id=99),
+                app_user=AppUser(id=99, display_name="Основной профиль"),
             )
         )
 
         self.assertIn("перепривязал", reply)
-        self.assertIn("ID 99", reply)
+        self.assertIn("Основной профиль", reply)
+        self.assertNotIn("99", reply)
 
     def test_format_incoming_message_result_reports_pending_rebind(self) -> None:
         """Pending-перепривязка просит ответить да или нет."""
@@ -249,16 +283,18 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("Не удалось загрузить страницу", reply)
 
     def test_format_incoming_message_result_reports_status(self) -> None:
-        """Команда статуса сообщает ID пользователя и доступные действия."""
+        """Команда статуса сообщает имя и состояние vault без внутреннего ID."""
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.STATUS,
-                app_user=AppUser(id=42),
+                app_user=AppUser(id=42, display_name="Влад"),
             )
         )
 
         self.assertIn("Бот работает", reply)
-        self.assertIn("ID пользователя: 42", reply)
+        self.assertIn("Влад", reply)
+        self.assertIn("ещё не подключён", reply)
+        self.assertNotIn("42", reply)
 
     def test_format_github_authorization_returns_device_url_and_code(self) -> None:
         """Оба channel adapters получают безопасную инструкцию Device Flow."""

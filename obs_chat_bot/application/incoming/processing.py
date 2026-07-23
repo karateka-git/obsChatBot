@@ -27,6 +27,7 @@ from obs_chat_bot.application.incoming.commands import ChatCommand, ParsedChatCo
 from obs_chat_bot.application.users.identity import (
     CreatedLinkCode,
     IdentityAlreadyBoundError,
+    InvalidDisplayNameError,
     InvalidLinkCodeError,
     UserIdentityService,
 )
@@ -47,6 +48,7 @@ from obs_chat_bot.application.vaults.vault_selection import (
     VaultSelectionStatus,
 )
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
+from obs_chat_bot.domain.vaults.entities import ObsidianVault
 
 
 LOGGER = logging.getLogger(__name__)
@@ -61,6 +63,11 @@ class IncomingMessageResultType(StrEnum):
     START_REGISTERED = "start_registered"
     REGISTERED = "registered"
     ALREADY_REGISTERED = "already_registered"
+    REGISTRATION_NAME_REQUIRED = "registration_name_required"
+    REGISTRATION_NAME_SAVED = "registration_name_saved"
+    NAME_COMMAND_INVALID = "name_command_invalid"
+    NAME_UPDATED = "name_updated"
+    CONFIRMATION_MISSING = "confirmation_missing"
     LINK_CODE_CREATED = "link_code_created"
     LINK_COMMAND_INVALID = "link_command_invalid"
     LINKED = "linked"
@@ -116,6 +123,7 @@ class ProcessIncomingMessageResult:
     github_connection: GitHubConnectionStartResult | None = None
     github_completion: GitHubConnectionCompletion | None = None
     vault_selection: VaultSelectionResult | None = None
+    selected_vault: ObsidianVault | None = None
     installation_url: str | None = None
     error: Exception | None = None
 
@@ -321,7 +329,7 @@ class ProcessIncomingMessageUseCase:
             ):
                 return self._confirm_vault_replacement(app_user)
             return ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_MISSING
+                type=IncomingMessageResultType.CONFIRMATION_MISSING
             )
 
         if normalized_text in {"нет", "no", "n"}:
@@ -345,7 +353,7 @@ class ProcessIncomingMessageUseCase:
                         vault_selection=cancelled,
                     )
             return ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.LINK_REBIND_CANCELLED
+                type=IncomingMessageResultType.CONFIRMATION_MISSING
             )
 
         if self._user_identity_service.has_pending_rebind(identity):
@@ -359,9 +367,19 @@ class ProcessIncomingMessageUseCase:
                 return ProcessIncomingMessageResult(
                     type=IncomingMessageResultType.START_UNREGISTERED
                 )
+            if app_user.display_name is None:
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.REGISTRATION_NAME_REQUIRED,
+                    app_user=app_user,
+                )
+            selected_vault = (
+                self._vault_selection_manager.get_selected(app_user.id)
+                if self._vault_selection_manager is not None
+                else None
+            )
             if (
                 self._vault_selection_manager is not None
-                and self._vault_selection_manager.get_selected(app_user.id) is None
+                and selected_vault is None
             ):
                 return ProcessIncomingMessageResult(
                     type=IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED,
@@ -370,11 +388,20 @@ class ProcessIncomingMessageUseCase:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.START_REGISTERED,
                 app_user=app_user,
+                selected_vault=selected_vault,
             )
 
         if command is ChatCommand.REGISTER:
             existing = self._user_identity_service.resolve(identity)
             if existing is not None:
+                selected_vault = (
+                    self._vault_selection_manager.get_selected(existing.id)
+                    if (
+                        existing.display_name is not None
+                        and self._vault_selection_manager is not None
+                    )
+                    else None
+                )
                 LOGGER.debug(
                     "User already registered: app_user_id=%s channel=%s "
                     "external_user_id=%s external_chat_id=%s username=%s",
@@ -385,8 +412,20 @@ class ProcessIncomingMessageUseCase:
                     identity.username,
                 )
                 return ProcessIncomingMessageResult(
-                    type=IncomingMessageResultType.ALREADY_REGISTERED,
+                    type=(
+                        IncomingMessageResultType.REGISTRATION_NAME_REQUIRED
+                        if existing.display_name is None
+                        else (
+                            IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED
+                            if (
+                                self._vault_selection_manager is not None
+                                and selected_vault is None
+                            )
+                            else IncomingMessageResultType.ALREADY_REGISTERED
+                        )
+                    ),
                     app_user=existing,
+                    selected_vault=selected_vault,
                 )
 
             app_user = self._user_identity_service.register(identity)
@@ -409,6 +448,11 @@ class ProcessIncomingMessageUseCase:
             if app_user is None:
                 return ProcessIncomingMessageResult(
                     type=IncomingMessageResultType.UNKNOWN_IDENTITY
+                )
+            if app_user.display_name is None:
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.REGISTRATION_NAME_REQUIRED,
+                    app_user=app_user,
                 )
             link_code = self._user_identity_service.create_link_code(app_user.id)
             LOGGER.debug(
@@ -476,10 +520,28 @@ class ProcessIncomingMessageUseCase:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.UNKNOWN_IDENTITY
             )
+        if command is ChatCommand.NAME:
+            return self._update_display_name(
+                parsed_command.arguments if parsed_command is not None else "",
+                app_user,
+            )
+        if app_user.display_name is None:
+            if command is not None:
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.REGISTRATION_NAME_REQUIRED,
+                    app_user=app_user,
+                )
+            return self._save_registration_name(text, app_user)
         if command is ChatCommand.STATUS:
+            selected_vault = (
+                self._vault_selection_manager.get_selected(app_user.id)
+                if self._vault_selection_manager is not None
+                else None
+            )
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.STATUS,
                 app_user=app_user,
+                selected_vault=selected_vault,
             )
         repository_arguments = _github_repository_arguments(text)
         if repository_arguments is not None:
@@ -503,6 +565,56 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
         return app_user
+
+    def _save_registration_name(
+        self,
+        display_name: str,
+        app_user: AppUser,
+    ) -> ProcessIncomingMessageResult:
+        """Сохраняет обязательное имя и переводит onboarding к выбору vault."""
+        try:
+            updated = self._user_identity_service.update_display_name(
+                app_user_id=app_user.id,
+                display_name=display_name,
+            )
+        except (InvalidDisplayNameError, ValueError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.NAME_COMMAND_INVALID,
+                app_user=app_user,
+                error=error,
+            )
+        selected_vault = (
+            self._vault_selection_manager.get_selected(updated.id)
+            if self._vault_selection_manager is not None
+            else None
+        )
+        return ProcessIncomingMessageResult(
+            type=IncomingMessageResultType.REGISTRATION_NAME_SAVED,
+            app_user=updated,
+            selected_vault=selected_vault,
+        )
+
+    def _update_display_name(
+        self,
+        display_name: str,
+        app_user: AppUser,
+    ) -> ProcessIncomingMessageResult:
+        """Изменяет имя уже зарегистрированного внутреннего пользователя."""
+        try:
+            updated = self._user_identity_service.update_display_name(
+                app_user_id=app_user.id,
+                display_name=display_name,
+            )
+        except (InvalidDisplayNameError, ValueError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.NAME_COMMAND_INVALID,
+                app_user=app_user,
+                error=error,
+            )
+        return ProcessIncomingMessageResult(
+            type=IncomingMessageResultType.NAME_UPDATED,
+            app_user=updated,
+        )
 
     def _connect_registration_vault(
         self,

@@ -15,6 +15,14 @@ class AppUserRepository(Protocol):
     def get_by_id(self, app_user_id: int) -> AppUser | None:
         """Возвращает пользователя по ID или `None`."""
 
+    def update_display_name(
+        self,
+        *,
+        app_user_id: int,
+        display_name: str,
+    ) -> AppUser:
+        """Обновляет пользовательское имя профиля."""
+
     def delete(self, app_user_id: int) -> None:
         """Удаляет пользователя приложения по ID."""
 

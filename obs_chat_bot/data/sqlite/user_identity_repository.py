@@ -56,6 +56,29 @@ class SQLiteAppUserRepository(AppUserRepository):
             created_at=_parse_utc_timestamp(row["created_at"]),
         )
 
+    def update_display_name(
+        self,
+        *,
+        app_user_id: int,
+        display_name: str,
+    ) -> AppUser:
+        """Обновляет пользовательское имя профиля."""
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE app_users
+                SET display_name = ?
+                WHERE id = ?
+                """,
+                (display_name, app_user_id),
+            )
+        if cursor.rowcount != 1:
+            raise ValueError("App user does not exist")
+        user = self.get_by_id(app_user_id)
+        if user is None:
+            raise RuntimeError("Updated app user could not be read")
+        return user
+
     def delete(self, app_user_id: int) -> None:
         """Удаляет пользователя приложения по ID."""
         with self._connection:

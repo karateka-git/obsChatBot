@@ -28,9 +28,15 @@ class SQLiteUserIdentityRepositoryTest(unittest.TestCase):
                 service = _service(connection)
 
                 user = service.register(_identity("telegram", "tg-1", "chat-1"))
+                named_user = service.update_display_name(
+                    app_user_id=user.id,
+                    display_name="  Влад   Ерофеев  ",
+                )
                 resolved = service.resolve(_identity("telegram", "tg-1", "chat-1"))
 
-        self.assertEqual(resolved, user)
+        self.assertIsNone(user.display_name)
+        self.assertEqual(named_user.display_name, "Влад Ерофеев")
+        self.assertEqual(resolved, named_user)
         self.assertEqual(user.id, 1)
 
     def test_link_code_binds_second_channel_to_same_user(self) -> None:

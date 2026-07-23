@@ -489,8 +489,10 @@
    - app slug;
    - путь к приватному PEM-ключу.
 3. Встроить общее для Telegram и VK подключение в `/register`:
-   - после регистрации пользователь присылает ссылку repository и optional
-     `vault-path` обычным сообщением;
+   - после регистрации пользователь задаёт имя общего профиля, затем присылает
+     ссылку repository и optional `vault-path` обычным сообщением;
+   - имя изменяется через `/name <имя>`, а внутренний `app_user_id` остаётся
+     технической деталью;
    - бот запускает Device Flow только при необходимости и после авторизации
      автоматически продолжает проверку исходного repository;
    - installation URL показывается только если App не установлено или не имеет
@@ -854,8 +856,10 @@ ID сохранён, временные tokens в SQLite не попали. GitH
 `Contents: write`, однако новая permission должна быть отдельно одобрена для
 существующей installation.
 
-Этап 9.3 выбор vault завершён: `/register` запускает onboarding, после чего бот
-запрашивает обычную ссылку repository и optional `vault-path`.
+Этап 9.3 выбор vault завершён: `/register` запускает onboarding, запрашивает имя
+общего профиля, затем обычную ссылку repository и optional `vault-path`.
+Команда `/name <имя>` меняет имя для всех связанных каналов, внутренний
+`app_user_id` в пользовательских ответах не показывается.
 Отдельные `/github_connect` и `/github_vault` удалены. Onboarding требует
 repository-scoped installation token с `Contents: write`, поэтому публичный
 repository без права записи не принимается. Бот читает default branch и repository ID из GitHub,

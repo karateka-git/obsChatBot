@@ -411,6 +411,15 @@ class ProcessUrlCliTest(unittest.TestCase):
                 use_case_factory=lambda _connection: fake_use_case,
                 analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
             )
+            process_channel_incoming_message(
+                database_path=database_path,
+                incoming_message=_telegram_message("Test User", "msg-name"),
+                openai_base_url="https://llm.example/v1",
+                openai_api_key="token",
+                openai_model="fake-model",
+                use_case_factory=lambda _connection: fake_use_case,
+                analysis_use_case_factory=lambda _connection: fake_analysis_use_case,
+            )
             result = process_channel_incoming_message(
                 database_path=database_path,
                 incoming_message=_telegram_message("https://example.com/article", "msg-2"),

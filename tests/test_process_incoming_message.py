@@ -138,7 +138,7 @@ class FakeUserIdentityService:
     """Fake identity service для команд зарегистрированного пользователя."""
 
     def __init__(self) -> None:
-        self.app_user = AppUser(id=42)
+        self.app_user = AppUser(id=42, display_name="Test User")
 
     def resolve(self, _identity: IncomingIdentity) -> AppUser | None:
         """Всегда возвращает пользователя."""
@@ -155,13 +155,26 @@ class FakeUserIdentityService:
     def cancel_rebind(self, _identity: IncomingIdentity) -> None:
         """Запоминает отмену перепривязки."""
 
+    def update_display_name(
+        self,
+        *,
+        app_user_id: int,
+        display_name: str,
+    ) -> AppUser:
+        """Обновляет тестовое имя пользователя."""
+        self.app_user = AppUser(
+            id=app_user_id,
+            display_name=" ".join(display_name.split()),
+        )
+        return self.app_user
+
 
 class FakeRebindIdentityService(FakeUserIdentityService):
     """Fake identity service для проверки подтверждения перепривязки."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.target_user = AppUser(id=99)
+        self.target_user = AppUser(id=99, display_name="Target User")
         self.rebind_requested = False
         self.rebind_confirmed = False
         self.rebind_cancelled = False
@@ -217,6 +230,20 @@ class FakeRegisteringIdentityService:
     def register(self, _identity: IncomingIdentity) -> AppUser:
         """Создает пользователя и запоминает регистрацию."""
         self.register_calls += 1
+        self._existing = self.app_user
+        return self.app_user
+
+    def update_display_name(
+        self,
+        *,
+        app_user_id: int,
+        display_name: str,
+    ) -> AppUser:
+        """Сохраняет тестовое имя после регистрации."""
+        self.app_user = AppUser(
+            id=app_user_id,
+            display_name=" ".join(display_name.split()),
+        )
         self._existing = self.app_user
         return self.app_user
 
@@ -611,7 +638,7 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(article_use_case.commands, [])
 
     def test_execute_registers_new_identity(self) -> None:
-        """Команда `/register` создает пользователя для нового канала."""
+        """Команда `/register` создаёт пользователя и запрашивает имя."""
         identity_service = FakeRegisteringIdentityService()
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
@@ -622,11 +649,83 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
 
         self.assertEqual(result.type, IncomingMessageResultType.REGISTERED)
         self.assertEqual(result.app_user.id, 77)
+        self.assertIsNone(result.app_user.display_name)
         self.assertEqual(identity_service.register_calls, 1)
+
+    def test_execute_saves_registration_name_before_vault(self) -> None:
+        """Обычный текст после `/register` становится общим именем профиля."""
+        identity_service = FakeRegisteringIdentityService()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+            vault_selection_manager=FakeVaultSelectionManager(),
+        )
+
+        use_case.execute(_telegram_message("/register"))
+        result = use_case.execute(_telegram_message("  Влад   Ерофеев  "))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.REGISTRATION_NAME_SAVED,
+        )
+        self.assertEqual(result.app_user.display_name, "Влад Ерофеев")
+        self.assertIsNone(result.selected_vault)
+
+    def test_execute_saves_name_without_reselecting_existing_vault(self) -> None:
+        """Переходный профиль с vault завершает onboarding только вводом имени."""
+        identity_service = FakeRegisteringIdentityService(existing=AppUser(id=42))
+        selected_vault = _test_vault(42)
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+            vault_selection_manager=FakeVaultSelectionManager(
+                selected=selected_vault
+            ),
+        )
+
+        result = use_case.execute(_telegram_message("Влад"))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.REGISTRATION_NAME_SAVED,
+        )
+        self.assertEqual(result.selected_vault, selected_vault)
+
+    def test_execute_name_command_changes_profile_name(self) -> None:
+        """`/name` меняет общее имя пользователя всех связанных каналов."""
+        identity_service = FakeUserIdentityService()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=identity_service,
+        )
+
+        result = use_case.execute(_telegram_message("/name Влад"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.NAME_UPDATED)
+        self.assertEqual(result.app_user.display_name, "Влад")
+
+    def test_execute_no_without_confirmation_reports_missing_action(self) -> None:
+        """`нет` без pending-действия не сообщает о несуществующей отмене."""
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            vault_selection_manager=FakeVaultSelectionManager(
+                selected=_test_vault(42)
+            ),
+        )
+
+        result = use_case.execute(_telegram_message("нет"))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.CONFIRMATION_MISSING,
+        )
 
     def test_execute_reports_already_registered_identity(self) -> None:
         """Повторный `/register` не создает пользователя заново."""
-        identity_service = FakeRegisteringIdentityService(existing=AppUser(id=42))
+        identity_service = FakeRegisteringIdentityService(
+            existing=AppUser(id=42, display_name="Test User")
+        )
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=identity_service,
@@ -640,7 +739,9 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
 
     def test_execute_start_reports_registered_identity(self) -> None:
         """`/start` для привязанного канала возвращает registered-start result."""
-        identity_service = FakeRegisteringIdentityService(existing=AppUser(id=42))
+        identity_service = FakeRegisteringIdentityService(
+            existing=AppUser(id=42, display_name="Test User")
+        )
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=identity_service,

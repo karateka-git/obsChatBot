@@ -55,11 +55,17 @@ class ChatCommand(StrEnum):
         "",
         "зарегистрироваться и подключить Obsidian vault",
     )
+    NAME = (
+        "/name",
+        CommandSection.BASIC,
+        "<имя>",
+        "изменить имя или название профиля",
+    )
     STATUS = (
         "/status",
         CommandSection.BASIC,
         "",
-        "показать ID текущего пользователя",
+        "показать состояние подключения",
     )
     LINK_CODE = (
         "/link_code",
