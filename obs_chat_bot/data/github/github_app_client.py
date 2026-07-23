@@ -209,7 +209,13 @@ class UrllibGitHubAppClient(
             raise ValueError("installation_id must be positive")
         if not owner.strip() or not repository.strip():
             raise ValueError("owner and repository must not be empty")
-        token = self.create_installation_token(installation_id=installation_id)
+        token = self._create_repository_write_token(
+            installation_id=installation_id,
+            owner=owner,
+            repository=repository,
+        )
+        if token is None:
+            return None
         encoded_owner = quote(owner, safe="")
         encoded_repository = quote(repository, safe="")
         repository_payload = self._request_json_or_none(
@@ -220,6 +226,10 @@ class UrllibGitHubAppClient(
             )
         )
         if repository_payload is None:
+            return None
+        if repository_payload.get("archived") is True:
+            return None
+        if repository_payload.get("disabled") is True:
             return None
 
         repository_id = _require_positive_int(repository_payload, "id")
@@ -251,6 +261,71 @@ class UrllibGitHubAppClient(
             root_path_is_directory=isinstance(contents_payload, list),
         )
 
+    def _create_repository_write_token(
+        self,
+        *,
+        installation_id: int,
+        owner: str,
+        repository: str,
+    ) -> GitHubInstallationAccessToken | None:
+        """Выпускает token записи, ограниченный конкретным repository.
+
+        GitHub отклоняет запрос, если repository не входит в installation или
+        installation не получила `Contents: write`. Выданный token дополнительно
+        содержит repository, на который он ограничен: это позволяет сверить полный
+        owner/name, даже если одинаковое имя есть у разных владельцев.
+        """
+        body = {
+            "repositories": [repository],
+            "permissions": {
+                "contents": "write",
+                "metadata": "read",
+            },
+        }
+        app_jwt = self._app_jwt_factory()
+        payload = self._request_json_or_none(
+            Request(
+                f"{GITHUB_API_BASE_URL}/app/installations/"
+                f"{installation_id}/access_tokens",
+                data=json.dumps(body).encode("utf-8"),
+                headers={
+                    **self._api_headers(app_jwt),
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            ),
+            absent_statuses=frozenset({403, 404, 422}),
+        )
+        if payload is None:
+            return None
+        permissions = payload.get("permissions")
+        if not isinstance(permissions, dict):
+            raise GitHubGatewayError(
+                "GitHub installation token permissions have unexpected format"
+            )
+        if permissions.get("contents") != "write":
+            return None
+        repositories = payload.get("repositories")
+        if not isinstance(repositories, list):
+            raise GitHubGatewayError(
+                "GitHub installation token repositories have unexpected format"
+            )
+        expected_full_name = f"{owner}/{repository}".casefold()
+        granted_full_names = {
+            item.get("full_name").casefold()
+            for item in repositories
+            if isinstance(item, dict)
+            and isinstance(item.get("full_name"), str)
+        }
+        if expected_full_name not in granted_full_names:
+            return None
+        return GitHubInstallationAccessToken(
+            value=_require_string(payload, "token"),
+            expires_at=_parse_github_timestamp(
+                _require_string(payload, "expires_at")
+            ),
+        )
+
     def _post_form(self, url: str, values: dict[str, str]) -> dict[str, Any]:
         return self._request_json(
             Request(
@@ -279,8 +354,16 @@ class UrllibGitHubAppClient(
             raise GitHubGatewayError("GitHub response is not a JSON object")
         return payload
 
-    def _request_json_or_none(self, request: Request) -> dict[str, Any] | None:
-        payload = self._request_json_value(request, allow_not_found=True)
+    def _request_json_or_none(
+        self,
+        request: Request,
+        *,
+        absent_statuses: frozenset[int] = frozenset({404}),
+    ) -> dict[str, Any] | None:
+        payload = self._request_json_value(
+            request,
+            absent_statuses=absent_statuses,
+        )
         if payload is None:
             return None
         if not isinstance(payload, dict):
@@ -292,12 +375,15 @@ class UrllibGitHubAppClient(
         request: Request,
         *,
         allow_not_found: bool = False,
+        absent_statuses: frozenset[int] = frozenset(),
     ) -> Any | None:
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
-            if allow_not_found and error.code == 404:
+            if (allow_not_found and error.code == 404) or (
+                error.code in absent_statuses
+            ):
                 return None
             raise GitHubGatewayError(
                 f"GitHub request failed with HTTP {error.code}"

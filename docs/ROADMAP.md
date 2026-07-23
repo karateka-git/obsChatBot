@@ -857,9 +857,11 @@ ID сохранён, временные tokens в SQLite не попали. GitH
 path через `/github_vault`.
 
 Этап 9.3 выбор vault завершён: общая команда
-`/github_vault <repository-url> [vault-path]` проверяет repository только через
-разрешённые installations пользователя, читает default branch и repository ID из
-GitHub, валидирует каталог через Contents API и сохраняет первый активный vault.
+`/github_vault <repository-url> [vault-path]` требует repository-scoped
+installation token с `Contents: write`, поэтому публичный repository без права
+записи не принимается. Команда читает default branch и repository ID из GitHub,
+отклоняет архивные и отключённые repositories, валидирует каталог через Contents
+API и сохраняет первый активный vault.
 Повтор той же команды идемпотентен, а замена repository или path требует
 подтверждения `да`/`нет`, общего для Telegram и VK через SQLite. Installation
 tokens остаются краткоживущими и не сохраняются. Следующий программный шаг —

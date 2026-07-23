@@ -256,8 +256,10 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             )
         case IncomingMessageResultType.GITHUB_VAULT_REPOSITORY_UNAVAILABLE:
             return (
-                "Этот repository не найден среди доступных GitHub App.\n"
-                "Проверь URL и доступ приложения к repository."
+                "GitHub App не получила доступ на чтение и запись "
+                "этого repository.\n"
+                "Проверь URL, добавь repository в настройках GitHub App "
+                "и разреши `Contents: read and write`."
             )
         case IncomingMessageResultType.GITHUB_VAULT_PATH_NOT_FOUND:
             return (

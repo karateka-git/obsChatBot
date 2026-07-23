@@ -150,13 +150,16 @@ VK использует неизменный `random_id` одной retry-сер
 Команда `/github_vault <repository-url> [vault-path]` принимает только обычный
 HTTPS URL `github.com/owner/repository`. `vault-path` задаётся относительно корня
 repository с `/`; пустой путь означает корень. Проверка выполняется
-краткоживущим installation token, который не сохраняется и не логируется.
+краткоживущим installation token с `Contents: write`, ограниченным конкретным
+repository. Token не сохраняется и не логируется. Публичный repository,
+доступный App только для чтения, не может быть выбран как vault.
 
 Если бот сообщает, что repository недоступен, проверить:
 
 - GitHub App установлено именно на этот repository;
 - изменение permission `Contents: read and write` одобрено для существующей
   installation;
+- repository не находится в архивном или отключённом состоянии;
 - URL не ведёт на branch, файл, Issues или другую вложенную страницу.
 
 Замена активного vault хранится как подтверждение с TTL 10 минут и применяется

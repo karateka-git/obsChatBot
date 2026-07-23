@@ -201,7 +201,7 @@ class GitHubInstallationTokenProvider(Protocol):
 
 
 class GitHubRepositoryGateway(Protocol):
-    """Описывает чтение repository и проверку каталога vault через GitHub App."""
+    """Проверяет право записи repository и читает каталог vault через GitHub App."""
 
     def inspect_repository(
         self,
@@ -211,7 +211,7 @@ class GitHubRepositoryGateway(Protocol):
         repository: str,
         root_path: str,
     ) -> GitHubRepositoryInspection | None:
-        """Возвращает repository inspection или `None`, если он недоступен."""
+        """Возвращает inspection или `None` без фактического `Contents: write`."""
 
 
 class GitHubAccountAccessWriter(Protocol):

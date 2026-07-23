@@ -128,7 +128,7 @@ class GitHubVaultSelectionService(VaultSelectionManager):
         Raises:
             ValueError: URL или repository path имеют небезопасный формат.
             GitHubAccountNotConnectedError: У пользователя нет installations.
-            GitHubRepositoryNotAccessibleError: Repository не разрешён App.
+            GitHubRepositoryNotAccessibleError: У App нет права записи repository.
             GitHubVaultPathNotFoundError: Vault path не является каталогом.
         """
         if app_user_id <= 0:

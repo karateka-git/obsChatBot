@@ -142,12 +142,19 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertNotIn("ghs-secret", repr(token))
 
     def test_inspect_repository_checks_default_branch_and_vault_directory(self) -> None:
-        """Repository inspection использует installation token и Contents API."""
+        """Repository inspection требует write token и проверяет Contents API."""
         responses = [
             FakeResponse(
                 {
                     "token": "ghs-secret",
                     "expires_at": "2026-07-23T12:00:00Z",
+                    "permissions": {
+                        "contents": "write",
+                        "metadata": "read",
+                    },
+                    "repositories": [
+                        {"id": 501, "full_name": "octocat/notes"}
+                    ],
                 }
             ),
             FakeResponse(
@@ -174,8 +181,19 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertEqual(inspection.repository_id, 501)
         self.assertEqual(inspection.default_branch, "main")
         self.assertTrue(inspection.root_path_is_directory)
+        token_request = opener.call_args_list[0].args[0]
         repository_request = opener.call_args_list[1].args[0]
         contents_request = opener.call_args_list[2].args[0]
+        self.assertEqual(
+            json.loads(token_request.data),
+            {
+                "repositories": ["notes"],
+                "permissions": {
+                    "contents": "write",
+                    "metadata": "read",
+                },
+            },
+        )
         self.assertEqual(
             repository_request.full_url,
             "https://api.github.com/repos/octocat/notes",
@@ -190,35 +208,128 @@ class GitHubAppClientTest(unittest.TestCase):
             "Bearer ghs-secret",
         )
 
-    def test_inspect_repository_returns_none_on_not_found(self) -> None:
-        """HTTP 404 означает, что installation не имеет указанного repository."""
-        not_found = HTTPError(
-            url="https://api.github.com/repos/octocat/missing",
-            code=404,
-            msg="Not Found",
-            hdrs=None,
-            fp=None,
-        )
+    def test_inspect_repository_rejects_repository_without_write_access(self) -> None:
+        """Публичный repository не подключается, если GitHub не выдаёт write token."""
+        for status in (403, 404, 422):
+            denied = HTTPError(
+                url="https://api.github.com/app/installations/101/access_tokens",
+                code=status,
+                msg="Repository access denied",
+                hdrs=None,
+                fp=None,
+            )
+            with self.subTest(status=status), patch(
+                "obs_chat_bot.data.github.github_app_client.urlopen",
+                side_effect=denied,
+            ) as opener:
+                inspection = _client().inspect_repository(
+                    installation_id=101,
+                    owner="octocat",
+                    repository="public-but-not-selected",
+                    root_path="",
+                )
+
+            self.assertIsNone(inspection)
+            self.assertEqual(opener.call_count, 1)
+
+    def test_inspect_repository_rejects_read_only_token(self) -> None:
+        """Даже выданный token без `Contents: write` не разрешает vault."""
         with patch(
             "obs_chat_bot.data.github.github_app_client.urlopen",
-            side_effect=[
-                FakeResponse(
-                    {
-                        "token": "ghs-secret",
-                        "expires_at": "2026-07-23T12:00:00Z",
-                    }
-                ),
-                not_found,
-            ],
-        ):
+            return_value=FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-23T12:00:00Z",
+                    "permissions": {
+                        "contents": "read",
+                        "metadata": "read",
+                    },
+                    "repositories": [
+                        {"id": 501, "full_name": "octocat/read-only"}
+                    ],
+                }
+            ),
+        ) as opener:
             inspection = _client().inspect_repository(
                 installation_id=101,
                 owner="octocat",
-                repository="missing",
+                repository="read-only",
                 root_path="",
             )
 
         self.assertIsNone(inspection)
+        self.assertEqual(opener.call_count, 1)
+
+    def test_inspect_repository_rejects_archived_repository(self) -> None:
+        """Архивный repository нельзя выбрать для будущих commit."""
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-23T12:00:00Z",
+                    "permissions": {
+                        "contents": "write",
+                        "metadata": "read",
+                    },
+                    "repositories": [
+                        {"id": 501, "full_name": "octocat/notes"}
+                    ],
+                }
+            ),
+            FakeResponse(
+                {
+                    "id": 501,
+                    "name": "notes",
+                    "owner": {"login": "octocat"},
+                    "default_branch": "main",
+                    "archived": True,
+                }
+            ),
+        ]
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ) as opener:
+            inspection = _client().inspect_repository(
+                installation_id=101,
+                owner="octocat",
+                repository="notes",
+                root_path="",
+            )
+
+        self.assertIsNone(inspection)
+        self.assertEqual(opener.call_count, 2)
+
+    def test_inspect_repository_rejects_different_owner_with_same_name(self) -> None:
+        """Token другого owner не разрешает публичный repository с тем же именем."""
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-23T12:00:00Z",
+                    "permissions": {
+                        "contents": "write",
+                        "metadata": "read",
+                    },
+                    "repositories": [
+                        {"id": 501, "full_name": "octocat/notes"}
+                    ],
+                }
+            ),
+        ]
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ) as opener:
+            inspection = _client().inspect_repository(
+                installation_id=101,
+                owner="another-owner",
+                repository="notes",
+                root_path="",
+            )
+
+        self.assertIsNone(inspection)
+        self.assertEqual(opener.call_count, 1)
 
     def test_http_error_does_not_include_response_or_token(self) -> None:
         """HTTP-ошибка сообщает только status и не раскрывает credentials."""

@@ -256,7 +256,8 @@
 
 - Принимать только HTTPS URL вида `github.com/owner/repository`; branch, query,
   fragment и вложенные GitHub-страницы не являются repository URL.
-- Искать repository только через installation IDs подключённого `app_user_id`.
+- Для каждого installation ID подключённого `app_user_id` запрашивать token,
+  ограниченный конкретным repository и permission `Contents: write`.
 - Читать `repository_id`, канонические owner/name и default branch из GitHub API,
   а каталог vault проверять через Contents API.
 - Пустой `vault-path` означает корень repository; непустой путь хранится как
@@ -269,8 +270,9 @@
 Причины:
 
 - Пользователь не вводит installation ID, repository ID или branch вручную.
-- Проверка через installation token гарантирует, что бот выбирает только реально
-  разрешённый GitHub App repository.
+- Repository-scoped write token проверяет итоговое требование приложения:
+  GitHub App может читать и записывать именно этот repository. Публичная
+  доступность только для чтения не считается достаточной.
 - Разделение выбора и синхронизации сохраняет простой атомарный контракт каждого
   application-сценария.
 

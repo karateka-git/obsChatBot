@@ -337,6 +337,17 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("main", reply)
         self.assertIn("Vault", reply)
 
+    def test_format_unavailable_vault_explains_required_write_access(self) -> None:
+        """Ошибка выбора объясняет требование чтения и записи repository."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_REPOSITORY_UNAVAILABLE,
+            )
+        )
+
+        self.assertIn("чтение и запись", reply)
+        self.assertIn("Contents: read and write", reply)
+
     def test_format_vault_replacement_requests_yes_or_no(self) -> None:
         """Предложение замены явно предупреждает об удалении локальных данных."""
         reply = format_incoming_message_result(
