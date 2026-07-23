@@ -19,12 +19,15 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageUseCase,
 )
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
     GitHubConnectionStartResult,
     GitHubConnectionStartStatus,
     GitHubDeviceAuthorization,
     GitHubGatewayError,
 )
 from obs_chat_bot.application.vaults.vault_selection import (
+    GitHubAccountNotConnectedError,
     VaultSelectionResult,
     VaultSelectionStatus,
 )
@@ -224,28 +227,12 @@ class FakeGitHubConnectionStarter:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
         self.app_user_ids: list[int] = []
-        self.reconnect_pending = False
+        self.completion_handler = None
 
-    def has_reconnect_confirmation(self, _app_user_id: int) -> bool:
-        """Возвращает состояние тестового подтверждения."""
-        return self.reconnect_pending
-
-    def confirm_reconnect(
-        self,
-        app_user_id: int,
-        _completion_handler=None,
-    ) -> GitHubConnectionStartResult | None:
-        """Подтверждает замену и запускает тестовый Device Flow."""
-        if not self.reconnect_pending:
-            return None
-        self.reconnect_pending = False
-        return self.start(app_user_id, _completion_handler)
-
-    def cancel_reconnect(self, _app_user_id: int) -> bool:
-        """Отменяет тестовое подтверждение."""
-        was_pending = self.reconnect_pending
-        self.reconnect_pending = False
-        return was_pending
+    @property
+    def installation_url(self) -> str:
+        """Возвращает тестовую страницу установки App."""
+        return "https://github.com/apps/obs-chat-bot/installations/new"
 
     def start(
         self,
@@ -254,6 +241,7 @@ class FakeGitHubConnectionStarter:
     ) -> GitHubConnectionStartResult:
         """Запоминает пользователя или поднимает настроенную ошибку."""
         self.app_user_ids.append(app_user_id)
+        self.completion_handler = _completion_handler
         if self.error is not None:
             raise self.error
         return GitHubConnectionStartResult(
@@ -277,10 +265,19 @@ class FakeVaultSelectionManager:
     def __init__(
         self,
         status: VaultSelectionStatus = VaultSelectionStatus.SELECTED,
+        *,
+        error: Exception | None = None,
+        selected: ObsidianVault | None = None,
     ) -> None:
         self.status = status
+        self.error = error
+        self.selected = selected
         self.calls: list[tuple[int, str, str]] = []
         self.replacement_pending = False
+
+    def get_selected(self, _app_user_id: int) -> ObsidianVault | None:
+        """Возвращает настроенный активный vault."""
+        return self.selected
 
     def select(
         self,
@@ -291,10 +288,18 @@ class FakeVaultSelectionManager:
     ) -> VaultSelectionResult:
         """Запоминает команду и возвращает настроенный результат."""
         self.calls.append((app_user_id, repository_url, root_path))
+        if self.error is not None:
+            raise self.error
         self.replacement_pending = (
             self.status is VaultSelectionStatus.REPLACEMENT_CONFIRMATION_REQUIRED
         )
-        return VaultSelectionResult(self.status, _test_vault(app_user_id))
+        vault = _test_vault(app_user_id)
+        if self.status in {
+            VaultSelectionStatus.SELECTED,
+            VaultSelectionStatus.ALREADY_SELECTED,
+        }:
+            self.selected = vault
+        return VaultSelectionResult(self.status, vault)
 
     def has_replacement_confirmation(self, _app_user_id: int) -> bool:
         """Возвращает состояние ожидающей замены."""
@@ -399,29 +404,42 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(result.type, IncomingMessageResultType.STATUS)
         self.assertEqual(result.app_user.id, 42)
 
-    def test_execute_starts_github_connect_for_registered_user(self) -> None:
-        """`/github_connect` использует внутренний app_user, а не channel ID."""
+    def test_repository_url_starts_github_authorization_when_account_is_missing(
+        self,
+    ) -> None:
+        """Repository URL запускает Device Flow для внутреннего app_user."""
         starter = FakeGitHubConnectionStarter()
+        manager = FakeVaultSelectionManager(
+            error=GitHubAccountNotConnectedError("GitHub is not authorized")
+        )
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=FakeUserIdentityService(),
             github_connection_starter=starter,
+            vault_selection_manager=manager,
         )
 
-        result = use_case.execute(_telegram_message("/github_connect"))
+        result = use_case.execute(
+            _telegram_message("https://github.com/octocat/notes")
+        )
 
         self.assertEqual(result.type, IncomingMessageResultType.GITHUB_CONNECT_STARTED)
         self.assertEqual(result.github_connection.authorization.user_code, "ABCD-EFGH")
         self.assertEqual(starter.app_user_ids, [42])
 
     def test_execute_reports_unconfigured_github_connector(self) -> None:
-        """Команда сообщает об отключённой GitHub App конфигурации."""
+        """Repository URL сообщает об отключённой GitHub App конфигурации."""
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=FakeUserIdentityService(),
+            vault_selection_manager=FakeVaultSelectionManager(
+                error=GitHubAccountNotConnectedError("GitHub is not authorized")
+            ),
         )
 
-        result = use_case.execute(_telegram_message("/github_connect"))
+        result = use_case.execute(
+            _telegram_message("https://github.com/octocat/notes")
+        )
 
         self.assertEqual(
             result.type,
@@ -429,7 +447,7 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         )
 
     def test_execute_selects_github_vault_for_shared_app_user(self) -> None:
-        """`/github_vault` передаёт repository и path общему application-сервису."""
+        """Обычная GitHub-ссылка передаёт repository и path общему сервису."""
         manager = FakeVaultSelectionManager()
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
@@ -439,7 +457,7 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
 
         result = use_case.execute(
             _telegram_message(
-                "/github_vault https://github.com/octocat/notes Vault/Personal"
+                "https://github.com/octocat/notes Vault/Personal"
             )
         )
 
@@ -460,7 +478,7 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
             vault_selection_manager=manager,
         )
         pending = use_case.execute(
-            _telegram_message("/github_vault https://github.com/octocat/second")
+            _telegram_message("https://github.com/octocat/second")
         )
         confirmed = use_case.execute(_telegram_message("да"))
 
@@ -491,47 +509,106 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
             article_url_use_case=article_use_case,
             user_identity_service=FakeUserIdentityService(),
             github_connection_starter=starter,
+            vault_selection_manager=FakeVaultSelectionManager(
+                error=GitHubAccountNotConnectedError("GitHub is not authorized")
+            ),
         )
 
-        result = use_case.execute(_telegram_message("/github_connect"))
+        result = use_case.execute(
+            _telegram_message("https://github.com/octocat/notes")
+        )
 
         self.assertEqual(result.type, IncomingMessageResultType.GITHUB_CONNECT_FAILED)
         self.assertEqual(article_use_case.commands, [])
 
-    def test_execute_yes_confirms_github_reconnect_for_shared_app_user(self) -> None:
-        """`да` запускает замену GitHub-аккаунта через общий `app_user_id`."""
+    def test_authorization_completion_continues_original_vault_selection(self) -> None:
+        """После Device Flow бот автоматически продолжает исходный repository."""
         starter = FakeGitHubConnectionStarter()
-        starter.reconnect_pending = True
+        manager = FakeVaultSelectionManager(
+            error=GitHubAccountNotConnectedError("GitHub is not authorized")
+        )
+        completions = []
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=FakeUserIdentityService(),
             github_connection_starter=starter,
+            vault_selection_manager=manager,
         )
 
-        result = use_case.execute(_telegram_message("да"))
+        started = use_case.execute(
+            _telegram_message("https://github.com/octocat/notes Vault"),
+            completions.append,
+        )
+        manager.error = None
+        starter.completion_handler(
+            GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.CONNECTED,
+                installation_count=1,
+                account_login="octocat",
+            )
+        )
 
-        self.assertEqual(result.type, IncomingMessageResultType.GITHUB_CONNECT_STARTED)
-        self.assertEqual(starter.app_user_ids, [42])
-        self.assertFalse(starter.reconnect_pending)
+        self.assertEqual(started.type, IncomingMessageResultType.GITHUB_CONNECT_STARTED)
+        self.assertEqual(
+            completions[0].type,
+            IncomingMessageResultType.GITHUB_VAULT_SELECTED,
+        )
+        self.assertEqual(
+            manager.calls[-1],
+            (42, "https://github.com/octocat/notes", "Vault"),
+        )
 
-    def test_execute_no_cancels_github_reconnect_without_replacing_account(self) -> None:
-        """`нет` отменяет только pending-подтверждение GitHub."""
+    def test_authorization_without_installation_requests_app_setup(self) -> None:
+        """После Device Flow без installation бот даёт ссылку настройки App."""
         starter = FakeGitHubConnectionStarter()
-        starter.reconnect_pending = True
+        manager = FakeVaultSelectionManager(
+            error=GitHubAccountNotConnectedError("GitHub is not authorized")
+        )
+        completions = []
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=FakeArticleUrlUseCase(),
             user_identity_service=FakeUserIdentityService(),
             github_connection_starter=starter,
+            vault_selection_manager=manager,
         )
 
-        result = use_case.execute(_telegram_message("нет"))
+        use_case.execute(
+            _telegram_message("https://github.com/octocat/notes"),
+            completions.append,
+        )
+        starter.completion_handler(
+            GitHubConnectionCompletion(
+                GitHubConnectionCompletionStatus.NO_INSTALLATIONS
+            )
+        )
+
+        self.assertEqual(
+            completions[0].type,
+            IncomingMessageResultType.GITHUB_APP_REQUIRED,
+        )
+        self.assertEqual(
+            completions[0].installation_url,
+            starter.installation_url,
+        )
+
+    def test_article_is_blocked_until_registration_has_vault(self) -> None:
+        """Статьи не обрабатываются до завершения подключения Obsidian vault."""
+        article_use_case = FakeArticleUrlUseCase()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            user_identity_service=FakeUserIdentityService(),
+            vault_selection_manager=FakeVaultSelectionManager(),
+        )
+
+        result = use_case.execute(
+            _telegram_message("https://example.com/article")
+        )
 
         self.assertEqual(
             result.type,
-            IncomingMessageResultType.GITHUB_RECONNECT_CANCELLED,
+            IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED,
         )
-        self.assertEqual(starter.app_user_ids, [])
-        self.assertFalse(starter.reconnect_pending)
+        self.assertEqual(article_use_case.commands, [])
 
     def test_execute_registers_new_identity(self) -> None:
         """Команда `/register` создает пользователя для нового канала."""

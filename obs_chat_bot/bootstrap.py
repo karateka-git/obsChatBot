@@ -16,10 +16,7 @@ from obs_chat_bot.application.vaults.ports import (
     GitHubConnectionStarter,
     GitHubRepositoryGateway,
 )
-from obs_chat_bot.application.vaults.vault_selection import (
-    GitHubVaultSelectionService,
-    VaultSelectionManager,
-)
+from obs_chat_bot.application.vaults.vault_selection import VaultSelectionManager
 from obs_chat_bot.data.config import GitHubAppConfig
 from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
     TrafilaturaArticleTextExtractor,
@@ -41,11 +38,8 @@ from obs_chat_bot.data.sqlite.github_installation_writer import (
 from obs_chat_bot.data.sqlite.github_connection_state_store import (
     SQLiteGitHubConnectionStateStore,
 )
-from obs_chat_bot.data.sqlite.github_installation_repository import (
-    SQLiteGitHubInstallationRepository,
-)
-from obs_chat_bot.data.sqlite.obsidian_vault_repository import (
-    SQLiteObsidianVaultRepository,
+from obs_chat_bot.data.sqlite.github_vault_selection_manager import (
+    SQLiteGitHubVaultSelectionManager,
 )
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
@@ -55,9 +49,6 @@ from obs_chat_bot.data.sqlite.user_identity_repository import (
     SQLiteExternalIdentityRepository,
     SQLiteIdentityRebindConfirmationRepository,
     SQLiteIdentityLinkTokenRepository,
-)
-from obs_chat_bot.data.sqlite.vault_confirmation_repository import (
-    SQLiteVaultActionConfirmationRepository,
 )
 
 
@@ -192,22 +183,20 @@ def create_github_app_client(config: GitHubAppConfig) -> UrllibGitHubAppClient:
 
 def create_vault_selection_manager(
     *,
-    connection: sqlite3.Connection,
+    database_path: Path,
     github_gateway: GitHubRepositoryGateway,
 ) -> VaultSelectionManager:
     """Собирает application-сценарий выбора vault для одного сообщения.
 
     Args:
-        connection: Соединение SQLite текущего worker.
+        database_path: Путь к общей SQLite-базе adapters.
         github_gateway: Процессный GitHub App HTTP adapter.
 
     Returns:
         Сервис с общими SQLite repositories пользователя.
     """
-    return GitHubVaultSelectionService(
-        installation_repository=SQLiteGitHubInstallationRepository(connection),
-        vault_repository=SQLiteObsidianVaultRepository(connection),
-        confirmation_repository=SQLiteVaultActionConfirmationRepository(connection),
+    return SQLiteGitHubVaultSelectionManager(
+        database_path=database_path,
         github_gateway=github_gateway,
     )
 

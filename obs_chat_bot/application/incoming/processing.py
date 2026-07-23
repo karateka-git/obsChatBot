@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from enum import StrEnum
 import logging
 
@@ -30,14 +31,13 @@ from obs_chat_bot.application.users.identity import (
     UserIdentityService,
 )
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubConnectionCompletion,
+    GitHubConnectionCompletionStatus,
     GitHubConnectionStartResult,
     GitHubConnectionStartStatus,
     GitHubGatewayError,
 )
-from obs_chat_bot.application.vaults.ports import (
-    GitHubConnectionCompletionHandler,
-    GitHubConnectionStarter,
-)
+from obs_chat_bot.application.vaults.ports import GitHubConnectionStarter
 from obs_chat_bot.application.vaults.vault_selection import (
     GitHubAccountNotConnectedError,
     GitHubRepositoryNotAccessibleError,
@@ -85,10 +85,9 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_CONNECT_PREPARING = "github_connect_preparing"
     GITHUB_CONNECT_UNAVAILABLE = "github_connect_unavailable"
     GITHUB_CONNECT_FAILED = "github_connect_failed"
-    GITHUB_RECONNECT_CONFIRMATION_REQUIRED = "github_reconnect_confirmation_required"
-    GITHUB_RECONNECT_CANCELLED = "github_reconnect_cancelled"
-    GITHUB_RECONNECT_CONFIRMATION_MISSING = "github_reconnect_confirmation_missing"
     GITHUB_CONNECT_IN_PROGRESS = "github_connect_in_progress"
+    REGISTRATION_VAULT_REQUIRED = "registration_vault_required"
+    GITHUB_APP_REQUIRED = "github_app_required"
     GITHUB_VAULT_COMMAND_INVALID = "github_vault_command_invalid"
     GITHUB_VAULT_SELECTED = "github_vault_selected"
     GITHUB_VAULT_ALREADY_SELECTED = "github_vault_already_selected"
@@ -115,8 +114,13 @@ class ProcessIncomingMessageResult:
     article_result: ProcessArticleUrlResult | None = None
     analysis_result: AnalyzeArticleResult | None = None
     github_connection: GitHubConnectionStartResult | None = None
+    github_completion: GitHubConnectionCompletion | None = None
     vault_selection: VaultSelectionResult | None = None
+    installation_url: str | None = None
     error: Exception | None = None
+
+
+IncomingCompletionHandler = Callable[[ProcessIncomingMessageResult], None]
 
 
 class ProcessIncomingMessageUseCase:
@@ -142,13 +146,13 @@ class ProcessIncomingMessageUseCase:
     def execute(
         self,
         incoming_message: IncomingMessage,
-        github_completion_handler: GitHubConnectionCompletionHandler | None = None,
+        completion_handler: IncomingCompletionHandler | None = None,
     ) -> ProcessIncomingMessageResult:
         """Выполняет общий flow регистрации, сохранения статьи и анализа.
 
         Args:
             incoming_message: Нормализованное сообщение внешнего канала.
-            github_completion_handler: Callback итогового ответа Device Flow в
+            completion_handler: Callback итогового ответа фоновой регистрации в
                 исходный чат или `None`, если фоновый ответ не поддерживается.
 
         Returns:
@@ -165,7 +169,7 @@ class ProcessIncomingMessageUseCase:
         )
         app_user_result = self._resolve_app_user(
             incoming_message,
-            github_completion_handler=github_completion_handler,
+            completion_handler=completion_handler,
         )
         if isinstance(app_user_result, ProcessIncomingMessageResult):
             _log_result(app_user_result)
@@ -280,7 +284,7 @@ class ProcessIncomingMessageUseCase:
         self,
         incoming_message: IncomingMessage,
         *,
-        github_completion_handler: GitHubConnectionCompletionHandler | None,
+        completion_handler: IncomingCompletionHandler | None,
     ) -> AppUser | ProcessIncomingMessageResult:
         """Определяет пользователя приложения или возвращает результат onboarding."""
         text = incoming_message.text.strip()
@@ -310,17 +314,6 @@ class ProcessIncomingMessageUseCase:
             app_user = self._user_identity_service.resolve(identity)
             if (
                 app_user is not None
-                and self._github_connection_starter is not None
-                and self._github_connection_starter.has_reconnect_confirmation(
-                    app_user.id
-                )
-            ):
-                return self._confirm_github_reconnect(
-                    app_user,
-                    github_completion_handler=github_completion_handler,
-                )
-            if (
-                app_user is not None
                 and self._vault_selection_manager is not None
                 and self._vault_selection_manager.has_replacement_confirmation(
                     app_user.id
@@ -338,15 +331,6 @@ class ProcessIncomingMessageUseCase:
                     type=IncomingMessageResultType.LINK_REBIND_CANCELLED
                 )
             app_user = self._user_identity_service.resolve(identity)
-            if (
-                app_user is not None
-                and self._github_connection_starter is not None
-                and self._github_connection_starter.cancel_reconnect(app_user.id)
-            ):
-                return ProcessIncomingMessageResult(
-                    type=IncomingMessageResultType.GITHUB_RECONNECT_CANCELLED,
-                    app_user=app_user,
-                )
             if app_user is not None and self._vault_selection_manager is not None:
                 cancelled = self._vault_selection_manager.cancel_replacement(
                     app_user.id
@@ -374,6 +358,14 @@ class ProcessIncomingMessageUseCase:
             if app_user is None:
                 return ProcessIncomingMessageResult(
                     type=IncomingMessageResultType.START_UNREGISTERED
+                )
+            if (
+                self._vault_selection_manager is not None
+                and self._vault_selection_manager.get_selected(app_user.id) is None
+            ):
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED,
+                    app_user=app_user,
                 )
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.START_REGISTERED,
@@ -489,15 +481,12 @@ class ProcessIncomingMessageUseCase:
                 type=IncomingMessageResultType.STATUS,
                 app_user=app_user,
             )
-        if command is ChatCommand.GITHUB_CONNECT:
-            return self._start_github_connection(
+        repository_arguments = _github_repository_arguments(text)
+        if repository_arguments is not None:
+            return self._connect_registration_vault(
+                repository_arguments,
                 app_user,
-                github_completion_handler=github_completion_handler,
-            )
-        if command is ChatCommand.GITHUB_VAULT:
-            return self._select_github_vault(
-                parsed_command.arguments if parsed_command is not None else "",
-                app_user,
+                completion_handler=completion_handler,
             )
         if command is ChatCommand.REANALYZE:
             return self._reanalyze_article(
@@ -505,24 +494,69 @@ class ProcessIncomingMessageUseCase:
                 incoming_message,
                 app_user,
             )
+        if (
+            self._vault_selection_manager is not None
+            and self._vault_selection_manager.get_selected(app_user.id) is None
+        ):
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED,
+                app_user=app_user,
+            )
         return app_user
+
+    def _connect_registration_vault(
+        self,
+        arguments: str,
+        app_user: AppUser,
+        *,
+        completion_handler: IncomingCompletionHandler | None,
+    ) -> ProcessIncomingMessageResult:
+        """Подключает vault либо запускает необходимую GitHub-авторизацию."""
+        result = self._select_github_vault(arguments, app_user)
+        if result.type is IncomingMessageResultType.GITHUB_VAULT_GITHUB_REQUIRED:
+            return self._start_github_connection(
+                arguments,
+                app_user,
+                completion_handler=completion_handler,
+            )
+        if (
+            result.type
+            is IncomingMessageResultType.GITHUB_VAULT_REPOSITORY_UNAVAILABLE
+            and self._github_connection_starter is not None
+        ):
+            return _with_installation_url(
+                result,
+                self._github_connection_starter.installation_url,
+            )
+        return result
 
     def _start_github_connection(
         self,
+        repository_arguments: str,
         app_user: AppUser,
         *,
-        github_completion_handler: GitHubConnectionCompletionHandler | None,
+        completion_handler: IncomingCompletionHandler | None,
     ) -> ProcessIncomingMessageResult:
-        """Запускает общий для Telegram/VK GitHub Device Flow."""
+        """Запускает Device Flow и продолжает выбор исходного vault после него."""
         if self._github_connection_starter is None:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
                 app_user=app_user,
             )
+
+        def complete_github(completion: GitHubConnectionCompletion) -> None:
+            result = self._complete_github_registration(
+                repository_arguments,
+                app_user,
+                completion,
+            )
+            if completion_handler is not None:
+                completion_handler(result)
+
         try:
             connection = self._github_connection_starter.start(
                 app_user.id,
-                github_completion_handler,
+                complete_github,
             )
         except (GitHubGatewayError, OSError, ValueError) as error:
             return ProcessIncomingMessageResult(
@@ -540,9 +574,6 @@ class ProcessIncomingMessageUseCase:
             GitHubConnectionStartStatus.PREPARING: (
                 IncomingMessageResultType.GITHUB_CONNECT_PREPARING
             ),
-            GitHubConnectionStartStatus.RECONNECT_CONFIRMATION_REQUIRED: (
-                IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_REQUIRED
-            ),
             GitHubConnectionStartStatus.IN_PROGRESS: (
                 IncomingMessageResultType.GITHUB_CONNECT_IN_PROGRESS
             ),
@@ -553,12 +584,48 @@ class ProcessIncomingMessageUseCase:
             github_connection=connection,
         )
 
+    def _complete_github_registration(
+        self,
+        repository_arguments: str,
+        app_user: AppUser,
+        completion: GitHubConnectionCompletion,
+    ) -> ProcessIncomingMessageResult:
+        """Продолжает регистрацию после завершения фонового Device Flow."""
+        if completion.status is GitHubConnectionCompletionStatus.CONNECTED:
+            result = self._select_github_vault(repository_arguments, app_user)
+            if (
+                result.type
+                is IncomingMessageResultType.GITHUB_VAULT_REPOSITORY_UNAVAILABLE
+                and self._github_connection_starter is not None
+            ):
+                return _with_installation_url(
+                    result,
+                    self._github_connection_starter.installation_url,
+                )
+            return result
+        if completion.status is GitHubConnectionCompletionStatus.NO_INSTALLATIONS:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_APP_REQUIRED,
+                app_user=app_user,
+                github_completion=completion,
+                installation_url=(
+                    self._github_connection_starter.installation_url
+                    if self._github_connection_starter is not None
+                    else None
+                ),
+            )
+        return ProcessIncomingMessageResult(
+            type=IncomingMessageResultType.GITHUB_CONNECT_FAILED,
+            app_user=app_user,
+            github_completion=completion,
+        )
+
     def _select_github_vault(
         self,
         arguments: str,
         app_user: AppUser,
     ) -> ProcessIncomingMessageResult:
-        """Проверяет аргументы `/github_vault` и запускает выбор vault."""
+        """Проверяет GitHub URL из регистрации и запускает выбор vault."""
         parts = arguments.split(maxsplit=1)
         if not parts:
             return ProcessIncomingMessageResult(
@@ -653,54 +720,6 @@ class ProcessIncomingMessageUseCase:
             vault_selection=selection,
         )
 
-    def _confirm_github_reconnect(
-        self,
-        app_user: AppUser,
-        *,
-        github_completion_handler: GitHubConnectionCompletionHandler | None,
-    ) -> ProcessIncomingMessageResult:
-        """Подтверждает замену GitHub-аккаунта и возвращает новый challenge."""
-        if self._github_connection_starter is None:
-            return ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
-                app_user=app_user,
-            )
-        try:
-            connection = self._github_connection_starter.confirm_reconnect(
-                app_user.id,
-                github_completion_handler,
-            )
-        except (GitHubGatewayError, OSError, ValueError) as error:
-            return ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.GITHUB_CONNECT_FAILED,
-                app_user=app_user,
-                error=error,
-            )
-        if connection is None:
-            return ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_MISSING,
-                app_user=app_user,
-            )
-        result_types = {
-            GitHubConnectionStartStatus.STARTED: (
-                IncomingMessageResultType.GITHUB_CONNECT_STARTED
-            ),
-            GitHubConnectionStartStatus.ALREADY_PENDING: (
-                IncomingMessageResultType.GITHUB_CONNECT_ALREADY_PENDING
-            ),
-            GitHubConnectionStartStatus.PREPARING: (
-                IncomingMessageResultType.GITHUB_CONNECT_PREPARING
-            ),
-            GitHubConnectionStartStatus.IN_PROGRESS: (
-                IncomingMessageResultType.GITHUB_CONNECT_IN_PROGRESS
-            ),
-        }
-        return ProcessIncomingMessageResult(
-            type=result_types[connection.status],
-            app_user=app_user,
-            github_connection=connection,
-        )
-
     def _reanalyze_article(
         self,
         arguments: str,
@@ -779,6 +798,25 @@ def _incoming_identity_from_message(incoming_message: IncomingMessage) -> Incomi
         username=incoming_message.username,
         display_name=incoming_message.display_name,
     )
+
+
+def _github_repository_arguments(text: str) -> str | None:
+    """Возвращает GitHub repository URL с optional path из обычного сообщения."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+    first_part = stripped.split(maxsplit=1)[0].lower()
+    if first_part.startswith(("https://github.com/", "http://github.com/")):
+        return stripped
+    return None
+
+
+def _with_installation_url(
+    result: ProcessIncomingMessageResult,
+    installation_url: str,
+) -> ProcessIncomingMessageResult:
+    """Добавляет безопасную ссылку настройки App к готовому результату."""
+    return replace(result, installation_url=installation_url)
 
 
 def _with_app_user(incoming_message: IncomingMessage, app_user: AppUser) -> IncomingMessage:

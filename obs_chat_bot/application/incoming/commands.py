@@ -9,7 +9,6 @@ class CommandSection(StrEnum):
 
     BASIC = "Основные"
     CHANNEL_LINKING = "Связь Telegram и VK"
-    GITHUB = "GitHub и Obsidian"
     ARTICLES = "Статьи"
 
 
@@ -54,7 +53,7 @@ class ChatCommand(StrEnum):
         "/register",
         CommandSection.BASIC,
         "",
-        "создать нового пользователя",
+        "зарегистрироваться и подключить Obsidian vault",
     )
     STATUS = (
         "/status",
@@ -73,18 +72,6 @@ class ChatCommand(StrEnum):
         CommandSection.CHANNEL_LINKING,
         "<код>",
         "привязать канал по полученному коду",
-    )
-    GITHUB_CONNECT = (
-        "/github_connect",
-        CommandSection.GITHUB,
-        "",
-        "подключить или заменить GitHub-аккаунт",
-    )
-    GITHUB_VAULT = (
-        "/github_vault",
-        CommandSection.GITHUB,
-        "<repository-url> [vault-path]",
-        "выбрать Obsidian vault",
     )
     REANALYZE = (
         "/reanalyze",

@@ -8,10 +8,7 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageResult,
 )
 from obs_chat_bot.application.incoming.commands import ChatCommand, CommandSection
-from obs_chat_bot.application.vaults.github_models import (
-    GitHubConnectionCompletion,
-    GitHubConnectionCompletionStatus,
-)
+from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletionStatus
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
 
@@ -105,14 +102,19 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 "Можешь прислать ссылку на статью или отправить `/help`."
             )
         case IncomingMessageResultType.REGISTERED:
-            return "Готово, я зарегистрировал тебя. Теперь пришли ссылку на статью."
+            return (
+                "Готово, я зарегистрировал тебя.\n"
+                "Теперь пришли ссылку на GitHub-репозиторий с Obsidian vault.\n"
+                "Если vault находится во вложенной папке, добавь путь после ссылки."
+            )
         case IncomingMessageResultType.ALREADY_REGISTERED:
             if result.app_user is None:
-                return "Ты уже зарегистрирован. Теперь пришли ссылку на статью."
+                return "Ты уже зарегистрирован. Пришли ссылку на GitHub repository."
             return (
                 "Ты уже зарегистрирован.\n"
                 f"ID пользователя: {result.app_user.id}\n"
-                "Теперь можно прислать ссылку на статью."
+                "Пришли ссылку на GitHub-репозиторий с Obsidian vault, "
+                "чтобы продолжить или изменить настройку."
             )
         case IncomingMessageResultType.LINK_CODE_CREATED:
             if result.link_code is None:
@@ -173,42 +175,39 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
         case IncomingMessageResultType.GITHUB_CONNECT_ALREADY_PENDING:
             return _format_github_connect_response(result, repeated=True)
         case IncomingMessageResultType.GITHUB_CONNECT_PREPARING:
-            return (
-                "Подключение GitHub уже запускается. "
-                "Повтори `/github_connect` через несколько секунд."
-            )
+            return "Авторизация GitHub уже запускается. Подожди несколько секунд."
         case IncomingMessageResultType.GITHUB_CONNECT_IN_PROGRESS:
             return (
                 "Подключение GitHub уже выполняется в другом привязанном канале. "
                 "Заверши его там или дождись истечения одноразового кода."
             )
-        case IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_REQUIRED:
-            connection = result.github_connection
-            login = (
-                connection.connected_account_login
-                if connection is not None
-                else None
-            )
-            account = f" `{login}`" if login else ""
-            return (
-                f"К пользователю уже подключён GitHub-аккаунт{account}.\n"
-                "Заменить его другим GitHub-аккаунтом? Ответь `да` или `нет`."
-            )
-        case IncomingMessageResultType.GITHUB_RECONNECT_CANCELLED:
-            return "Переподключение отменено. Текущий GitHub-аккаунт сохранён."
-        case IncomingMessageResultType.GITHUB_RECONNECT_CONFIRMATION_MISSING:
-            return (
-                "Нет ожидающего переподключения GitHub. "
-                "Сначала отправь `/github_connect`."
-            )
         case IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE:
             return "GitHub connector пока не настроен на сервере."
         case IncomingMessageResultType.GITHUB_CONNECT_FAILED:
-            return "Не удалось начать подключение GitHub. Попробуй позже."
+            return _format_github_failure(result)
+        case IncomingMessageResultType.GITHUB_APP_REQUIRED:
+            suffix = (
+                f"\n\nНастроить GitHub App:\n{result.installation_url}"
+                if result.installation_url
+                else ""
+            )
+            return (
+                "GitHub-аккаунт авторизован, но GitHub App пока не имеет доступа "
+                "к нужному repository."
+                f"{suffix}\n\n"
+                "Выбери repository и разреши `Contents: read and write`, "
+                "затем снова пришли его ссылку."
+            )
+        case IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED:
+            return (
+                "Сначала заверши регистрацию: пришли ссылку на GitHub-репозиторий "
+                "с Obsidian vault."
+            )
         case IncomingMessageResultType.GITHUB_VAULT_COMMAND_INVALID:
             return (
-                "Пришли команду в формате:\n"
-                "`/github_vault https://github.com/owner/repository [vault-path]`\n"
+                "Пришли обычную ссылку на GitHub repository:\n"
+                "`https://github.com/owner/repository`\n"
+                "или `https://github.com/owner/repository vault/path`.\n"
                 "Если vault находится в корне repository, путь указывать не нужно."
             )
         case IncomingMessageResultType.GITHUB_VAULT_SELECTED:
@@ -247,19 +246,25 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
         case IncomingMessageResultType.GITHUB_VAULT_CONFIRMATION_MISSING:
             return (
                 "Нет ожидающей замены vault. "
-                "Сначала отправь `/github_vault <repository-url> [vault-path]`."
+                "Сначала пришли ссылку на новый GitHub repository."
             )
         case IncomingMessageResultType.GITHUB_VAULT_GITHUB_REQUIRED:
             return (
-                "Сначала подключи GitHub-аккаунт командой `/github_connect` "
-                "и разреши нужный repository."
+                "Для продолжения регистрации необходимо авторизовать GitHub."
             )
         case IncomingMessageResultType.GITHUB_VAULT_REPOSITORY_UNAVAILABLE:
+            suffix = (
+                f"\n\nНастроить GitHub App:\n{result.installation_url}"
+                if result.installation_url
+                else ""
+            )
             return (
                 "GitHub App не получила доступ на чтение и запись "
                 "этого repository.\n"
                 "Проверь URL, добавь repository в настройках GitHub App "
                 "и разреши `Contents: read and write`."
+                f"{suffix}\n\n"
+                "После настройки снова пришли ссылку на repository."
             )
         case IncomingMessageResultType.GITHUB_VAULT_PATH_NOT_FOUND:
             return (
@@ -313,21 +318,26 @@ def _format_help() -> str:
     """Формирует справку из единого типизированного реестра команд."""
     lines = ["Доступные команды:"]
     for section in CommandSection:
+        commands = [
+            command
+            for command in ChatCommand
+            if command.section is section
+        ]
+        if not commands:
+            continue
         lines.extend(
             (
                 "",
                 f"{section.value}:",
-                *(
-                    str(command)
-                    for command in ChatCommand
-                    if command.section is section
-                ),
+                *(str(command) for command in commands),
             )
         )
     lines.extend(
         (
             "",
-            "Пришли HTTP/HTTPS-ссылку — сохранить и проанализировать статью.",
+            "После `/register` пришли ссылку на GitHub repository с Obsidian vault.",
+            "После настройки пришли HTTP/HTTPS-ссылку — сохранить и "
+            "проанализировать статью.",
             "",
             "Ответы `да` и `нет` используются, когда бот просит подтвердить "
             "перепривязку или замену.",
@@ -360,57 +370,45 @@ def _format_github_connect_response(
     *,
     repeated: bool,
 ) -> str:
-    """Формирует безопасную инструкцию GitHub App + Device Flow."""
+    """Формирует безопасную инструкцию Device Flow внутри регистрации."""
     connection = result.github_connection
     if connection is None or connection.authorization is None:
-        return "Подключение GitHub запускается. Повтори команду через несколько секунд."
+        return "Авторизация GitHub запускается. Подожди несколько секунд."
     prefix = (
         "Авторизация уже ожидает подтверждения."
         if repeated
-        else "Начинаю подключение GitHub."
+        else "Для проверки repository необходимо авторизовать GitHub."
     )
     authorization = connection.authorization
     return (
         f"{prefix}\n\n"
-        "1. Установи GitHub App и выбери repository с Obsidian vault:\n"
-        f"{connection.installation_url}\n\n"
-        "2. Открой Device Flow:\n"
+        "1. Открой страницу авторизации:\n"
         f"{authorization.verification_uri}\n\n"
-        f"3. Введи одноразовый код: `{authorization.user_code}`\n\n"
-        "Проверка продолжится в фоне. Временный GitHub token не сохраняется."
+        f"2. Введи одноразовый код: `{authorization.user_code}`\n\n"
+        "После авторизации бот сам продолжит подключение vault. "
+        "Временный GitHub token не сохраняется."
     )
 
 
-def format_github_connection_completion(
-    completion: GitHubConnectionCompletion,
-) -> str:
-    """Формирует итоговый ответ фонового GitHub Device Flow."""
-    match completion.status:
-        case GitHubConnectionCompletionStatus.CONNECTED:
-            return (
-                f"GitHub-аккаунт `{completion.account_login}` успешно подключён.\n"
-                "Бот получил доступ к выбранным репозиториям."
-            )
-        case GitHubConnectionCompletionStatus.NO_INSTALLATIONS:
-            return (
-                "GitHub-аккаунт авторизован, но бот не получил доступ ни к одному "
-                "репозиторию.\n"
-                "Разреши нужный репозиторий для GitHub App и повтори "
-                "`/github_connect`."
-            )
-        case GitHubConnectionCompletionStatus.DENIED:
-            return "Авторизация GitHub отклонена. Для повтора отправь `/github_connect`."
-        case GitHubConnectionCompletionStatus.EXPIRED:
-            return (
-                "Код авторизации GitHub истёк. "
-                "Отправь `/github_connect`, чтобы получить новый."
-            )
-        case GitHubConnectionCompletionStatus.FAILED:
-            return (
-                "Не удалось завершить подключение GitHub. "
-                "Попробуй ещё раз через `/github_connect`."
-            )
-    raise ValueError(f"Unsupported GitHub completion status: {completion.status}")
+def _format_github_failure(result: ProcessIncomingMessageResult) -> str:
+    """Объясняет сбой фоновой GitHub-авторизации без технических деталей."""
+    completion = result.github_completion
+    if completion is None:
+        return "Не удалось начать авторизацию GitHub. Попробуй позже."
+    if completion.status is GitHubConnectionCompletionStatus.DENIED:
+        return (
+            "Авторизация GitHub отклонена. "
+            "Чтобы повторить, снова пришли ссылку на repository."
+        )
+    if completion.status is GitHubConnectionCompletionStatus.EXPIRED:
+        return (
+            "Код авторизации GitHub истёк. "
+            "Снова пришли ссылку на repository, чтобы получить новый."
+        )
+    return (
+        "Не удалось завершить авторизацию GitHub. "
+        "Снова пришли ссылку на repository или попробуй позже."
+    )
 
 
 def format_reanalysis_result(analysis_result: AnalyzeArticleResult) -> str:

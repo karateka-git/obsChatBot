@@ -225,28 +225,30 @@ docker compose run --rm --entrypoint python vk_catcher -m obs_chat_bot --vk-bot
 VK adapter использует тот же incoming-flow, регистрацию, привязку каналов,
 сохранение статей и LLM-анализ, что и Telegram.
 
-## 12. Подключить GitHub App
+## 12. Зарегистрироваться и подключить Obsidian vault
 
 Регистрация App, минимальные write permissions, Device Flow и PEM описаны в
 `docs/GITHUB_APP.md`. После заполнения GitHub-группы настроек в `.env` и
-перезапуска ботов зарегистрированный пользователь отправляет в Telegram или VK:
+перезапуска ботов новый пользователь отправляет в Telegram или VK:
 
 ```text
-/github_connect
+/register
 ```
 
-Бот возвращает installation URL, Device Flow URL и одноразовый код. Polling
-авторизации выполняется в background thread и не хранит временные tokens в
-SQLite. При аварийном перезапуске до завершения авторизации команду нужно повторить
-после истечения SQLite-защиты активной попытки (не более 20 минут от её начала).
-
-После успешного подключения GitHub пользователь выбирает repository и
+После создания пользователя бот просит прислать обычную ссылку на repository и
 необязательный каталог Obsidian vault:
 
 ```text
-/github_vault https://github.com/owner/repository
-/github_vault https://github.com/owner/repository path/to/vault
+https://github.com/owner/repository
+https://github.com/owner/repository path/to/vault
 ```
+
+Если GitHub ещё не авторизован, бот возвращает Device Flow URL и одноразовый код.
+Polling выполняется в background thread и не хранит временные tokens в SQLite.
+После авторизации бот автоматически продолжает проверку исходного repository.
+Если GitHub App не установлено или repository не выбран, бот даёт ссылку
+установки/настройки; после изменения настройки ссылку repository нужно прислать
+повторно.
 
 Бот запрашивает для конкретного repository краткоживущий token с
 `Contents: write`. Если GitHub не подтверждает право записи, в том числе для
@@ -257,6 +259,9 @@ default branch и проверяет каталог через GitHub Contents A
 замена существующего требует ответа `да` или `нет` в любом канале, привязанном к
 тому же пользователю. На этом подэтапе Markdown ещё не скачивается: первая
 синхронизация добавляется следующим шагом Этапа 9.
+
+До подключения vault ссылки на статьи не обрабатываются. Повторный `/register`
+не создаёт нового пользователя и возвращает к настройке repository.
 
 ## 13. Посмотреть доступные команды
 

@@ -15,8 +15,6 @@ from obs_chat_bot.application.vaults.github_models import (
 )
 
 from obs_chat_bot.domain.vaults.entities import (
-    GitHubAccount,
-    GitHubReconnectConfirmation,
     GitHubInstallation,
     ObsidianVault,
     VaultActionConfirmation,
@@ -231,29 +229,6 @@ class GitHubAccountAccessWriter(Protocol):
 class GitHubConnectionStateStore(Protocol):
     """Хранит безопасное межпроцессное состояние подключения GitHub."""
 
-    def get_account(self, app_user_id: int) -> GitHubAccount | None:
-        """Возвращает подключённый GitHub-аккаунт пользователя."""
-
-    def request_reconnect(
-        self,
-        *,
-        app_user_id: int,
-        account_login: str,
-        expires_at: datetime,
-    ) -> None:
-        """Сохраняет ожидающее подтверждение замены аккаунта."""
-
-    def find_reconnect_confirmation(
-        self,
-        *,
-        app_user_id: int,
-        now: datetime,
-    ) -> GitHubReconnectConfirmation | None:
-        """Возвращает активное подтверждение или удаляет истёкшее."""
-
-    def delete_reconnect_confirmation(self, app_user_id: int) -> None:
-        """Удаляет ожидающее подтверждение переподключения."""
-
     def acquire_attempt(
         self,
         *,
@@ -281,22 +256,13 @@ class GitHubConnectionCompletionHandler(Protocol):
 class GitHubConnectionStarter(Protocol):
     """Описывает запуск фоновой авторизации из общего incoming-flow."""
 
+    @property
+    def installation_url(self) -> str:
+        """Возвращает страницу установки и настройки GitHub App."""
+
     def start(
         self,
         app_user_id: int,
         completion_handler: GitHubConnectionCompletionHandler | None = None,
     ) -> GitHubConnectionStartResult:
         """Запускает Device Flow или возвращает уже ожидающий challenge."""
-
-    def has_reconnect_confirmation(self, app_user_id: int) -> bool:
-        """Проверяет ожидание ответа `да`/`нет` на замену аккаунта."""
-
-    def confirm_reconnect(
-        self,
-        app_user_id: int,
-        completion_handler: GitHubConnectionCompletionHandler | None = None,
-    ) -> GitHubConnectionStartResult | None:
-        """Подтверждает замену и запускает новый Device Flow."""
-
-    def cancel_reconnect(self, app_user_id: int) -> bool:
-        """Отменяет ожидающую замену GitHub-аккаунта."""

@@ -67,6 +67,9 @@ class GitHubVaultPathNotFoundError(VaultSelectionError):
 class VaultSelectionManager(Protocol):
     """Описывает выбор vault и подтверждение замены из общего chat-flow."""
 
+    def get_selected(self, app_user_id: int) -> ObsidianVault | None:
+        """Возвращает активный vault пользователя или `None`."""
+
     def select(
         self,
         *,
@@ -107,6 +110,12 @@ class GitHubVaultSelectionService(VaultSelectionManager):
         self._github_gateway = github_gateway
         self._clock = clock or (lambda: datetime.now(UTC))
         self._confirmation_ttl = confirmation_ttl
+
+    def get_selected(self, app_user_id: int) -> ObsidianVault | None:
+        """Возвращает активный vault пользователя или `None`."""
+        if app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
+        return self._vault_repository.get_for_user(app_user_id)
 
     def select(
         self,

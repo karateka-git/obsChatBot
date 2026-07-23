@@ -28,7 +28,6 @@ from obs_chat_bot.application.vaults.ports import (
 
 
 LOGGER = logging.getLogger(__name__)
-RECONNECT_CONFIRMATION_TTL = timedelta(minutes=10)
 CONNECTION_ATTEMPT_TTL = timedelta(minutes=20)
 
 
@@ -67,6 +66,11 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
         self._sessions: dict[int, _GitHubConnectionSession] = {}
         self._lock = Lock()
 
+    @property
+    def installation_url(self) -> str:
+        """Возвращает страницу установки и настройки GitHub App."""
+        return self._installation_url
+
     def start(
         self,
         app_user_id: int,
@@ -85,51 +89,7 @@ class GitHubConnectionCoordinator(GitHubConnectionStarter):
                 status=GitHubConnectionStartStatus.IN_PROGRESS,
                 installation_url=self._installation_url,
             )
-        account = self._state_store.get_account(app_user_id)
-        if account is not None:
-            self._state_store.request_reconnect(
-                app_user_id=app_user_id,
-                account_login=account.login,
-                expires_at=now + RECONNECT_CONFIRMATION_TTL,
-            )
-            return GitHubConnectionStartResult(
-                status=GitHubConnectionStartStatus.RECONNECT_CONFIRMATION_REQUIRED,
-                installation_url=self._installation_url,
-                connected_account_login=account.login,
-            )
         return self._start_device_flow(app_user_id, completion_handler)
-
-    def has_reconnect_confirmation(self, app_user_id: int) -> bool:
-        """Проверяет shared подтверждение переподключения с учётом TTL."""
-        return (
-            self._state_store.find_reconnect_confirmation(
-                app_user_id=app_user_id,
-                now=self._clock(),
-            )
-            is not None
-        )
-
-    def confirm_reconnect(
-        self,
-        app_user_id: int,
-        completion_handler: GitHubConnectionCompletionHandler | None = None,
-    ) -> GitHubConnectionStartResult | None:
-        """Удаляет подтверждение и запускает заменяющий Device Flow."""
-        confirmation = self._state_store.find_reconnect_confirmation(
-            app_user_id=app_user_id,
-            now=self._clock(),
-        )
-        if confirmation is None:
-            return None
-        self._state_store.delete_reconnect_confirmation(app_user_id)
-        return self._start_device_flow(app_user_id, completion_handler)
-
-    def cancel_reconnect(self, app_user_id: int) -> bool:
-        """Отменяет активный запрос на замену GitHub-аккаунта."""
-        if not self.has_reconnect_confirmation(app_user_id):
-            return False
-        self._state_store.delete_reconnect_confirmation(app_user_id)
-        return True
 
     def _local_pending_result(
         self,

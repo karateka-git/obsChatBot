@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 
 BUSY_TIMEOUT_MS = 5_000
+WAL_RETRY_INTERVAL_SECONDS = 0.1
 
 
 @contextmanager
@@ -34,8 +36,8 @@ def connect_database(database_path: Path) -> Iterator[sqlite3.Connection]:
 
 
 def _configure_connection(connection: sqlite3.Connection) -> None:
-    journal_mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()
     connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    journal_mode = _enable_wal(connection)
     connection.execute("PRAGMA foreign_keys = ON")
 
     if journal_mode is None or journal_mode[0].lower() != "wal":
@@ -48,3 +50,15 @@ def _configure_connection(connection: sqlite3.Connection) -> None:
     foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()
     if foreign_keys is None or foreign_keys[0] != 1:
         raise sqlite3.OperationalError("Could not enable foreign keys")
+
+
+def _enable_wal(connection: sqlite3.Connection) -> sqlite3.Row | tuple | None:
+    """Включает WAL, ожидая кратковременную блокировку при параллельном старте."""
+    deadline = time.monotonic() + (BUSY_TIMEOUT_MS / 1_000)
+    while True:
+        try:
+            return connection.execute("PRAGMA journal_mode = WAL").fetchone()
+        except sqlite3.OperationalError as error:
+            if "locked" not in str(error).lower() or time.monotonic() >= deadline:
+                raise
+            time.sleep(WAL_RETRY_INTERVAL_SECONDS)

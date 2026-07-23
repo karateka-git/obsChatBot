@@ -10,10 +10,6 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
-from obs_chat_bot.application.vaults.github_models import (
-    GitHubConnectionCompletion,
-    GitHubConnectionCompletionStatus,
-)
 from obs_chat_bot.presentation.vk.bot import (
     VkApiClient,
     VkBotError,
@@ -199,7 +195,7 @@ class VkBotTest(unittest.TestCase):
         self.assertIn("failed_attempt=2/3", logs.output[-1])
 
     def test_handle_update_completion_callback_replies_to_same_peer(self) -> None:
-        """Фоновый GitHub callback отправляет итог в исходный VK peer."""
+        """Фоновый результат регистрации отправляется в исходный VK peer."""
         client = FakeVkClient()
         completion_handlers = []
 
@@ -217,7 +213,7 @@ class VkBotTest(unittest.TestCase):
                         "id": 11,
                         "peer_id": 22,
                         "from_id": 33,
-                        "text": "/github_connect",
+                        "text": "https://github.com/octocat/notes",
                     }
                 },
             },
@@ -226,16 +222,17 @@ class VkBotTest(unittest.TestCase):
             logger=logging.getLogger("test.vk.github_completion"),
         )
         completion_handlers[0](
-            GitHubConnectionCompletion(
-                GitHubConnectionCompletionStatus.CONNECTED,
-                installation_count=1,
-                account_login="octocat",
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_APP_REQUIRED,
+                installation_url=(
+                    "https://github.com/apps/obs-chat-bot/installations/new"
+                ),
             )
         )
 
         self.assertEqual(client.messages[-1][0], 22)
-        self.assertIn("`octocat` успешно подключён", client.messages[-1][1])
-        self.assertNotIn("установок", client.messages[-1][1])
+        self.assertIn("installations/new", client.messages[-1][1])
+        self.assertIn("read and write", client.messages[-1][1])
 
     def test_api_call_sends_vk_method_params_in_post_body(self) -> None:
         """VK API methods send params in POST body, not in request URI."""

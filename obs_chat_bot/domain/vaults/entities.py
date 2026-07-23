@@ -46,23 +46,6 @@ class GitHubAccount:
 
 
 @dataclass(frozen=True, slots=True)
-class GitHubReconnectConfirmation:
-    """Хранит запрос на замену подключённого GitHub-аккаунта."""
-
-    app_user_id: int
-    account_login: str
-    expires_at: datetime
-    created_at: datetime | None = None
-
-    def __post_init__(self) -> None:
-        if self.app_user_id <= 0:
-            raise ValueError("app_user_id must be positive")
-        _require_text(self.account_login, "account_login")
-        if self.created_at is not None and self.expires_at <= self.created_at:
-            raise ValueError("expires_at must be later than created_at")
-
-
-@dataclass(frozen=True, slots=True)
 class ObsidianVault:
     """Описывает единственный активный GitHub vault пользователя."""
 

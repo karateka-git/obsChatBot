@@ -488,9 +488,13 @@
    - Client ID;
    - app slug;
    - путь к приватному PEM-ключу.
-3. Добавить общее для Telegram и VK подключение через чат:
-   - `/github_connect` возвращает ссылку установки, Device Flow URL и
-     одноразовый код;
+3. Встроить общее для Telegram и VK подключение в `/register`:
+   - после регистрации пользователь присылает ссылку repository и optional
+     `vault-path` обычным сообщением;
+   - бот запускает Device Flow только при необходимости и после авторизации
+     автоматически продолжает проверку исходного repository;
+   - installation URL показывается только если App не установлено или не имеет
+     доступных repositories;
    - авторизация выполняется в фоне и не блокирует polling каналов;
    - device code и пользовательский access token существуют только в памяти;
    - после авторизации сохраняются публичные ID/login одного GitHub-аккаунта и
@@ -498,14 +502,11 @@
    - итог авторизации отправляется в тот же чат без token и device code;
    - подключение принадлежит `app_user_id`, поэтому все identities, привязанные
      через `/link`, автоматически используют тот же GitHub-аккаунт и vault;
-   - повторный `/github_connect` при уже подключённом аккаунте показывает его login
-     и требует ответа `да`/`нет`; до подтверждения текущее подключение не меняется;
-   - Telegram и VK координируют подтверждение и активную попытку через SQLite,
-     поэтому два Device Flow для одного `app_user_id` одновременно не запускаются;
+   - Telegram и VK координируют активную попытку через SQLite, поэтому два Device
+     Flow для одного `app_user_id` одновременно не запускаются;
    - при аварийном перезапуске во время авторизации секретная in-memory session
      исчезает; повторный запуск станет доступен после истечения короткого SQLite claim.
-4. Добавить выбор vault командой
-   `/github_vault <repository-url> [vault-path]`:
+4. Добавить выбор vault по присланному repository URL и optional `vault-path`:
    - использовать default branch репозитория;
    - использовать корень репозитория, если `vault-path` не указан;
    - разрешать только один активный vault для одного `app_user`;
@@ -841,28 +842,26 @@ lease. Начальная схема хранит полный Markdown и front
 конфигурация App ID, Client ID, slug и PEM; healthcheck проверяет реальную RS256
 подпись App JWT. HTTP adapter реализует Device Flow, пагинацию разрешённых
 installations и выпуск repository-scoped installation token по REST API version
-`2026-03-10`. Общая команда `/github_connect` работает через локальный coordinator
-каждого Telegram/VK процесса и общее SQLite-состояние, возвращает installation URL, Device Flow URL
-и одноразовый код, а polling выполняет в background thread. Device code и tokens
+`2026-03-10`. Device Flow встроен в `/register`, работает через локальный
+coordinator каждого Telegram/VK процесса и общее SQLite-состояние, возвращает URL
+авторизации и одноразовый код, а polling выполняет в background thread. Device code и tokens
 не сохраняются и скрыты из `repr`; SQLite получает только публичные ID/login одного
-GitHub-аккаунта, installation IDs, короткое подтверждение переподключения и claim
-активной попытки. Повторное подключение требует `да`/`нет`, а два adapters не могут
-параллельно запустить Device Flow для одного `app_user_id`. Итог авторизации с login
-аккаунта отправляется в исходный чат.
+GitHub-аккаунта, installation IDs и claim активной попытки. Два adapters не могут
+параллельно запустить Device Flow для одного `app_user_id`.
 
 Этап 9.2 проверен на реальном GitHub App и VK: Device Flow завершён, installation
 ID сохранён, временные tokens в SQLite не попали. GitHub App переведено на
 `Contents: write`, однако новая permission должна быть отдельно одобрена для
-существующей installation. Следующий программный шаг — выбор repository и vault
-path через `/github_vault`.
+существующей installation.
 
-Этап 9.3 выбор vault завершён: общая команда
-`/github_vault <repository-url> [vault-path]` требует repository-scoped
-installation token с `Contents: write`, поэтому публичный repository без права
-записи не принимается. Команда читает default branch и repository ID из GitHub,
+Этап 9.3 выбор vault завершён: `/register` запускает onboarding, после чего бот
+запрашивает обычную ссылку repository и optional `vault-path`.
+Отдельные `/github_connect` и `/github_vault` удалены. Onboarding требует
+repository-scoped installation token с `Contents: write`, поэтому публичный
+repository без права записи не принимается. Бот читает default branch и repository ID из GitHub,
 отклоняет архивные и отключённые repositories, валидирует каталог через Contents
 API и сохраняет первый активный vault.
-Повтор той же команды идемпотентен, а замена repository или path требует
+Повтор той же ссылки идемпотентен, а замена repository или path требует
 подтверждения `да`/`нет`, общего для Telegram и VK через SQLite. Installation
 tokens остаются краткоживущими и не сохраняются. Следующий программный шаг —
 первая полная синхронизация Markdown выбранного vault.

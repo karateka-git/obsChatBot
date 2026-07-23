@@ -7,13 +7,11 @@ from typing import Any
 
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
-from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
-from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletion
-from obs_chat_bot.application.vaults.ports import GitHubConnectionCompletionHandler
-from obs_chat_bot.presentation.shared.responses import (
-    format_github_connection_completion,
-    format_incoming_message_result,
+from obs_chat_bot.application.incoming.processing import (
+    IncomingCompletionHandler,
+    ProcessIncomingMessageResult,
 )
+from obs_chat_bot.presentation.shared.responses import format_incoming_message_result
 from obs_chat_bot.presentation.shared.safe_send import (
     exponential_retry_delay,
     safe_send_async,
@@ -23,7 +21,7 @@ from obs_chat_bot.presentation.shared.safe_send import (
 TELEGRAM_SAFE_MESSAGE_LIMIT = 3900
 PROCESSING_ACK_TEXT = "Принял, обрабатываю. Это может занять немного времени."
 IncomingMessageProcessor = Callable[
-    [IncomingMessage, GitHubConnectionCompletionHandler | None],
+    [IncomingMessage, IncomingCompletionHandler | None],
     ProcessIncomingMessageResult,
 ]
 
@@ -100,7 +98,7 @@ def _register_handlers(
             return
 
         incoming_message = _incoming_message_from_telegram(message)
-        completion_handler = _create_telegram_github_completion_handler(
+        completion_handler = _create_telegram_completion_handler(
             message,
             loop=asyncio.get_running_loop(),
             logger=logger,
@@ -125,16 +123,16 @@ def _register_handlers(
     dispatcher.include_router(router)
 
 
-def _create_telegram_github_completion_handler(
+def _create_telegram_completion_handler(
     message: Any,
     *,
     loop: asyncio.AbstractEventLoop,
     logger: logging.Logger,
-) -> GitHubConnectionCompletionHandler:
-    """Создаёт thread-safe callback итогового ответа в исходный Telegram chat."""
+) -> IncomingCompletionHandler:
+    """Создаёт thread-safe callback фонового результата в исходный Telegram chat."""
 
-    def notify(completion: GitHubConnectionCompletion) -> None:
-        text = format_github_connection_completion(completion)
+    def notify(result: ProcessIncomingMessageResult) -> None:
+        text = format_incoming_message_result(result)
         try:
             asyncio.run_coroutine_threadsafe(
                 safe_send_telegram_reply(message, text, logger=logger),

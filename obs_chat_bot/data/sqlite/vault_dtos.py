@@ -4,32 +4,11 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
-class GitHubAccountDto:
-    """Представляет подключённый GitHub-аккаунт в форме SQLite."""
-
-    app_user_id: int
-    github_user_id: int
-    login: str
-    created_at: str | None = None
-    updated_at: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class GitHubInstallationDto:
     """Представляет разрешённую GitHub App installation в SQLite."""
 
     app_user_id: int
     installation_id: int
-    created_at: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class GitHubReconnectConfirmationDto:
-    """Представляет подтверждение замены GitHub-аккаунта в SQLite."""
-
-    app_user_id: int
-    account_login: str
-    expires_at: str
     created_at: str | None = None
 
 

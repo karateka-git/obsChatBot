@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Thread
 import unittest
 
 from obs_chat_bot.application.vaults.github_models import GitHubRepositoryInspection
@@ -18,6 +19,9 @@ from obs_chat_bot.application.vaults.vault_selection import (
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.github_installation_repository import (
     SQLiteGitHubInstallationRepository,
+)
+from obs_chat_bot.data.sqlite.github_vault_selection_manager import (
+    SQLiteGitHubVaultSelectionManager,
 )
 from obs_chat_bot.data.sqlite.migration_runner import apply_migrations
 from obs_chat_bot.data.sqlite.obsidian_vault_repository import (
@@ -213,6 +217,36 @@ class GitHubVaultSelectionServiceTest(unittest.TestCase):
                 parse_github_repository_url(value)
         with self.assertRaises(ValueError):
             normalize_vault_root_path("Notes/../Secrets")
+
+    def test_sqlite_manager_selects_vault_after_request_connection_is_closed(
+        self,
+    ) -> None:
+        """Background callback открывает собственное SQLite-соединение."""
+        with TemporaryDirectory(prefix="obs-chat-bot-vault-background-") as directory:
+            database_path = Path(directory) / "test.db"
+            with connect_database(database_path) as connection:
+                apply_migrations(connection)
+                _prepare_installations(connection, {101})
+
+            manager = SQLiteGitHubVaultSelectionManager(
+                database_path=database_path,
+                github_gateway=FakeGitHubRepositoryGateway({101: _inspection()}),
+            )
+            results = []
+            worker = Thread(
+                target=lambda: results.append(
+                    manager.select(
+                        app_user_id=1,
+                        repository_url="https://github.com/octocat/notes",
+                    )
+                )
+            )
+            worker.start()
+            worker.join(timeout=2)
+
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(results[0].status, VaultSelectionStatus.SELECTED)
+            self.assertEqual(manager.get_selected(1).repository, "notes")
 
 
 @contextmanager

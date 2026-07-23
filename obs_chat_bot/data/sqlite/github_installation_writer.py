@@ -56,10 +56,6 @@ class SQLiteGitHubAccountAccessWriter(GitHubAccountAccessWriter):
                     """,
                     (app_user_id, github_user_id, login),
                 )
-                connection.execute(
-                    "DELETE FROM github_reconnect_confirmations WHERE app_user_id = ?",
-                    (app_user_id,),
-                )
                 if installation_ids:
                     ordered_ids = sorted(installation_ids)
                     placeholders = ", ".join("?" for _ in ordered_ids)

@@ -4,12 +4,12 @@ import asyncio
 import logging
 import unittest
 
-from obs_chat_bot.application.vaults.github_models import (
-    GitHubConnectionCompletion,
-    GitHubConnectionCompletionStatus,
+from obs_chat_bot.application.incoming.processing import (
+    IncomingMessageResultType,
+    ProcessIncomingMessageResult,
 )
 from obs_chat_bot.presentation.telegram.bot import (
-    _create_telegram_github_completion_handler,
+    _create_telegram_completion_handler,
     safe_send_telegram_reply,
     split_telegram_message,
 )
@@ -181,23 +181,24 @@ class TelegramBotHelpersTest(unittest.TestCase):
         self.assertEqual(message.attempts, 2)
         self.assertEqual(delays, [2.5])
 
-    def test_github_completion_callback_replies_in_telegram_loop(self) -> None:
-        """Фоновый callback безопасно возвращается в Telegram event loop."""
+    def test_completion_callback_replies_in_telegram_loop(self) -> None:
+        """Фоновый результат безопасно возвращается в Telegram event loop."""
         message = TelegramMessage()
         logger = logging.getLogger("test.telegram.github_completion")
 
         async def run() -> None:
-            handler = _create_telegram_github_completion_handler(
+            handler = _create_telegram_completion_handler(
                 message,
                 loop=asyncio.get_running_loop(),
                 logger=logger,
             )
             await asyncio.to_thread(
                 handler,
-                GitHubConnectionCompletion(
-                    GitHubConnectionCompletionStatus.CONNECTED,
-                    installation_count=1,
-                    account_login="octocat",
+                ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.GITHUB_APP_REQUIRED,
+                    installation_url=(
+                        "https://github.com/apps/obs-chat-bot/installations/new"
+                    ),
                 ),
             )
             for _attempt in range(10):
@@ -208,8 +209,8 @@ class TelegramBotHelpersTest(unittest.TestCase):
         asyncio.run(run())
 
         self.assertEqual(len(message.answers), 1)
-        self.assertIn("`octocat` успешно подключён", message.answers[0])
-        self.assertNotIn("установок", message.answers[0])
+        self.assertIn("installations/new", message.answers[0])
+        self.assertIn("read and write", message.answers[0])
 
 
 if __name__ == "__main__":

@@ -12,12 +12,12 @@ from urllib.request import Request, urlopen
 
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
-from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
-from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletion
-from obs_chat_bot.application.vaults.ports import GitHubConnectionCompletionHandler
+from obs_chat_bot.application.incoming.processing import (
+    IncomingCompletionHandler,
+    ProcessIncomingMessageResult,
+)
 from obs_chat_bot.presentation.telegram.bot import PROCESSING_ACK_TEXT
 from obs_chat_bot.presentation.shared.responses import (
-    format_github_connection_completion,
     format_incoming_message_result,
 )
 from obs_chat_bot.presentation.shared.safe_send import (
@@ -32,7 +32,7 @@ VK_SAFE_MESSAGE_LIMIT = 3500
 VK_LONG_POLL_WAIT_SECONDS = 25
 VK_TRANSIENT_API_ERROR_CODES = frozenset({1, 6, 9, 10, 29})
 IncomingMessageProcessor = Callable[
-    [IncomingMessage, GitHubConnectionCompletionHandler | None],
+    [IncomingMessage, IncomingCompletionHandler | None],
     ProcessIncomingMessageResult,
 ]
 
@@ -287,7 +287,7 @@ def _handle_update(
         text=text,
         external_user_id=str(from_id),
     )
-    completion_handler = _create_vk_github_completion_handler(
+    completion_handler = _create_vk_completion_handler(
         client,
         peer_id=peer_id,
         logger=logger,
@@ -337,19 +337,19 @@ def _vk_retry_delay(error: Exception, failed_attempt: int) -> float | None:
     return None
 
 
-def _create_vk_github_completion_handler(
+def _create_vk_completion_handler(
     client: Any,
     *,
     peer_id: int,
     logger: logging.Logger,
-) -> GitHubConnectionCompletionHandler:
-    """Создаёт callback итогового ответа в исходный VK peer."""
+) -> IncomingCompletionHandler:
+    """Создаёт callback фонового результата в исходный VK peer."""
 
-    def notify(completion: GitHubConnectionCompletion) -> None:
+    def notify(result: ProcessIncomingMessageResult) -> None:
         _safe_send_vk_message(
             client,
             peer_id=peer_id,
-            text=format_github_connection_completion(completion),
+            text=format_incoming_message_result(result),
             logger=logger,
         )
 

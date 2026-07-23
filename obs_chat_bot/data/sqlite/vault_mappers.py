@@ -4,53 +4,20 @@ import sqlite3
 from datetime import UTC, datetime
 
 from obs_chat_bot.data.sqlite.vault_dtos import (
-    GitHubAccountDto,
     GitHubInstallationDto,
-    GitHubReconnectConfirmationDto,
     ObsidianVaultDto,
     VaultActionConfirmationDto,
     VaultNoteDto,
     VaultSyncLeaseDto,
 )
 from obs_chat_bot.domain.vaults.entities import (
-    GitHubAccount,
     GitHubInstallation,
-    GitHubReconnectConfirmation,
     ObsidianVault,
     VaultActionConfirmation,
     VaultConfirmationAction,
     VaultNote,
     VaultSyncLease,
 )
-
-
-def github_account_dto_from_row(row: sqlite3.Row) -> GitHubAccountDto:
-    """Преобразует строку SQLite в DTO подключённого GitHub-аккаунта."""
-    return GitHubAccountDto(
-        app_user_id=row["app_user_id"],
-        github_user_id=row["github_user_id"],
-        login=row["login"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-    )
-
-
-def github_account_from_dto(dto: GitHubAccountDto) -> GitHubAccount:
-    """Преобразует DTO подключённого GitHub-аккаунта в доменную модель."""
-    if dto.created_at is None or dto.updated_at is None:
-        raise ValueError("Saved GitHub account DTO must contain timestamps")
-    return GitHubAccount(
-        app_user_id=dto.app_user_id,
-        github_user_id=dto.github_user_id,
-        login=dto.login,
-        created_at=parse_utc_timestamp(dto.created_at),
-        updated_at=parse_utc_timestamp(dto.updated_at),
-    )
-
-
-def github_account_from_row(row: sqlite3.Row) -> GitHubAccount:
-    """Преобразует строку SQLite в подключённый GitHub-аккаунт."""
-    return github_account_from_dto(github_account_dto_from_row(row))
 
 
 def github_installation_dto_from_row(row: sqlite3.Row) -> GitHubInstallationDto:
@@ -76,26 +43,6 @@ def github_installation_from_dto(dto: GitHubInstallationDto) -> GitHubInstallati
 def github_installation_from_row(row: sqlite3.Row) -> GitHubInstallation:
     """Преобразует строку SQLite в разрешённую GitHub installation."""
     return github_installation_from_dto(github_installation_dto_from_row(row))
-
-
-def github_reconnect_confirmation_from_row(
-    row: sqlite3.Row,
-) -> GitHubReconnectConfirmation:
-    """Преобразует строку SQLite в подтверждение замены GitHub-аккаунта."""
-    dto = GitHubReconnectConfirmationDto(
-        app_user_id=row["app_user_id"],
-        account_login=row["account_login"],
-        expires_at=row["expires_at"],
-        created_at=row["created_at"],
-    )
-    if dto.created_at is None:
-        raise ValueError("Saved GitHub reconnect DTO must contain created_at")
-    return GitHubReconnectConfirmation(
-        app_user_id=dto.app_user_id,
-        account_login=dto.account_login,
-        expires_at=parse_utc_timestamp(dto.expires_at),
-        created_at=parse_utc_timestamp(dto.created_at),
-    )
 
 
 def obsidian_vault_dto_from_row(row: sqlite3.Row) -> ObsidianVaultDto:

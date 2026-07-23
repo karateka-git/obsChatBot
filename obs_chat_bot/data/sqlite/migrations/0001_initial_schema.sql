@@ -156,19 +156,6 @@ CREATE TABLE github_installations (
 CREATE INDEX idx_github_installations_installation_id
     ON github_installations (installation_id);
 
-CREATE TABLE github_reconnect_confirmations (
-    app_user_id INTEGER PRIMARY KEY,
-    account_login TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (app_user_id) REFERENCES github_accounts (app_user_id)
-        ON DELETE CASCADE,
-    CHECK (length(trim(account_login)) > 0)
-);
-
-CREATE INDEX idx_github_reconnect_confirmations_expires_at
-    ON github_reconnect_confirmations (expires_at);
-
 CREATE TABLE github_connection_attempts (
     app_user_id INTEGER PRIMARY KEY,
     owner TEXT NOT NULL,

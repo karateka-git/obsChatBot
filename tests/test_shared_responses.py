@@ -35,7 +35,6 @@ from obs_chat_bot.domain.vaults.entities import ObsidianVault
 from obs_chat_bot.presentation.shared.responses import (
     format_article_analysis_result,
     format_article_processing_result,
-    format_github_connection_completion,
     format_incoming_message_result,
 )
 
@@ -54,6 +53,8 @@ class TelegramResponsesTest(unittest.TestCase):
                 self.assertIn(str(command), reply)
         self.assertNotIn("/github_sync", reply)
         self.assertNotIn("/github_disconnect", reply)
+        self.assertNotIn("/github_connect", reply)
+        self.assertNotIn("/github_vault", reply)
 
     def test_format_article_processing_result_reports_created_article(self) -> None:
         """Новая статья получает понятный текст с названием, статусом, ID и длиной."""
@@ -259,8 +260,8 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("Бот работает", reply)
         self.assertIn("ID пользователя: 42", reply)
 
-    def test_format_github_connect_returns_install_url_device_url_and_code(self) -> None:
-        """Оба channel adapters получают полную безопасную инструкцию Device Flow."""
+    def test_format_github_authorization_returns_device_url_and_code(self) -> None:
+        """Оба channel adapters получают безопасную инструкцию Device Flow."""
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.GITHUB_CONNECT_STARTED,
@@ -281,16 +282,14 @@ class TelegramResponsesTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("installations/new", reply)
+        self.assertNotIn("installations/new", reply)
         self.assertIn("https://github.com/login/device", reply)
         self.assertIn("ABCD-EFGH", reply)
         self.assertNotIn("device-secret", reply)
 
-    def test_format_github_completion_covers_all_final_statuses(self) -> None:
-        """Каждый финал Device Flow получает понятный безопасный ответ."""
+    def test_format_github_failure_covers_final_error_statuses(self) -> None:
+        """Ошибки Device Flow предлагают повторить отправку repository URL."""
         cases = {
-                GitHubConnectionCompletionStatus.CONNECTED: "`octocat` успешно подключён",
-            GitHubConnectionCompletionStatus.NO_INSTALLATIONS: "ни к одному репозиторию",
             GitHubConnectionCompletionStatus.DENIED: "отклонена",
             GitHubConnectionCompletionStatus.EXPIRED: "истёк",
             GitHubConnectionCompletionStatus.FAILED: "Не удалось",
@@ -298,17 +297,28 @@ class TelegramResponsesTest(unittest.TestCase):
 
         for status, expected_text in cases.items():
             with self.subTest(status=status):
-                count = 1 if status is GitHubConnectionCompletionStatus.CONNECTED else 0
-                reply = format_github_connection_completion(
-                    GitHubConnectionCompletion(
-                        status,
-                        installation_count=count,
-                        account_login="octocat" if count else None,
+                reply = format_incoming_message_result(
+                    ProcessIncomingMessageResult(
+                        type=IncomingMessageResultType.GITHUB_CONNECT_FAILED,
+                        github_completion=GitHubConnectionCompletion(status),
                     )
                 )
                 self.assertIn(expected_text, reply)
-                self.assertNotIn("installation", reply.lower())
-                self.assertNotIn("установок", reply.lower())
+                self.assertIn("ссылку", reply)
+
+    def test_format_github_app_required_returns_installation_url(self) -> None:
+        """После OAuth без installation бот предлагает настроить App."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_APP_REQUIRED,
+                installation_url=(
+                    "https://github.com/apps/obs-chat-bot/installations/new"
+                ),
+            )
+        )
+
+        self.assertIn("installations/new", reply)
+        self.assertIn("read and write", reply)
 
     def test_format_vault_selection_shows_repository_branch_and_path(self) -> None:
         """Успешный выбор vault возвращает понятные проверенные параметры."""
@@ -411,4 +421,3 @@ def _article() -> Article:
 
 if __name__ == "__main__":
     unittest.main()
-    format_github_connection_completion,

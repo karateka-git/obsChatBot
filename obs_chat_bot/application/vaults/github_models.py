@@ -98,9 +98,6 @@ class GitHubConnectionStartStatus(StrEnum):
     STARTED = "started"  # Новый Device Flow запущен.
     ALREADY_PENDING = "already_pending"  # Для пользователя уже ожидается код.
     PREPARING = "preparing"  # GitHub ещё выдаёт первый Device Flow challenge.
-    RECONNECT_CONFIRMATION_REQUIRED = (
-        "reconnect_confirmation_required"  # Уже подключён другой account.
-    )
     IN_PROGRESS = "in_progress"  # Device Flow уже идёт в другом процессе.
 
 
@@ -151,7 +148,6 @@ class GitHubConnectionStartResult:
     status: GitHubConnectionStartStatus
     installation_url: str
     authorization: GitHubDeviceAuthorization | None = None
-    connected_account_login: str | None = None
 
 
 class GitHubGatewayError(RuntimeError):

@@ -13,9 +13,11 @@ from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlError,
 )
 from obs_chat_bot.application.articles.incoming_messages import IncomingMessage
-from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageResult
+from obs_chat_bot.application.incoming.processing import (
+    IncomingCompletionHandler,
+    ProcessIncomingMessageResult,
+)
 from obs_chat_bot.application.vaults.ports import (
-    GitHubConnectionCompletionHandler,
     GitHubConnectionStarter,
     GitHubRepositoryGateway,
 )
@@ -498,7 +500,7 @@ def run_telegram_bot_command(
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
                     github_repository_gateway=github_gateway,
-                    github_completion_handler=completion_handler,
+                    completion_handler=completion_handler,
                 )
             ),
             logger=logger,
@@ -580,7 +582,7 @@ def run_vk_bot_command(
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
                     github_repository_gateway=github_gateway,
-                    github_completion_handler=completion_handler,
+                    completion_handler=completion_handler,
                 )
             ),
             logger=logger,
@@ -609,7 +611,7 @@ def process_channel_incoming_message(
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
     github_connection_starter: GitHubConnectionStarter | None = None,
     github_repository_gateway: GitHubRepositoryGateway | None = None,
-    github_completion_handler: GitHubConnectionCompletionHandler | None = None,
+    completion_handler: IncomingCompletionHandler | None = None,
 ) -> ProcessIncomingMessageResult:
     """Обрабатывает одно сообщение внешнего канала внутри worker thread.
 
@@ -623,7 +625,7 @@ def process_channel_incoming_message(
         analysis_use_case_factory: Factory analysis use case для тестов.
         github_connection_starter: Процессный coordinator GitHub Device Flow.
         github_repository_gateway: GitHub App gateway чтения repository.
-        github_completion_handler: Callback итогового ответа в исходный чат.
+        completion_handler: Callback итогового ответа в исходный чат.
 
     Returns:
         Структурированный результат общего incoming-flow.
@@ -652,7 +654,7 @@ def process_channel_incoming_message(
             github_connection_starter=github_connection_starter,
             vault_selection_manager=(
                 create_vault_selection_manager(
-                    connection=connection,
+                    database_path=database_path,
                     github_gateway=github_repository_gateway,
                 )
                 if github_repository_gateway is not None
@@ -661,5 +663,5 @@ def process_channel_incoming_message(
         )
         return incoming_message_use_case.execute(
             incoming_message,
-            github_completion_handler,
+            completion_handler,
         )

@@ -17,12 +17,6 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollStatus,
     GitHubUserAccessToken,
 )
-from obs_chat_bot.domain.vaults.entities import (
-    GitHubAccount,
-    GitHubReconnectConfirmation,
-)
-
-
 class FakeClock:
     """Управляет временем и ожиданием background worker без реального sleep."""
 
@@ -118,44 +112,8 @@ class FakeWriter:
 class FakeStateStore:
     """Хранит безопасное состояние подключения GitHub в памяти теста."""
 
-    def __init__(self, account: GitHubAccount | None = None) -> None:
-        self.account = account
-        self.confirmation: GitHubReconnectConfirmation | None = None
+    def __init__(self) -> None:
         self.attempt: tuple[int, str, datetime] | None = None
-
-    def get_account(self, app_user_id: int) -> GitHubAccount | None:
-        """Возвращает аккаунт указанного пользователя."""
-        if self.account is not None and self.account.app_user_id == app_user_id:
-            return self.account
-        return None
-
-    def request_reconnect(
-        self, *, app_user_id: int, account_login: str, expires_at: datetime
-    ) -> None:
-        """Сохраняет запрос подтверждения переподключения."""
-        self.confirmation = GitHubReconnectConfirmation(
-            app_user_id=app_user_id,
-            account_login=account_login,
-            expires_at=expires_at,
-        )
-
-    def find_reconnect_confirmation(
-        self, *, app_user_id: int, now: datetime
-    ) -> GitHubReconnectConfirmation | None:
-        """Возвращает активное подтверждение с учётом срока действия."""
-        if (
-            self.confirmation is not None
-            and self.confirmation.app_user_id == app_user_id
-            and self.confirmation.expires_at > now
-        ):
-            return self.confirmation
-        self.confirmation = None
-        return None
-
-    def delete_reconnect_confirmation(self, app_user_id: int) -> None:
-        """Удаляет подтверждение пользователя."""
-        if self.confirmation is not None and self.confirmation.app_user_id == app_user_id:
-            self.confirmation = None
 
     def acquire_attempt(
         self,
@@ -371,55 +329,6 @@ class GitHubConnectionCoordinatorTest(unittest.TestCase):
             GitHubConnectionStartStatus.ALREADY_PENDING,
         )
         self.assertEqual(repeated.authorization, first.authorization)
-
-    def test_existing_account_requires_confirmation_before_new_device_flow(self) -> None:
-        """Повторная команда не заменяет подключённый аккаунт без явного `да`."""
-        state_store = FakeStateStore(
-            GitHubAccount(app_user_id=42, github_user_id=777, login="octocat")
-        )
-        gateway = FakeGateway([GitHubDevicePollStatus.DENIED])
-        coordinator = GitHubConnectionCoordinator(
-            gateway=gateway,
-            account_writer=FakeWriter(),
-            state_store=state_store,
-            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
-            sleeper=lambda _seconds: None,
-        )
-
-        result = coordinator.start(42)
-
-        self.assertEqual(
-            result.status,
-            GitHubConnectionStartStatus.RECONNECT_CONFIRMATION_REQUIRED,
-        )
-        self.assertEqual(result.connected_account_login, "octocat")
-        self.assertEqual(gateway.device_codes, [])
-        self.assertTrue(coordinator.has_reconnect_confirmation(42))
-
-    def test_confirmation_starts_replacement_and_cancel_preserves_account(self) -> None:
-        """`да` запускает Device Flow, а `нет` только удаляет подтверждение."""
-        account = GitHubAccount(app_user_id=42, github_user_id=777, login="octocat")
-        state_store = FakeStateStore(account)
-        gateway = BlockingGateway()
-        coordinator = GitHubConnectionCoordinator(
-            gateway=gateway,
-            account_writer=FakeWriter(),
-            state_store=state_store,
-            installation_url="https://github.com/apps/obs-chat-bot/installations/new",
-            sleeper=lambda _seconds: None,
-        )
-
-        coordinator.start(42)
-        self.assertTrue(coordinator.cancel_reconnect(42))
-        self.assertEqual(state_store.get_account(42), account)
-        coordinator.start(42)
-        started = coordinator.confirm_reconnect(42)
-        self.assertTrue(gateway.polled.wait(timeout=1))
-        gateway.release_poll.set()
-        self.assertTrue(gateway.finished.wait(timeout=1))
-
-        self.assertEqual(started.status, GitHubConnectionStartStatus.STARTED)
-        self.assertFalse(coordinator.has_reconnect_confirmation(42))
 
     def test_shared_attempt_blocks_second_coordinator(self) -> None:
         """Общий claim не позволяет Telegram и VK начать два Device Flow одновременно."""

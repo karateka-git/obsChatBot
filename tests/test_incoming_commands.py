@@ -26,15 +26,10 @@ class IncomingCommandsTest(unittest.TestCase):
 
     def test_parser_returns_typed_command_and_raw_arguments(self) -> None:
         """Parser отделяет точное имя команды от строки аргументов."""
-        parsed = ParsedChatCommand.parse(
-            "/github_vault https://github.com/octocat/notes Vault/Personal"
-        )
+        parsed = ParsedChatCommand.parse("/link ABC123")
 
-        self.assertEqual(parsed.command, ChatCommand.GITHUB_VAULT)
-        self.assertEqual(
-            parsed.arguments,
-            "https://github.com/octocat/notes Vault/Personal",
-        )
+        self.assertEqual(parsed.command, ChatCommand.LINK)
+        self.assertEqual(parsed.arguments, "ABC123")
 
     def test_parser_does_not_confuse_commands_with_common_prefix(self) -> None:
         """`/link_code` не распознаётся как `/link`, а неизвестный prefix отвергается."""
@@ -43,6 +38,12 @@ class IncomingCommandsTest(unittest.TestCase):
             ChatCommand.LINK_CODE,
         )
         self.assertIsNone(ParsedChatCommand.parse("/link_extra ABC123"))
+        self.assertIsNone(ParsedChatCommand.parse("/github_connect"))
+        self.assertIsNone(
+            ParsedChatCommand.parse(
+                "/github_vault https://github.com/octocat/notes"
+            )
+        )
         self.assertIsNone(ParsedChatCommand.parse("обычный текст"))
 
 
