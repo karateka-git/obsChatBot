@@ -10,6 +10,7 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDeviceAuthorization,
     GitHubDevicePollResult,
     GitHubInstallationAccessToken,
+    GitHubRepositoryInspection,
     GitHubUserAccessToken,
 )
 
@@ -47,6 +48,9 @@ class GitHubInstallationRepository(Protocol):
 
 class ObsidianVaultRepository(Protocol):
     """Описывает хранение единственного активного vault пользователя."""
+
+    def create_if_absent(self, vault: ObsidianVault) -> ObsidianVault | None:
+        """Создаёт первый vault атомарно или возвращает `None` при конфликте."""
 
     def replace(self, vault: ObsidianVault) -> ObsidianVault:
         """Заменяет активный vault и удаляет данные предыдущего подключения."""
@@ -193,7 +197,21 @@ class GitHubInstallationTokenProvider(Protocol):
         installation_id: int,
         repository_id: int | None = None,
     ) -> GitHubInstallationAccessToken:
-        """Создаёт read-only token установки, при необходимости для одного repo."""
+        """Создаёт token установки, при необходимости ограниченный одним repo."""
+
+
+class GitHubRepositoryGateway(Protocol):
+    """Описывает чтение repository и проверку каталога vault через GitHub App."""
+
+    def inspect_repository(
+        self,
+        *,
+        installation_id: int,
+        owner: str,
+        repository: str,
+        root_path: str,
+    ) -> GitHubRepositoryInspection | None:
+        """Возвращает repository inspection или `None`, если он недоступен."""
 
 
 class GitHubAccountAccessWriter(Protocol):

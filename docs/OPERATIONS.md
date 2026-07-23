@@ -145,6 +145,23 @@ VK использует неизменный `random_id` одной retry-сер
 `TelegramRetryAfter`; из-за отсутствия idempotency key у Telegram редкий дубль
 возможен, если API принял сообщение, но HTTP-ответ потерялся.
 
+## Выбор GitHub vault
+
+Команда `/github_vault <repository-url> [vault-path]` принимает только обычный
+HTTPS URL `github.com/owner/repository`. `vault-path` задаётся относительно корня
+repository с `/`; пустой путь означает корень. Проверка выполняется
+краткоживущим installation token, который не сохраняется и не логируется.
+
+Если бот сообщает, что repository недоступен, проверить:
+
+- GitHub App установлено именно на этот repository;
+- изменение permission `Contents: read and write` одобрено для существующей
+  installation;
+- URL не ведёт на branch, файл, Issues или другую вложенную страницу.
+
+Замена активного vault хранится как подтверждение с TTL 10 минут и применяется
+только после ответа `да`. Ответ `нет` сохраняет прежний vault.
+
 ## Частые проблемы
 
 - `TelegramConflictError`: уже запущен другой экземпляр бота с тем же token.

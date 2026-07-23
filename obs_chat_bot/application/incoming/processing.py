@@ -37,6 +37,14 @@ from obs_chat_bot.application.vaults.ports import (
     GitHubConnectionCompletionHandler,
     GitHubConnectionStarter,
 )
+from obs_chat_bot.application.vaults.vault_selection import (
+    GitHubAccountNotConnectedError,
+    GitHubRepositoryNotAccessibleError,
+    GitHubVaultPathNotFoundError,
+    VaultSelectionManager,
+    VaultSelectionResult,
+    VaultSelectionStatus,
+)
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 
 
@@ -79,6 +87,19 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_RECONNECT_CANCELLED = "github_reconnect_cancelled"
     GITHUB_RECONNECT_CONFIRMATION_MISSING = "github_reconnect_confirmation_missing"
     GITHUB_CONNECT_IN_PROGRESS = "github_connect_in_progress"
+    GITHUB_VAULT_COMMAND_INVALID = "github_vault_command_invalid"
+    GITHUB_VAULT_SELECTED = "github_vault_selected"
+    GITHUB_VAULT_ALREADY_SELECTED = "github_vault_already_selected"
+    GITHUB_VAULT_REPLACEMENT_CONFIRMATION_REQUIRED = (
+        "github_vault_replacement_confirmation_required"
+    )
+    GITHUB_VAULT_REPLACED = "github_vault_replaced"
+    GITHUB_VAULT_REPLACEMENT_CANCELLED = "github_vault_replacement_cancelled"
+    GITHUB_VAULT_CONFIRMATION_MISSING = "github_vault_confirmation_missing"
+    GITHUB_VAULT_GITHUB_REQUIRED = "github_vault_github_required"
+    GITHUB_VAULT_REPOSITORY_UNAVAILABLE = "github_vault_repository_unavailable"
+    GITHUB_VAULT_PATH_NOT_FOUND = "github_vault_path_not_found"
+    GITHUB_VAULT_FAILED = "github_vault_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +113,7 @@ class ProcessIncomingMessageResult:
     article_result: ProcessArticleUrlResult | None = None
     analysis_result: AnalyzeArticleResult | None = None
     github_connection: GitHubConnectionStartResult | None = None
+    vault_selection: VaultSelectionResult | None = None
     error: Exception | None = None
 
 
@@ -106,12 +128,14 @@ class ProcessIncomingMessageUseCase:
         incoming_message_repository: IncomingMessageRepository | None = None,
         user_identity_service: UserIdentityService | None = None,
         github_connection_starter: GitHubConnectionStarter | None = None,
+        vault_selection_manager: VaultSelectionManager | None = None,
     ) -> None:
         self._article_url_use_case = article_url_use_case
         self._article_analysis_use_case = article_analysis_use_case
         self._incoming_message_repository = incoming_message_repository
         self._user_identity_service = user_identity_service
         self._github_connection_starter = github_connection_starter
+        self._vault_selection_manager = vault_selection_manager
 
     def execute(
         self,
@@ -289,6 +313,14 @@ class ProcessIncomingMessageUseCase:
                     app_user,
                     github_completion_handler=github_completion_handler,
                 )
+            if (
+                app_user is not None
+                and self._vault_selection_manager is not None
+                and self._vault_selection_manager.has_replacement_confirmation(
+                    app_user.id
+                )
+            ):
+                return self._confirm_vault_replacement(app_user)
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_MISSING
             )
@@ -309,6 +341,19 @@ class ProcessIncomingMessageUseCase:
                     type=IncomingMessageResultType.GITHUB_RECONNECT_CANCELLED,
                     app_user=app_user,
                 )
+            if app_user is not None and self._vault_selection_manager is not None:
+                cancelled = self._vault_selection_manager.cancel_replacement(
+                    app_user.id
+                )
+                if cancelled is not None:
+                    return ProcessIncomingMessageResult(
+                        type=(
+                            IncomingMessageResultType
+                            .GITHUB_VAULT_REPLACEMENT_CANCELLED
+                        ),
+                        app_user=app_user,
+                        vault_selection=cancelled,
+                    )
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.LINK_REBIND_CANCELLED
             )
@@ -444,6 +489,8 @@ class ProcessIncomingMessageUseCase:
                 app_user,
                 github_completion_handler=github_completion_handler,
             )
+        if text.startswith("/github_vault"):
+            return self._select_github_vault(text, app_user)
         if text.startswith("/reanalyze"):
             return self._reanalyze_article(text, incoming_message, app_user)
         return app_user
@@ -492,6 +539,110 @@ class ProcessIncomingMessageUseCase:
             type=result_types[connection.status],
             app_user=app_user,
             github_connection=connection,
+        )
+
+    def _select_github_vault(
+        self,
+        text: str,
+        app_user: AppUser,
+    ) -> ProcessIncomingMessageResult:
+        """Проверяет аргументы `/github_vault` и запускает выбор vault."""
+        parts = text.split(maxsplit=2)
+        if (
+            len(parts) < 2
+            or parts[0] != "/github_vault"
+            or not parts[1].strip()
+        ):
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_COMMAND_INVALID,
+                app_user=app_user,
+            )
+        if self._vault_selection_manager is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                app_user=app_user,
+            )
+        try:
+            selection = self._vault_selection_manager.select(
+                app_user_id=app_user.id,
+                repository_url=parts[1],
+                root_path=parts[2] if len(parts) == 3 else "",
+            )
+        except GitHubAccountNotConnectedError as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_GITHUB_REQUIRED,
+                app_user=app_user,
+                error=error,
+            )
+        except GitHubRepositoryNotAccessibleError as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_REPOSITORY_UNAVAILABLE,
+                app_user=app_user,
+                error=error,
+            )
+        except GitHubVaultPathNotFoundError as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_PATH_NOT_FOUND,
+                app_user=app_user,
+                error=error,
+            )
+        except ValueError as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_COMMAND_INVALID,
+                app_user=app_user,
+                error=error,
+            )
+        except (GitHubGatewayError, OSError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        result_types = {
+            VaultSelectionStatus.SELECTED: (
+                IncomingMessageResultType.GITHUB_VAULT_SELECTED
+            ),
+            VaultSelectionStatus.ALREADY_SELECTED: (
+                IncomingMessageResultType.GITHUB_VAULT_ALREADY_SELECTED
+            ),
+            VaultSelectionStatus.REPLACEMENT_CONFIRMATION_REQUIRED: (
+                IncomingMessageResultType
+                .GITHUB_VAULT_REPLACEMENT_CONFIRMATION_REQUIRED
+            ),
+        }
+        return ProcessIncomingMessageResult(
+            type=result_types[selection.status],
+            app_user=app_user,
+            vault_selection=selection,
+        )
+
+    def _confirm_vault_replacement(
+        self,
+        app_user: AppUser,
+    ) -> ProcessIncomingMessageResult:
+        """Применяет ожидающую замену vault после ответа `да`."""
+        if self._vault_selection_manager is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                app_user=app_user,
+            )
+        try:
+            selection = self._vault_selection_manager.confirm_replacement(app_user.id)
+        except (OSError, ValueError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        if selection is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_CONFIRMATION_MISSING,
+                app_user=app_user,
+            )
+        return ProcessIncomingMessageResult(
+            type=IncomingMessageResultType.GITHUB_VAULT_REPLACED,
+            app_user=app_user,
+            vault_selection=selection,
         )
 
     def _confirm_github_reconnect(

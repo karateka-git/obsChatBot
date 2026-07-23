@@ -17,17 +17,20 @@ from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageR
 from obs_chat_bot.application.vaults.ports import (
     GitHubConnectionCompletionHandler,
     GitHubConnectionStarter,
+    GitHubRepositoryGateway,
 )
 from obs_chat_bot.application.vaults.github_models import GitHubGatewayError
 from obs_chat_bot.bootstrap import (
     AnalyzeArticleUseCaseFactory,
     ProcessArticleUrlUseCaseFactory,
     create_analyze_article_use_case,
+    create_github_app_client,
     create_github_connection_coordinator,
     create_incoming_message_repository,
     create_process_incoming_message_use_case,
     create_process_article_url_use_case,
     create_user_identity_service,
+    create_vault_selection_manager,
 )
 from obs_chat_bot.data.config import AppConfig, ConfigError, GitHubAppConfig, load_config
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
@@ -471,10 +474,16 @@ def run_telegram_bot_command(
         if not initialize_database(database_path, logger):
             return 1
         connection_starter = github_connection_starter
+        github_gateway = (
+            create_github_app_client(github_app_config)
+            if github_app_config is not None
+            else None
+        )
         if connection_starter is None and github_app_config is not None:
             connection_starter = create_github_connection_coordinator(
                 database_path=database_path,
                 config=github_app_config,
+                gateway=github_gateway,
             )
         run_telegram_bot(
             token=token,
@@ -488,6 +497,7 @@ def run_telegram_bot_command(
                     use_case_factory=use_case_factory,
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
+                    github_repository_gateway=github_gateway,
                     github_completion_handler=completion_handler,
                 )
             ),
@@ -545,10 +555,16 @@ def run_vk_bot_command(
         if not initialize_database(database_path, logger):
             return 1
         connection_starter = github_connection_starter
+        github_gateway = (
+            create_github_app_client(github_app_config)
+            if github_app_config is not None
+            else None
+        )
         if connection_starter is None and github_app_config is not None:
             connection_starter = create_github_connection_coordinator(
                 database_path=database_path,
                 config=github_app_config,
+                gateway=github_gateway,
             )
         run_vk_bot(
             token=token,
@@ -563,6 +579,7 @@ def run_vk_bot_command(
                     use_case_factory=use_case_factory,
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
+                    github_repository_gateway=github_gateway,
                     github_completion_handler=completion_handler,
                 )
             ),
@@ -591,6 +608,7 @@ def process_channel_incoming_message(
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
     github_connection_starter: GitHubConnectionStarter | None = None,
+    github_repository_gateway: GitHubRepositoryGateway | None = None,
     github_completion_handler: GitHubConnectionCompletionHandler | None = None,
 ) -> ProcessIncomingMessageResult:
     """Обрабатывает одно сообщение внешнего канала внутри worker thread.
@@ -604,6 +622,7 @@ def process_channel_incoming_message(
         use_case_factory: Factory article use case для тестов.
         analysis_use_case_factory: Factory analysis use case для тестов.
         github_connection_starter: Процессный coordinator GitHub Device Flow.
+        github_repository_gateway: GitHub App gateway чтения repository.
         github_completion_handler: Callback итогового ответа в исходный чат.
 
     Returns:
@@ -631,6 +650,14 @@ def process_channel_incoming_message(
             incoming_message_repository=create_incoming_message_repository(connection),
             user_identity_service=create_user_identity_service(connection),
             github_connection_starter=github_connection_starter,
+            vault_selection_manager=(
+                create_vault_selection_manager(
+                    connection=connection,
+                    github_gateway=github_repository_gateway,
+                )
+                if github_repository_gateway is not None
+                else None
+            ),
         )
         return incoming_message_use_case.execute(
             incoming_message,

@@ -22,7 +22,7 @@ from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
 class FakeResponse:
     """Имитирует JSON-ответ `urlopen` как context manager."""
 
-    def __init__(self, payload: dict) -> None:
+    def __init__(self, payload: dict | list) -> None:
         self._body = json.dumps(payload).encode("utf-8")
 
     def __enter__(self):
@@ -140,6 +140,85 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertEqual(request.get_header("Authorization"), "Bearer app-jwt")
         self.assertEqual(token.expires_at, datetime(2026, 7, 22, 12, 0, tzinfo=UTC))
         self.assertNotIn("ghs-secret", repr(token))
+
+    def test_inspect_repository_checks_default_branch_and_vault_directory(self) -> None:
+        """Repository inspection использует installation token и Contents API."""
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-23T12:00:00Z",
+                }
+            ),
+            FakeResponse(
+                {
+                    "id": 501,
+                    "name": "notes",
+                    "owner": {"login": "octocat"},
+                    "default_branch": "main",
+                }
+            ),
+            FakeResponse([{"type": "file", "name": "Index.md"}]),
+        ]
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ) as opener:
+            inspection = _client().inspect_repository(
+                installation_id=101,
+                owner="octocat",
+                repository="notes",
+                root_path="Vault/Личное",
+            )
+
+        self.assertEqual(inspection.repository_id, 501)
+        self.assertEqual(inspection.default_branch, "main")
+        self.assertTrue(inspection.root_path_is_directory)
+        repository_request = opener.call_args_list[1].args[0]
+        contents_request = opener.call_args_list[2].args[0]
+        self.assertEqual(
+            repository_request.full_url,
+            "https://api.github.com/repos/octocat/notes",
+        )
+        self.assertIn(
+            "Vault/%D0%9B%D0%B8%D1%87%D0%BD%D0%BE%D0%B5",
+            contents_request.full_url,
+        )
+        self.assertIn("ref=main", contents_request.full_url)
+        self.assertEqual(
+            contents_request.get_header("Authorization"),
+            "Bearer ghs-secret",
+        )
+
+    def test_inspect_repository_returns_none_on_not_found(self) -> None:
+        """HTTP 404 означает, что installation не имеет указанного repository."""
+        not_found = HTTPError(
+            url="https://api.github.com/repos/octocat/missing",
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=None,
+        )
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=[
+                FakeResponse(
+                    {
+                        "token": "ghs-secret",
+                        "expires_at": "2026-07-23T12:00:00Z",
+                    }
+                ),
+                not_found,
+            ],
+        ):
+            inspection = _client().inspect_repository(
+                installation_id=101,
+                owner="octocat",
+                repository="missing",
+                root_path="",
+            )
+
+        self.assertIsNone(inspection)
 
     def test_http_error_does_not_include_response_or_token(self) -> None:
         """HTTP-ошибка сообщает только status и не раскрывает credentials."""

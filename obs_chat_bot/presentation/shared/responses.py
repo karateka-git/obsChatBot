@@ -201,6 +201,67 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             return "GitHub connector пока не настроен на сервере."
         case IncomingMessageResultType.GITHUB_CONNECT_FAILED:
             return "Не удалось начать подключение GitHub. Попробуй позже."
+        case IncomingMessageResultType.GITHUB_VAULT_COMMAND_INVALID:
+            return (
+                "Пришли команду в формате:\n"
+                "`/github_vault https://github.com/owner/repository [vault-path]`\n"
+                "Если vault находится в корне repository, путь указывать не нужно."
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_SELECTED:
+            return _format_vault_selection(
+                result,
+                prefix="Obsidian vault подключён.",
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_ALREADY_SELECTED:
+            return _format_vault_selection(
+                result,
+                prefix="Этот Obsidian vault уже подключён.",
+            )
+        case (
+            IncomingMessageResultType
+            .GITHUB_VAULT_REPLACEMENT_CONFIRMATION_REQUIRED
+        ):
+            vault_description = _format_vault_selection(
+                result,
+                prefix="Предлагается новый vault.",
+            )
+            return (
+                f"{vault_description}\n"
+                "Он заменит текущее подключение и его локальные данные.\n"
+                "Продолжить? Ответь `да` или `нет`."
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_REPLACED:
+            return _format_vault_selection(
+                result,
+                prefix="Obsidian vault заменён.",
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_REPLACEMENT_CANCELLED:
+            return _format_vault_selection(
+                result,
+                prefix="Замена отменена. Текущий vault сохранён.",
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_CONFIRMATION_MISSING:
+            return (
+                "Нет ожидающей замены vault. "
+                "Сначала отправь `/github_vault <repository-url> [vault-path]`."
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_GITHUB_REQUIRED:
+            return (
+                "Сначала подключи GitHub-аккаунт командой `/github_connect` "
+                "и разреши нужный repository."
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_REPOSITORY_UNAVAILABLE:
+            return (
+                "Этот repository не найден среди доступных GitHub App.\n"
+                "Проверь URL и доступ приложения к repository."
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_PATH_NOT_FOUND:
+            return (
+                "Указанный vault path не найден или ведёт не к каталогу.\n"
+                "Проверь путь относительно корня repository."
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_FAILED:
+            return "Не удалось проверить GitHub repository. Попробуй позже."
         case IncomingMessageResultType.REANALYZE_COMMAND_INVALID:
             return "Пришли команду в формате `/reanalyze <ID статьи>`."
         case IncomingMessageResultType.ARTICLE_REANALYZED:
@@ -240,6 +301,25 @@ def _article_action_text(result: ProcessArticleUrlResult) -> str:
     if result.extracted:
         return "Готово: статья обновлена."
     return "Эта статья уже была сохранена."
+
+
+def _format_vault_selection(
+    result: ProcessIncomingMessageResult,
+    *,
+    prefix: str,
+) -> str:
+    """Формирует безопасное описание выбранного GitHub vault."""
+    selection = result.vault_selection
+    if selection is None:
+        return prefix
+    vault = selection.vault
+    root_path = vault.root_path or "корень repository"
+    return (
+        f"{prefix}\n"
+        f"Repository: `{vault.owner}/{vault.repository}`\n"
+        f"Ветка: `{vault.branch}`\n"
+        f"Vault path: `{root_path}`"
+    )
 
 
 def _format_github_connect_response(

@@ -12,7 +12,14 @@ from obs_chat_bot.application.users.identity import UserIdentityService
 from obs_chat_bot.application.vaults.github_connection import (
     GitHubConnectionCoordinator,
 )
-from obs_chat_bot.application.vaults.ports import GitHubConnectionStarter
+from obs_chat_bot.application.vaults.ports import (
+    GitHubConnectionStarter,
+    GitHubRepositoryGateway,
+)
+from obs_chat_bot.application.vaults.vault_selection import (
+    GitHubVaultSelectionService,
+    VaultSelectionManager,
+)
 from obs_chat_bot.data.config import GitHubAppConfig
 from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
     TrafilaturaArticleTextExtractor,
@@ -34,6 +41,12 @@ from obs_chat_bot.data.sqlite.github_installation_writer import (
 from obs_chat_bot.data.sqlite.github_connection_state_store import (
     SQLiteGitHubConnectionStateStore,
 )
+from obs_chat_bot.data.sqlite.github_installation_repository import (
+    SQLiteGitHubInstallationRepository,
+)
+from obs_chat_bot.data.sqlite.obsidian_vault_repository import (
+    SQLiteObsidianVaultRepository,
+)
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
@@ -42,6 +55,9 @@ from obs_chat_bot.data.sqlite.user_identity_repository import (
     SQLiteExternalIdentityRepository,
     SQLiteIdentityRebindConfirmationRepository,
     SQLiteIdentityLinkTokenRepository,
+)
+from obs_chat_bot.data.sqlite.vault_confirmation_repository import (
+    SQLiteVaultActionConfirmationRepository,
 )
 
 
@@ -130,14 +146,69 @@ def create_process_incoming_message_use_case(
     incoming_message_repository: IncomingMessageRepository | None,
     user_identity_service: UserIdentityService | None,
     github_connection_starter: GitHubConnectionStarter | None = None,
+    vault_selection_manager: VaultSelectionManager | None = None,
 ) -> ProcessIncomingMessageUseCase:
-    """Собирает общий сценарий обработки входящего сообщения из любого канала."""
+    """Собирает общий сценарий обработки входящего сообщения из любого канала.
+
+    Args:
+        article_url_use_case: Сценарий загрузки и сохранения статьи.
+        article_analysis_use_case: Сценарий LLM-анализа или `None`.
+        incoming_message_repository: Хранилище входящих сообщений или `None`.
+        user_identity_service: Сервис пользователей и identities или `None`.
+        github_connection_starter: Coordinator GitHub Device Flow или `None`.
+        vault_selection_manager: Сценарий выбора GitHub vault или `None`.
+
+    Returns:
+        Настроенный channel-agnostic incoming use case.
+    """
     return ProcessIncomingMessageUseCase(
         article_url_use_case=article_url_use_case,
         article_analysis_use_case=article_analysis_use_case,
         incoming_message_repository=incoming_message_repository,
         user_identity_service=user_identity_service,
         github_connection_starter=github_connection_starter,
+        vault_selection_manager=vault_selection_manager,
+    )
+
+
+def create_github_app_client(config: GitHubAppConfig) -> UrllibGitHubAppClient:
+    """Создаёт общий HTTP adapter зарегистрированного GitHub App.
+
+    Args:
+        config: Полная конфигурация GitHub App.
+
+    Returns:
+        Client для Device Flow, installation tokens и чтения repositories.
+    """
+    signer = PyJwtGitHubAppSigner(
+        client_id=config.client_id,
+        private_key_path=config.private_key_path,
+    )
+    return UrllibGitHubAppClient(
+        client_id=config.client_id,
+        app_jwt_factory=signer.create,
+    )
+
+
+def create_vault_selection_manager(
+    *,
+    connection: sqlite3.Connection,
+    github_gateway: GitHubRepositoryGateway,
+) -> VaultSelectionManager:
+    """Собирает application-сценарий выбора vault для одного сообщения.
+
+    Args:
+        connection: Соединение SQLite текущего worker.
+        github_gateway: Процессный GitHub App HTTP adapter.
+
+    Returns:
+        Сервис с общими SQLite repositories пользователя.
+    """
+    return GitHubVaultSelectionService(
+        installation_repository=SQLiteGitHubInstallationRepository(connection),
+        vault_repository=SQLiteObsidianVaultRepository(connection),
+        confirmation_repository=SQLiteVaultActionConfirmationRepository(connection),
+        github_gateway=github_gateway,
     )
 
 
@@ -145,26 +216,21 @@ def create_github_connection_coordinator(
     *,
     database_path: Path,
     config: GitHubAppConfig,
+    gateway: UrllibGitHubAppClient | None = None,
 ) -> GitHubConnectionCoordinator:
     """Собирает процессный coordinator GitHub Device Flow.
 
     Args:
         database_path: Путь к общей SQLite-базе adapters.
         config: Полная конфигурация зарегистрированного GitHub App.
+        gateway: Общий процессный GitHub client или `None` для создания нового.
 
     Returns:
         Coordinator, хранящий временные Device Flow sessions только в памяти.
     """
-    signer = PyJwtGitHubAppSigner(
-        client_id=config.client_id,
-        private_key_path=config.private_key_path,
-    )
-    gateway = UrllibGitHubAppClient(
-        client_id=config.client_id,
-        app_jwt_factory=signer.create,
-    )
+    runtime_gateway = gateway or create_github_app_client(config)
     return GitHubConnectionCoordinator(
-        gateway=gateway,
+        gateway=runtime_gateway,
         account_writer=SQLiteGitHubAccountAccessWriter(database_path),
         state_store=SQLiteGitHubConnectionStateStore(database_path),
         installation_url=config.installation_url,

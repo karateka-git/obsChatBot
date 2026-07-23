@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from obs_chat_bot.application.vaults.github_models import (
@@ -15,11 +15,13 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollStatus,
     GitHubGatewayError,
     GitHubInstallationAccessToken,
+    GitHubRepositoryInspection,
     GitHubUserAccessToken,
 )
 from obs_chat_bot.application.vaults.ports import (
     GitHubDeviceFlowGateway,
     GitHubInstallationTokenProvider,
+    GitHubRepositoryGateway,
 )
 
 
@@ -34,6 +36,7 @@ DEFAULT_TIMEOUT_SECONDS = 15
 class UrllibGitHubAppClient(
     GitHubDeviceFlowGateway,
     GitHubInstallationTokenProvider,
+    GitHubRepositoryGateway,
 ):
     """Выполняет GitHub Device Flow и выпускает installation tokens."""
 
@@ -180,6 +183,74 @@ class UrllibGitHubAppClient(
             ),
         )
 
+    def inspect_repository(
+        self,
+        *,
+        installation_id: int,
+        owner: str,
+        repository: str,
+        root_path: str,
+    ) -> GitHubRepositoryInspection | None:
+        """Проверяет доступ installation к repository и каталогу vault.
+
+        Args:
+            installation_id: Разрешённая пользователю установка GitHub App.
+            owner: Владелец repository.
+            repository: Имя repository.
+            root_path: Относительный путь каталога vault или пустая строка.
+
+        Returns:
+            Metadata repository и признак каталога либо `None` при HTTP 404.
+
+        Raises:
+            GitHubGatewayError: GitHub недоступен или вернул некорректный ответ.
+        """
+        if installation_id <= 0:
+            raise ValueError("installation_id must be positive")
+        if not owner.strip() or not repository.strip():
+            raise ValueError("owner and repository must not be empty")
+        token = self.create_installation_token(installation_id=installation_id)
+        encoded_owner = quote(owner, safe="")
+        encoded_repository = quote(repository, safe="")
+        repository_payload = self._request_json_or_none(
+            Request(
+                f"{GITHUB_API_BASE_URL}/repos/{encoded_owner}/{encoded_repository}",
+                headers=self._api_headers(token.value),
+                method="GET",
+            )
+        )
+        if repository_payload is None:
+            return None
+
+        repository_id = _require_positive_int(repository_payload, "id")
+        canonical_owner = _require_nested_string(
+            repository_payload,
+            container_name="owner",
+            field_name="login",
+        )
+        canonical_repository = _require_string(repository_payload, "name")
+        default_branch = _require_string(repository_payload, "default_branch")
+        encoded_path = quote(root_path, safe="/")
+        contents_suffix = f"/{encoded_path}" if encoded_path else ""
+        query = urlencode({"ref": default_branch})
+        contents_payload = self._request_json_value(
+            Request(
+                f"{GITHUB_API_BASE_URL}/repos/{encoded_owner}/"
+                f"{encoded_repository}/contents{contents_suffix}?{query}",
+                headers=self._api_headers(token.value),
+                method="GET",
+            ),
+            allow_not_found=True,
+        )
+        return GitHubRepositoryInspection(
+            installation_id=installation_id,
+            repository_id=repository_id,
+            owner=canonical_owner,
+            repository=canonical_repository,
+            default_branch=default_branch,
+            root_path_is_directory=isinstance(contents_payload, list),
+        )
+
     def _post_form(self, url: str, values: dict[str, str]) -> dict[str, Any]:
         return self._request_json(
             Request(
@@ -203,10 +274,31 @@ class UrllibGitHubAppClient(
         }
 
     def _request_json(self, request: Request) -> dict[str, Any]:
+        payload = self._request_json_value(request)
+        if not isinstance(payload, dict):
+            raise GitHubGatewayError("GitHub response is not a JSON object")
+        return payload
+
+    def _request_json_or_none(self, request: Request) -> dict[str, Any] | None:
+        payload = self._request_json_value(request, allow_not_found=True)
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise GitHubGatewayError("GitHub response is not a JSON object")
+        return payload
+
+    def _request_json_value(
+        self,
+        request: Request,
+        *,
+        allow_not_found: bool = False,
+    ) -> Any | None:
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
+            if allow_not_found and error.code == 404:
+                return None
             raise GitHubGatewayError(
                 f"GitHub request failed with HTTP {error.code}"
             ) from error
@@ -220,8 +312,6 @@ class UrllibGitHubAppClient(
             raise GitHubGatewayError(
                 f"GitHub request failed: {type(error).__name__}"
             ) from error
-        if not isinstance(payload, dict):
-            raise GitHubGatewayError("GitHub response is not a JSON object")
         return payload
 
 
@@ -244,6 +334,20 @@ def _require_non_negative_int(payload: dict[str, Any], name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise GitHubGatewayError(f"GitHub response field is invalid: {name}")
     return value
+
+
+def _require_nested_string(
+    payload: dict[str, Any],
+    *,
+    container_name: str,
+    field_name: str,
+) -> str:
+    container = payload.get(container_name)
+    if not isinstance(container, dict):
+        raise GitHubGatewayError(
+            f"GitHub response field is invalid: {container_name}"
+        )
+    return _require_string(container, field_name)
 
 
 def _parse_github_timestamp(value: str) -> datetime:

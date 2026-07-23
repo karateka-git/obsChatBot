@@ -156,3 +156,30 @@ class GitHubConnectionStartResult:
 
 class GitHubGatewayError(RuntimeError):
     """Ошибка безопасного взаимодействия с GitHub authentication API."""
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubRepositoryInspection:
+    """Описывает доступный repository и результат проверки vault path."""
+
+    installation_id: int
+    repository_id: int
+    owner: str
+    repository: str
+    default_branch: str
+    root_path_is_directory: bool
+
+    def __post_init__(self) -> None:
+        if self.installation_id <= 0:
+            raise ValueError("installation_id must be positive")
+        if self.repository_id <= 0:
+            raise ValueError("repository_id must be positive")
+        for value, name in (
+            (self.owner, "owner"),
+            (self.repository, "repository"),
+            (self.default_branch, "default_branch"),
+        ):
+            if not value.strip():
+                raise ValueError(f"{name} must not be empty")
+        if not isinstance(self.root_path_is_directory, bool):
+            raise TypeError("root_path_is_directory must be a bool")

@@ -24,11 +24,16 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDeviceAuthorization,
     GitHubGatewayError,
 )
+from obs_chat_bot.application.vaults.vault_selection import (
+    VaultSelectionResult,
+    VaultSelectionStatus,
+)
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.application.users.identity import IdentityAlreadyBoundError
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
+from obs_chat_bot.domain.vaults.entities import ObsidianVault
 
 
 class FakeArticleUrlUseCase:
@@ -266,6 +271,62 @@ class FakeGitHubConnectionStarter:
         )
 
 
+class FakeVaultSelectionManager:
+    """Имитирует выбор и подтверждаемую замену Obsidian vault."""
+
+    def __init__(
+        self,
+        status: VaultSelectionStatus = VaultSelectionStatus.SELECTED,
+    ) -> None:
+        self.status = status
+        self.calls: list[tuple[int, str, str]] = []
+        self.replacement_pending = False
+
+    def select(
+        self,
+        *,
+        app_user_id: int,
+        repository_url: str,
+        root_path: str = "",
+    ) -> VaultSelectionResult:
+        """Запоминает команду и возвращает настроенный результат."""
+        self.calls.append((app_user_id, repository_url, root_path))
+        self.replacement_pending = (
+            self.status is VaultSelectionStatus.REPLACEMENT_CONFIRMATION_REQUIRED
+        )
+        return VaultSelectionResult(self.status, _test_vault(app_user_id))
+
+    def has_replacement_confirmation(self, _app_user_id: int) -> bool:
+        """Возвращает состояние ожидающей замены."""
+        return self.replacement_pending
+
+    def confirm_replacement(
+        self,
+        app_user_id: int,
+    ) -> VaultSelectionResult | None:
+        """Подтверждает настроенную ожидающую замену."""
+        if not self.replacement_pending:
+            return None
+        self.replacement_pending = False
+        return VaultSelectionResult(
+            VaultSelectionStatus.REPLACED,
+            _test_vault(app_user_id),
+        )
+
+    def cancel_replacement(
+        self,
+        app_user_id: int,
+    ) -> VaultSelectionResult | None:
+        """Отменяет настроенную ожидающую замену."""
+        if not self.replacement_pending:
+            return None
+        self.replacement_pending = False
+        return VaultSelectionResult(
+            VaultSelectionStatus.CANCELLED,
+            _test_vault(app_user_id),
+        )
+
+
 class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
     """Проверяет общий application-flow без Telegram adapter."""
 
@@ -353,6 +414,59 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(
             result.type,
             IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+        )
+
+    def test_execute_selects_github_vault_for_shared_app_user(self) -> None:
+        """`/github_vault` передаёт repository и path общему application-сервису."""
+        manager = FakeVaultSelectionManager()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            vault_selection_manager=manager,
+        )
+
+        result = use_case.execute(
+            _telegram_message(
+                "/github_vault https://github.com/octocat/notes Vault/Personal"
+            )
+        )
+
+        self.assertEqual(result.type, IncomingMessageResultType.GITHUB_VAULT_SELECTED)
+        self.assertEqual(
+            manager.calls,
+            [(42, "https://github.com/octocat/notes", "Vault/Personal")],
+        )
+
+    def test_execute_confirms_and_cancels_vault_replacement(self) -> None:
+        """Ответы `да` и `нет` управляют pending vault по `app_user_id`."""
+        manager = FakeVaultSelectionManager(
+            VaultSelectionStatus.REPLACEMENT_CONFIRMATION_REQUIRED
+        )
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            vault_selection_manager=manager,
+        )
+        pending = use_case.execute(
+            _telegram_message("/github_vault https://github.com/octocat/second")
+        )
+        confirmed = use_case.execute(_telegram_message("да"))
+
+        manager.replacement_pending = True
+        cancelled = use_case.execute(_telegram_message("нет"))
+
+        self.assertEqual(
+            pending.type,
+            IncomingMessageResultType
+            .GITHUB_VAULT_REPLACEMENT_CONFIRMATION_REQUIRED,
+        )
+        self.assertEqual(
+            confirmed.type,
+            IncomingMessageResultType.GITHUB_VAULT_REPLACED,
+        )
+        self.assertEqual(
+            cancelled.type,
+            IncomingMessageResultType.GITHUB_VAULT_REPLACEMENT_CANCELLED,
         )
 
     def test_execute_hides_github_gateway_failure_behind_typed_result(self) -> None:
@@ -548,6 +662,20 @@ def _telegram_message(text: str) -> IncomingMessage:
         message_id="msg-1",
         external_user_id="user-1",
         text=text,
+    )
+
+
+def _test_vault(app_user_id: int) -> ObsidianVault:
+    """Создаёт выбранный vault для incoming-flow тестов."""
+    return ObsidianVault(
+        id=1,
+        app_user_id=app_user_id,
+        installation_id=101,
+        repository_id=501,
+        owner="octocat",
+        repository="notes",
+        branch="main",
+        root_path="Vault",
     )
 
 

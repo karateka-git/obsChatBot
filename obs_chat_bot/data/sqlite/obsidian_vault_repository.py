@@ -36,6 +36,36 @@ class SQLiteObsidianVaultRepository(ObsidianVaultRepository):
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def create_if_absent(self, vault: ObsidianVault) -> ObsidianVault | None:
+        """Атомарно создаёт первый vault пользователя без замены существующего."""
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                INSERT OR IGNORE INTO obsidian_vaults (
+                    app_user_id,
+                    installation_id,
+                    repository_id,
+                    owner,
+                    repository,
+                    branch,
+                    root_path,
+                    head_commit_sha,
+                    tree_sha,
+                    head_etag,
+                    last_checked_at,
+                    last_synced_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                _vault_values(vault),
+            )
+        if cursor.rowcount == 0:
+            return None
+        saved = self.get_for_user(vault.app_user_id)
+        if saved is None:
+            raise RuntimeError("Saved Obsidian vault could not be read")
+        return saved
+
     def replace(self, vault: ObsidianVault) -> ObsidianVault:
         """Заменяет vault пользователя в одной SQLite-транзакции."""
         with self._connection:
@@ -61,20 +91,7 @@ class SQLiteObsidianVaultRepository(ObsidianVaultRepository):
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    vault.app_user_id,
-                    vault.installation_id,
-                    vault.repository_id,
-                    vault.owner,
-                    vault.repository,
-                    vault.branch,
-                    vault.root_path,
-                    vault.head_commit_sha,
-                    vault.tree_sha,
-                    vault.head_etag,
-                    _format_optional_timestamp(vault.last_checked_at),
-                    _format_optional_timestamp(vault.last_synced_at),
-                ),
+                _vault_values(vault),
             )
             vault_id = cursor.lastrowid
 
@@ -172,3 +189,20 @@ class SQLiteObsidianVaultRepository(ObsidianVaultRepository):
 
 def _format_optional_timestamp(value: datetime | None) -> str | None:
     return format_utc_timestamp(value) if value is not None else None
+
+
+def _vault_values(vault: ObsidianVault) -> tuple[object, ...]:
+    return (
+        vault.app_user_id,
+        vault.installation_id,
+        vault.repository_id,
+        vault.owner,
+        vault.repository,
+        vault.branch,
+        vault.root_path,
+        vault.head_commit_sha,
+        vault.tree_sha,
+        vault.head_etag,
+        _format_optional_timestamp(vault.last_checked_at),
+        _format_optional_timestamp(vault.last_synced_at),
+    )

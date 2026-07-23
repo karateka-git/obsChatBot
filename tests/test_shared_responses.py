@@ -21,11 +21,16 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionStartStatus,
     GitHubDeviceAuthorization,
 )
+from obs_chat_bot.application.vaults.vault_selection import (
+    VaultSelectionResult,
+    VaultSelectionStatus,
+)
 from obs_chat_bot.application.users.identity import CreatedLinkCode
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.domain.users.entities import AppUser
+from obs_chat_bot.domain.vaults.entities import ObsidianVault
 from obs_chat_bot.presentation.shared.responses import (
     format_article_analysis_result,
     format_article_processing_result,
@@ -291,6 +296,59 @@ class TelegramResponsesTest(unittest.TestCase):
                 self.assertIn(expected_text, reply)
                 self.assertNotIn("installation", reply.lower())
                 self.assertNotIn("установок", reply.lower())
+
+    def test_format_vault_selection_shows_repository_branch_and_path(self) -> None:
+        """Успешный выбор vault возвращает понятные проверенные параметры."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_SELECTED,
+                app_user=AppUser(id=42),
+                vault_selection=VaultSelectionResult(
+                    VaultSelectionStatus.SELECTED,
+                    ObsidianVault(
+                        id=1,
+                        app_user_id=42,
+                        installation_id=101,
+                        repository_id=501,
+                        owner="octocat",
+                        repository="notes",
+                        branch="main",
+                        root_path="Vault",
+                    ),
+                ),
+            )
+        )
+
+        self.assertIn("Obsidian vault подключён", reply)
+        self.assertIn("octocat/notes", reply)
+        self.assertIn("main", reply)
+        self.assertIn("Vault", reply)
+
+    def test_format_vault_replacement_requests_yes_or_no(self) -> None:
+        """Предложение замены явно предупреждает об удалении локальных данных."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=(
+                    IncomingMessageResultType
+                    .GITHUB_VAULT_REPLACEMENT_CONFIRMATION_REQUIRED
+                ),
+                vault_selection=VaultSelectionResult(
+                    VaultSelectionStatus.REPLACEMENT_CONFIRMATION_REQUIRED,
+                    ObsidianVault(
+                        app_user_id=42,
+                        installation_id=101,
+                        repository_id=502,
+                        owner="octocat",
+                        repository="second",
+                        branch="main",
+                    ),
+                ),
+            )
+        )
+
+        self.assertIn("заменит текущее", reply)
+        self.assertIn("да", reply)
+        self.assertIn("нет", reply)
 
     def test_format_incoming_message_result_reports_reanalysis(self) -> None:
         """Повторный анализ форматируется как полезный Markdown-ответ."""

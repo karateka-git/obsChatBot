@@ -249,3 +249,27 @@
   review; ошибка GitHub сохраняет данные для безопасного повтора.
 - Первая реализация write-back создаёт и обновляет только Markdown внутри vault
   root и не удаляет заметки.
+
+## 2026-07-23. Выбор repository и корня Obsidian vault
+
+Решение:
+
+- Принимать только HTTPS URL вида `github.com/owner/repository`; branch, query,
+  fragment и вложенные GitHub-страницы не являются repository URL.
+- Искать repository только через installation IDs подключённого `app_user_id`.
+- Читать `repository_id`, канонические owner/name и default branch из GitHub API,
+  а каталог vault проверять через Contents API.
+- Пустой `vault-path` означает корень repository; непустой путь хранится как
+  относительный POSIX path.
+- Первый vault сохранять сразу. Другой repository или path сначала сохранять как
+  предложение замены с TTL 10 минут и применять только после `да`.
+- Не начинать загрузку Markdown в сценарии выбора: первая синхронизация является
+  отдельным следующим подэтапом с lease и атомарной фиксацией source SHA.
+
+Причины:
+
+- Пользователь не вводит installation ID, repository ID или branch вручную.
+- Проверка через installation token гарантирует, что бот выбирает только реально
+  разрешённый GitHub App repository.
+- Разделение выбора и синхронизации сохраняет простой атомарный контракт каждого
+  application-сценария.
