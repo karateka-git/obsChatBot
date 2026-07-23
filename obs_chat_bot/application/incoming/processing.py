@@ -22,6 +22,7 @@ from obs_chat_bot.application.articles.processing import (
     ProcessArticleUrlUseCase,
 )
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
+from obs_chat_bot.application.incoming.commands import ChatCommand, ParsedChatCommand
 from obs_chat_bot.application.users.identity import (
     CreatedLinkCode,
     IdentityAlreadyBoundError,
@@ -282,13 +283,15 @@ class ProcessIncomingMessageUseCase:
         github_completion_handler: GitHubConnectionCompletionHandler | None,
     ) -> AppUser | ProcessIncomingMessageResult:
         """Определяет пользователя приложения или возвращает результат onboarding."""
-        if incoming_message.text.strip() == "/help":
+        text = incoming_message.text.strip()
+        parsed_command = ParsedChatCommand.parse(text)
+        command = parsed_command.command if parsed_command is not None else None
+        if command is ChatCommand.HELP:
             return ProcessIncomingMessageResult(type=IncomingMessageResultType.HELP)
         if self._user_identity_service is None:
             return AppUser(id=incoming_message.app_user_id)
 
         identity = _incoming_identity_from_message(incoming_message)
-        text = incoming_message.text.strip()
         normalized_text = text.lower()
 
         if normalized_text in {"да", "yes", "y"}:
@@ -366,7 +369,7 @@ class ProcessIncomingMessageUseCase:
                 type=IncomingMessageResultType.LINK_REBIND_CONFIRMATION_PENDING
             )
 
-        if text == "/start":
+        if command is ChatCommand.START:
             app_user = self._user_identity_service.resolve(identity)
             if app_user is None:
                 return ProcessIncomingMessageResult(
@@ -377,7 +380,7 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
 
-        if text == "/register":
+        if command is ChatCommand.REGISTER:
             existing = self._user_identity_service.resolve(identity)
             if existing is not None:
                 LOGGER.debug(
@@ -409,7 +412,7 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
 
-        if text == "/link_code":
+        if command is ChatCommand.LINK_CODE:
             app_user = self._user_identity_service.resolve(identity)
             if app_user is None:
                 return ProcessIncomingMessageResult(
@@ -427,15 +430,14 @@ class ProcessIncomingMessageUseCase:
                 link_code=link_code,
             )
 
-        if text.startswith("/link"):
-            parts = text.split(maxsplit=1)
-            if len(parts) != 2 or not parts[1].strip():
+        if command is ChatCommand.LINK:
+            if parsed_command is None or not parsed_command.arguments:
                 return ProcessIncomingMessageResult(
                     type=IncomingMessageResultType.LINK_COMMAND_INVALID
                 )
             try:
                 app_user = self._user_identity_service.link(
-                    code=parts[1],
+                    code=parsed_command.arguments,
                     identity=identity,
                 )
                 LOGGER.debug(
@@ -454,7 +456,7 @@ class ProcessIncomingMessageUseCase:
             except IdentityAlreadyBoundError as error:
                 try:
                     target_user = self._user_identity_service.request_rebind_confirmation(
-                        code=parts[1],
+                        code=parsed_command.arguments,
                         identity=identity,
                     )
                     return ProcessIncomingMessageResult(
@@ -482,20 +484,27 @@ class ProcessIncomingMessageUseCase:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.UNKNOWN_IDENTITY
             )
-        if text == "/status":
+        if command is ChatCommand.STATUS:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.STATUS,
                 app_user=app_user,
             )
-        if text == "/github_connect":
+        if command is ChatCommand.GITHUB_CONNECT:
             return self._start_github_connection(
                 app_user,
                 github_completion_handler=github_completion_handler,
             )
-        if text.startswith("/github_vault"):
-            return self._select_github_vault(text, app_user)
-        if text.startswith("/reanalyze"):
-            return self._reanalyze_article(text, incoming_message, app_user)
+        if command is ChatCommand.GITHUB_VAULT:
+            return self._select_github_vault(
+                parsed_command.arguments if parsed_command is not None else "",
+                app_user,
+            )
+        if command is ChatCommand.REANALYZE:
+            return self._reanalyze_article(
+                parsed_command.arguments if parsed_command is not None else "",
+                incoming_message,
+                app_user,
+            )
         return app_user
 
     def _start_github_connection(
@@ -546,16 +555,12 @@ class ProcessIncomingMessageUseCase:
 
     def _select_github_vault(
         self,
-        text: str,
+        arguments: str,
         app_user: AppUser,
     ) -> ProcessIncomingMessageResult:
         """Проверяет аргументы `/github_vault` и запускает выбор vault."""
-        parts = text.split(maxsplit=2)
-        if (
-            len(parts) < 2
-            or parts[0] != "/github_vault"
-            or not parts[1].strip()
-        ):
+        parts = arguments.split(maxsplit=1)
+        if not parts:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.GITHUB_VAULT_COMMAND_INVALID,
                 app_user=app_user,
@@ -568,8 +573,8 @@ class ProcessIncomingMessageUseCase:
         try:
             selection = self._vault_selection_manager.select(
                 app_user_id=app_user.id,
-                repository_url=parts[1],
-                root_path=parts[2] if len(parts) == 3 else "",
+                repository_url=parts[0],
+                root_path=parts[1] if len(parts) == 2 else "",
             )
         except GitHubAccountNotConnectedError as error:
             return ProcessIncomingMessageResult(
@@ -698,13 +703,12 @@ class ProcessIncomingMessageUseCase:
 
     def _reanalyze_article(
         self,
-        text: str,
+        arguments: str,
         incoming_message: IncomingMessage,
         app_user: AppUser,
     ) -> ProcessIncomingMessageResult:
         """Повторно анализирует сохранённую статью по команде пользователя."""
-        parts = text.split(maxsplit=1)
-        if len(parts) != 2 or not parts[1].strip() or not parts[1].strip().isdigit():
+        if not arguments.isdigit():
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.REANALYZE_COMMAND_INVALID,
                 app_user=app_user,
@@ -719,7 +723,7 @@ class ProcessIncomingMessageUseCase:
         try:
             analysis_result = self._article_analysis_use_case.execute(
                 AnalyzeArticleCommand(
-                    article_id=int(parts[1]),
+                    article_id=int(arguments),
                     app_user_id=app_user.id,
                     incoming_message_id=None,
                     force=True,
@@ -795,9 +799,11 @@ def _text_kind(text: str) -> str:
     stripped_text = text.strip()
     if not stripped_text:
         return "empty"
+    parsed_command = ParsedChatCommand.parse(stripped_text)
+    if parsed_command is not None:
+        return f"command:{parsed_command.command.value}"
     if stripped_text.startswith("/"):
-        command = stripped_text.split(maxsplit=1)[0]
-        return f"command:{command}"
+        return "command:unknown"
     if extract_first_supported_url(stripped_text) is not None:
         return "url"
     return "text"

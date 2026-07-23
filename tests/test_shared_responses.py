@@ -14,6 +14,7 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
+from obs_chat_bot.application.incoming.commands import ChatCommand
 from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionCompletion,
     GitHubConnectionCompletionStatus,
@@ -48,19 +49,9 @@ class TelegramResponsesTest(unittest.TestCase):
             ProcessIncomingMessageResult(type=IncomingMessageResultType.HELP)
         )
 
-        for command in (
-            "/start",
-            "/help",
-            "/register",
-            "/status",
-            "/link_code",
-            "/link <код>",
-            "/github_connect",
-            "/github_vault",
-            "/reanalyze",
-        ):
-            with self.subTest(command=command):
-                self.assertIn(command, reply)
+        for command in ChatCommand:
+            with self.subTest(command=command.value):
+                self.assertIn(str(command), reply)
         self.assertNotIn("/github_sync", reply)
         self.assertNotIn("/github_disconnect", reply)
 

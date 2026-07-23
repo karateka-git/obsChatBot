@@ -7,6 +7,7 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
+from obs_chat_bot.application.incoming.commands import ChatCommand, CommandSection
 from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionCompletion,
     GitHubConnectionCompletionStatus,
@@ -86,25 +87,7 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
         case IncomingMessageResultType.UNKNOWN_IDENTITY:
             return _format_unknown_identity_response()
         case IncomingMessageResultType.HELP:
-            return (
-                "Доступные команды:\n\n"
-                "Основные:\n"
-                "`/start` — проверить подключение бота и канала\n"
-                "`/help` — показать этот список\n"
-                "`/register` — создать нового пользователя\n"
-                "`/status` — показать ID текущего пользователя\n\n"
-                "Связь Telegram и VK:\n"
-                "`/link_code` — создать код привязки второго канала\n"
-                "`/link <код>` — привязать канал по полученному коду\n\n"
-                "GitHub и Obsidian:\n"
-                "`/github_connect` — подключить или заменить GitHub-аккаунт\n"
-                "`/github_vault <repository-url> [vault-path]` — выбрать vault\n\n"
-                "Статьи:\n"
-                "Пришли HTTP/HTTPS-ссылку — сохранить и проанализировать статью\n"
-                "`/reanalyze <ID статьи>` — выполнить анализ повторно\n\n"
-                "Ответы `да` и `нет` используются, когда бот просит подтвердить "
-                "перепривязку или замену."
-            )
+            return _format_help()
         case IncomingMessageResultType.START_UNREGISTERED:
             return (
                 "obsChatBot запущен.\n"
@@ -322,6 +305,33 @@ def _article_action_text(result: ProcessArticleUrlResult) -> str:
     if result.extracted:
         return "Готово: статья обновлена."
     return "Эта статья уже была сохранена."
+
+
+def _format_help() -> str:
+    """Формирует справку из единого типизированного реестра команд."""
+    lines = ["Доступные команды:"]
+    for section in CommandSection:
+        lines.extend(
+            (
+                "",
+                f"{section.value}:",
+                *(
+                    str(command)
+                    for command in ChatCommand
+                    if command.section is section
+                ),
+            )
+        )
+    lines.extend(
+        (
+            "",
+            "Пришли HTTP/HTTPS-ссылку — сохранить и проанализировать статью.",
+            "",
+            "Ответы `да` и `нет` используются, когда бот просит подтвердить "
+            "перепривязку или замену.",
+        )
+    )
+    return "\n".join(lines)
 
 
 def _format_vault_selection(
