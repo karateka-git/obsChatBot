@@ -1,6 +1,7 @@
 """Тесты GitHub App HTTP adapter без реального интернета."""
 
 from datetime import UTC, datetime
+import base64
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,16 +15,19 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollStatus,
     GitHubGatewayError,
     GitHubUserAccessToken,
+    GitHubVaultSnapshotStatus,
 )
 from obs_chat_bot.data.github.github_app_client import UrllibGitHubAppClient
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
+from obs_chat_bot.domain.vaults.entities import ObsidianVault
 
 
 class FakeResponse:
     """Имитирует JSON-ответ `urlopen` как context manager."""
 
-    def __init__(self, payload: dict | list) -> None:
+    def __init__(self, payload: dict | list, *, headers: dict | None = None) -> None:
         self._body = json.dumps(payload).encode("utf-8")
+        self.headers = headers or {}
 
     def __enter__(self):
         return self
@@ -350,6 +354,107 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertEqual(str(context.exception), "GitHub request failed with HTTP 401")
         self.assertNotIn("ghu-secret", str(context.exception))
 
+    def test_fetch_vault_snapshot_downloads_only_changed_markdown_blobs(self) -> None:
+        """Git tree формирует полный manifest, но неизменённый blob не скачивается."""
+        encoded = base64.b64encode("# Новая заметка".encode()).decode()
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-27T13:00:00Z",
+                }
+            ),
+            FakeResponse(
+                {"object": {"sha": "commit-2"}},
+                headers={"ETag": '"etag-2"'},
+            ),
+            FakeResponse({"tree": {"sha": "tree-2"}}),
+            FakeResponse(
+                {
+                    "tree": [
+                        {"type": "blob", "path": "same.md", "sha": "same-sha"},
+                        {"type": "blob", "path": "new.md", "sha": "new-sha"},
+                        {"type": "blob", "path": "image.png", "sha": "image-sha"},
+                    ],
+                    "truncated": False,
+                }
+            ),
+            FakeResponse({"encoding": "base64", "content": encoded}),
+        ]
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ) as opener:
+            snapshot = _client().fetch_vault_snapshot(
+                _vault(),
+                known_blobs={"same.md": "same-sha"},
+            )
+
+        self.assertEqual(snapshot.status, GitHubVaultSnapshotStatus.CHANGED)
+        self.assertEqual(snapshot.head_etag, '"etag-2"')
+        self.assertEqual([file.path for file in snapshot.files], ["new.md", "same.md"])
+        self.assertEqual(snapshot.files[0].markdown, "# Новая заметка")
+        self.assertIsNone(snapshot.files[1].markdown)
+        self.assertEqual(opener.call_count, 5)
+        ref_request = opener.call_args_list[1].args[0]
+        self.assertEqual(ref_request.get_header("If-none-match"), '"etag-1"')
+
+    def test_fetch_vault_snapshot_accepts_not_modified_etag(self) -> None:
+        """HTTP 304 завершает проверку до чтения commit, tree и blobs."""
+        not_modified = HTTPError(
+            url="https://api.github.com/repos/owner/notes/git/ref/heads/main",
+            code=304,
+            msg="Not Modified",
+            hdrs=None,
+            fp=None,
+        )
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-27T13:00:00Z",
+                }
+            ),
+            not_modified,
+        ]
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ) as opener:
+            snapshot = _client().fetch_vault_snapshot(_vault(), known_blobs={})
+
+        self.assertEqual(snapshot.status, GitHubVaultSnapshotStatus.NOT_MODIFIED)
+        self.assertEqual(opener.call_count, 2)
+
+    def test_fetch_vault_snapshot_accepts_empty_markdown_blob(self) -> None:
+        """Пустая Markdown-заметка является корректным Git blob."""
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-27T13:00:00Z",
+                }
+            ),
+            FakeResponse({"object": {"sha": "commit-2"}}),
+            FakeResponse({"tree": {"sha": "tree-2"}}),
+            FakeResponse(
+                {
+                    "tree": [
+                        {"type": "blob", "path": "empty.md", "sha": "empty-sha"}
+                    ],
+                    "truncated": False,
+                }
+            ),
+            FakeResponse({"encoding": "base64", "content": ""}),
+        ]
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ):
+            snapshot = _client().fetch_vault_snapshot(_vault(), known_blobs={})
+
+        self.assertEqual(snapshot.files[0].markdown, "")
+
     def test_jwt_signer_uses_client_id_and_short_lifetime(self) -> None:
         """JWT signer использует рекомендуемый Client ID и окно меньше 10 минут."""
         now = datetime(2026, 7, 22, 10, 0, tzinfo=UTC)
@@ -411,6 +516,22 @@ def _client() -> UrllibGitHubAppClient:
     return UrllibGitHubAppClient(
         client_id="Iv1.client",
         app_jwt_factory=lambda: "app-jwt",
+    )
+
+
+def _vault() -> ObsidianVault:
+    """Создаёт сохранённый vault с условным ETag."""
+    return ObsidianVault(
+        id=1,
+        app_user_id=1,
+        installation_id=101,
+        repository_id=501,
+        owner="owner",
+        repository="notes",
+        branch="main",
+        head_commit_sha="commit-1",
+        tree_sha="tree-1",
+        head_etag='"etag-1"',
     )
 
 

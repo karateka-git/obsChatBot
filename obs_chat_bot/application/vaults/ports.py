@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from obs_chat_bot.application.vaults.github_models import (
     GitHubAuthenticatedAccount,
@@ -11,6 +11,7 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollResult,
     GitHubInstallationAccessToken,
     GitHubRepositoryInspection,
+    GitHubVaultSnapshot,
     GitHubUserAccessToken,
 )
 
@@ -210,6 +211,18 @@ class GitHubRepositoryGateway(Protocol):
         root_path: str,
     ) -> GitHubRepositoryInspection | None:
         """Возвращает inspection или `None` без фактического `Contents: write`."""
+
+
+class GitHubVaultGateway(Protocol):
+    """Читает условный снимок выбранного vault через GitHub App."""
+
+    def fetch_vault_snapshot(
+        self,
+        vault: ObsidianVault,
+        *,
+        known_blobs: Mapping[str, str],
+    ) -> GitHubVaultSnapshot:
+        """Возвращает удалённый manifest и содержимое только новых blobs."""
 
 
 class GitHubAccountAccessWriter(Protocol):

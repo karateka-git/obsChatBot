@@ -47,6 +47,11 @@ from obs_chat_bot.application.vaults.vault_selection import (
     VaultSelectionResult,
     VaultSelectionStatus,
 )
+from obs_chat_bot.application.vaults.vault_sync import (
+    VaultStatus,
+    VaultSyncManager,
+    VaultSyncResult,
+)
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
 
@@ -108,6 +113,9 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_VAULT_REPOSITORY_UNAVAILABLE = "github_vault_repository_unavailable"
     GITHUB_VAULT_PATH_NOT_FOUND = "github_vault_path_not_found"
     GITHUB_VAULT_FAILED = "github_vault_failed"
+    GITHUB_SYNC_COMPLETED = "github_sync_completed"
+    GITHUB_SYNC_FAILED = "github_sync_failed"
+    GITHUB_STATUS = "github_status"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +133,8 @@ class ProcessIncomingMessageResult:
     vault_selection: VaultSelectionResult | None = None
     selected_vault: ObsidianVault | None = None
     installation_url: str | None = None
+    vault_sync_result: VaultSyncResult | None = None
+    vault_status: VaultStatus | None = None
     error: Exception | None = None
 
 
@@ -143,6 +153,7 @@ class ProcessIncomingMessageUseCase:
         user_identity_service: UserIdentityService | None = None,
         github_connection_starter: GitHubConnectionStarter | None = None,
         vault_selection_manager: VaultSelectionManager | None = None,
+        vault_sync_manager: VaultSyncManager | None = None,
     ) -> None:
         self._article_url_use_case = article_url_use_case
         self._article_analysis_use_case = article_analysis_use_case
@@ -150,6 +161,7 @@ class ProcessIncomingMessageUseCase:
         self._user_identity_service = user_identity_service
         self._github_connection_starter = github_connection_starter
         self._vault_selection_manager = vault_selection_manager
+        self._vault_sync_manager = vault_sync_manager
 
     def execute(
         self,
@@ -543,6 +555,19 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
                 selected_vault=selected_vault,
             )
+        if command is ChatCommand.GITHUB_STATUS:
+            if self._vault_sync_manager is None:
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                    app_user=app_user,
+                )
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_STATUS,
+                app_user=app_user,
+                vault_status=self._vault_sync_manager.get_status(app_user.id),
+            )
+        if command is ChatCommand.GITHUB_SYNC:
+            return self._sync_vault(app_user)
         repository_arguments = _github_repository_arguments(text)
         if repository_arguments is not None:
             return self._connect_registration_vault(
@@ -797,11 +822,14 @@ class ProcessIncomingMessageUseCase:
                 .GITHUB_VAULT_REPLACEMENT_CONFIRMATION_REQUIRED
             ),
         }
-        return ProcessIncomingMessageResult(
+        result = ProcessIncomingMessageResult(
             type=result_types[selection.status],
             app_user=app_user,
             vault_selection=selection,
         )
+        if selection.status is VaultSelectionStatus.SELECTED:
+            return self._sync_vault(app_user, base_result=result)
+        return result
 
     def _confirm_vault_replacement(
         self,
@@ -826,10 +854,41 @@ class ProcessIncomingMessageUseCase:
                 type=IncomingMessageResultType.GITHUB_VAULT_CONFIRMATION_MISSING,
                 app_user=app_user,
             )
-        return ProcessIncomingMessageResult(
+        result = ProcessIncomingMessageResult(
             type=IncomingMessageResultType.GITHUB_VAULT_REPLACED,
             app_user=app_user,
             vault_selection=selection,
+        )
+        return self._sync_vault(app_user, base_result=result)
+
+    def _sync_vault(
+        self,
+        app_user: AppUser,
+        *,
+        base_result: ProcessIncomingMessageResult | None = None,
+    ) -> ProcessIncomingMessageResult:
+        """Запускает ручную или первую синхронизацию выбранного vault."""
+        if self._vault_sync_manager is None:
+            return base_result or ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                app_user=app_user,
+            )
+        try:
+            sync_result = self._vault_sync_manager.sync(app_user.id)
+        except (GitHubGatewayError, OSError, ValueError, RuntimeError) as error:
+            if base_result is not None:
+                return replace(base_result, error=error)
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_SYNC_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        if base_result is not None:
+            return replace(base_result, vault_sync_result=sync_result)
+        return ProcessIncomingMessageResult(
+            type=IncomingMessageResultType.GITHUB_SYNC_COMPLETED,
+            app_user=app_user,
+            vault_sync_result=sync_result,
         )
 
     def _reanalyze_article(

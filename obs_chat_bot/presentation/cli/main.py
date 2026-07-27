@@ -33,6 +33,7 @@ from obs_chat_bot.bootstrap import (
     create_process_article_url_use_case,
     create_user_identity_service,
     create_vault_selection_manager,
+    create_vault_sync_manager,
 )
 from obs_chat_bot.data.config import AppConfig, ConfigError, GitHubAppConfig, load_config
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
@@ -658,6 +659,17 @@ def process_channel_incoming_message(
                     github_gateway=github_repository_gateway,
                 )
                 if github_repository_gateway is not None
+                else None
+            ),
+            vault_sync_manager=(
+                create_vault_sync_manager(
+                    database_path=database_path,
+                    github_gateway=github_repository_gateway,
+                )
+                if (
+                    github_repository_gateway is not None
+                    and hasattr(github_repository_gateway, "fetch_vault_snapshot")
+                )
                 else None
             ),
         )

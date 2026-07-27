@@ -15,8 +15,10 @@ from obs_chat_bot.application.vaults.github_connection import (
 from obs_chat_bot.application.vaults.ports import (
     GitHubConnectionStarter,
     GitHubRepositoryGateway,
+    GitHubVaultGateway,
 )
 from obs_chat_bot.application.vaults.vault_selection import VaultSelectionManager
+from obs_chat_bot.application.vaults.vault_sync import VaultSyncManager
 from obs_chat_bot.data.config import GitHubAppConfig
 from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
     TrafilaturaArticleTextExtractor,
@@ -40,6 +42,9 @@ from obs_chat_bot.data.sqlite.github_connection_state_store import (
 )
 from obs_chat_bot.data.sqlite.github_vault_selection_manager import (
     SQLiteGitHubVaultSelectionManager,
+)
+from obs_chat_bot.data.sqlite.github_vault_sync_manager import (
+    SQLiteGitHubVaultSyncManager,
 )
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
@@ -138,6 +143,7 @@ def create_process_incoming_message_use_case(
     user_identity_service: UserIdentityService | None,
     github_connection_starter: GitHubConnectionStarter | None = None,
     vault_selection_manager: VaultSelectionManager | None = None,
+    vault_sync_manager: VaultSyncManager | None = None,
 ) -> ProcessIncomingMessageUseCase:
     """Собирает общий сценарий обработки входящего сообщения из любого канала.
 
@@ -148,6 +154,7 @@ def create_process_incoming_message_use_case(
         user_identity_service: Сервис пользователей и identities или `None`.
         github_connection_starter: Coordinator GitHub Device Flow или `None`.
         vault_selection_manager: Сценарий выбора GitHub vault или `None`.
+        vault_sync_manager: Сценарий синхронизации GitHub vault или `None`.
 
     Returns:
         Настроенный channel-agnostic incoming use case.
@@ -159,6 +166,7 @@ def create_process_incoming_message_use_case(
         user_identity_service=user_identity_service,
         github_connection_starter=github_connection_starter,
         vault_selection_manager=vault_selection_manager,
+        vault_sync_manager=vault_sync_manager,
     )
 
 
@@ -196,6 +204,26 @@ def create_vault_selection_manager(
         Сервис с общими SQLite repositories пользователя.
     """
     return SQLiteGitHubVaultSelectionManager(
+        database_path=database_path,
+        github_gateway=github_gateway,
+    )
+
+
+def create_vault_sync_manager(
+    *,
+    database_path: Path,
+    github_gateway: GitHubVaultGateway,
+) -> VaultSyncManager:
+    """Собирает GitHub/SQLite-сценарий синхронизации vault.
+
+    Args:
+        database_path: Путь к общей SQLite-базе adapters.
+        github_gateway: GitHub App gateway чтения Git trees и blobs.
+
+    Returns:
+        Менеджер с отдельным соединением для каждой операции.
+    """
+    return SQLiteGitHubVaultSyncManager(
         database_path=database_path,
         github_gateway=github_gateway,
     )

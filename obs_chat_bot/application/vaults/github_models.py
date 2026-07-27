@@ -179,3 +179,52 @@ class GitHubRepositoryInspection:
                 raise ValueError(f"{name} must not be empty")
         if not isinstance(self.root_path_is_directory, bool):
             raise TypeError("root_path_is_directory must be a bool")
+
+
+class GitHubVaultSnapshotStatus(StrEnum):
+    """Описывает результат проверки удалённого состояния vault."""
+
+    NOT_MODIFIED = "not_modified"  # ETag ветки не изменился.
+    TREE_UNCHANGED = "tree_unchanged"  # Commit изменился, но дерево vault прежнее.
+    CHANGED = "changed"  # Состав или содержимое Markdown-файлов изменились.
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubMarkdownFile:
+    """Описывает Markdown blob из полного удалённого manifest.
+
+    `markdown` отсутствует у неизменённого blob, уже сохранённого локально.
+    """
+
+    path: str
+    blob_sha: str
+    markdown: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.path or self.path.startswith("/") or "\\" in self.path:
+            raise ValueError("path must be repository-relative")
+        if not self.path.lower().endswith(".md"):
+            raise ValueError("path must point to a Markdown file")
+        if not self.blob_sha.strip():
+            raise ValueError("blob_sha must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubVaultSnapshot:
+    """Содержит условный снимок ветки и полный manifest Markdown-файлов."""
+
+    status: GitHubVaultSnapshotStatus
+    head_commit_sha: str | None = None
+    tree_sha: str | None = None
+    head_etag: str | None = None
+    files: tuple[GitHubMarkdownFile, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, GitHubVaultSnapshotStatus):
+            raise TypeError("status must be a GitHubVaultSnapshotStatus")
+        if self.status is GitHubVaultSnapshotStatus.CHANGED:
+            if not self.head_commit_sha or not self.tree_sha:
+                raise ValueError("changed snapshot requires commit and tree SHA")
+        paths = [file.path for file in self.files]
+        if len(paths) != len(set(paths)):
+            raise ValueError("files must not contain duplicate paths")

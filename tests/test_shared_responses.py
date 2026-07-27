@@ -51,7 +51,8 @@ class TelegramResponsesTest(unittest.TestCase):
         for command in ChatCommand:
             with self.subTest(command=command.value):
                 self.assertIn(str(command), reply)
-        self.assertNotIn("/github_sync", reply)
+        self.assertIn("/github_sync", reply)
+        self.assertIn("/github_status", reply)
         self.assertNotIn("/github_disconnect", reply)
         self.assertNotIn("/github_connect", reply)
         self.assertNotIn("/github_vault", reply)

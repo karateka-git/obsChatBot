@@ -9,6 +9,7 @@ from obs_chat_bot.application.incoming.processing import (
 )
 from obs_chat_bot.application.incoming.commands import ChatCommand, CommandSection
 from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletionStatus
+from obs_chat_bot.application.vaults.vault_sync import VaultSyncStatus
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
 
@@ -310,6 +311,15 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             )
         case IncomingMessageResultType.GITHUB_VAULT_FAILED:
             return "Не удалось проверить GitHub repository. Попробуй позже."
+        case IncomingMessageResultType.GITHUB_SYNC_COMPLETED:
+            return _format_vault_sync(result)
+        case IncomingMessageResultType.GITHUB_SYNC_FAILED:
+            return (
+                "Не удалось синхронизировать Obsidian vault с GitHub. "
+                "Локальная копия не была помечена как актуальная. Попробуй позже."
+            )
+        case IncomingMessageResultType.GITHUB_STATUS:
+            return _format_github_status(result)
         case IncomingMessageResultType.REANALYZE_COMMAND_INVALID:
             return "Пришли команду в формате `/reanalyze <ID статьи>`."
         case IncomingMessageResultType.ARTICLE_REANALYZED:
@@ -410,11 +420,69 @@ def _format_vault_selection(
         return prefix
     vault = selection.vault
     root_path = vault.root_path or "корень repository"
-    return (
+    description = (
         f"{prefix}\n"
         f"Repository: `{vault.owner}/{vault.repository}`\n"
         f"Ветка: `{vault.branch}`\n"
         f"Vault path: `{root_path}`"
+    )
+    if result.error is not None:
+        return (
+            f"{description}\n\n"
+            "Первая синхронизация не завершилась. Подключение сохранено; "
+            "повтори через `/github_sync`."
+        )
+    if result.vault_sync_result is not None:
+        return f"{description}\n\n{_format_vault_sync(result)}"
+    return description
+
+
+def _format_vault_sync(result: ProcessIncomingMessageResult) -> str:
+    """Форматирует итог первой или ручной синхронизации vault."""
+    sync = result.vault_sync_result
+    if sync is None:
+        return "Синхронизация vault завершилась без доступной сводки."
+    if sync.status is VaultSyncStatus.NO_VAULT:
+        return "Obsidian vault ещё не подключён."
+    if sync.status is VaultSyncStatus.IN_PROGRESS:
+        return "Этот vault уже синхронизируется. Дождись завершения."
+    if sync.status is VaultSyncStatus.UNCHANGED:
+        return (
+            "Vault проверен: изменений нет.\n"
+            f"Локально заметок: {sync.total_notes}."
+        )
+    return (
+        "Vault синхронизирован.\n"
+        f"Заметок: {sync.total_notes}; скачано: {sync.downloaded_notes}; "
+        f"добавлено: {sync.added_notes}; обновлено: {sync.updated_notes}; "
+        f"удалено: {sync.deleted_notes}."
+    )
+
+
+def _format_github_status(result: ProcessIncomingMessageResult) -> str:
+    """Форматирует состояние GitHub vault и локального каталога."""
+    status = result.vault_status
+    if status is None or status.vault is None:
+        return "Obsidian vault ещё не подключён."
+    vault = status.vault
+    root = vault.root_path or "корень repository"
+    checked = (
+        vault.last_checked_at.strftime("%Y-%m-%d %H:%M UTC")
+        if vault.last_checked_at is not None
+        else "ещё не проверялся"
+    )
+    synced = (
+        vault.last_synced_at.strftime("%Y-%m-%d %H:%M UTC")
+        if vault.last_synced_at is not None
+        else "ещё не синхронизировался"
+    )
+    return (
+        f"Obsidian vault: `{vault.owner}/{vault.repository}`\n"
+        f"Ветка: `{vault.branch}`\n"
+        f"Vault path: `{root}`\n"
+        f"Локально заметок: {status.note_count}\n"
+        f"Последняя проверка: {checked}\n"
+        f"Последняя успешная синхронизация: {synced}"
     )
 
 
