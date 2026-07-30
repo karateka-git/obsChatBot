@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC
+
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleResult
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlResult
 from obs_chat_bot.application.articles.stages import ProcessingStage
@@ -9,7 +11,10 @@ from obs_chat_bot.application.incoming.processing import (
 )
 from obs_chat_bot.application.incoming.commands import ChatCommand, CommandSection
 from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletionStatus
-from obs_chat_bot.application.vaults.vault_sync import VaultSyncStatus
+from obs_chat_bot.application.vaults.vault_sync import (
+    VaultSyncStatus,
+    VaultSyncWarningReason,
+)
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 
 
@@ -318,18 +323,6 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 "Не удалось синхронизировать Obsidian vault с GitHub. "
                 "Локальная копия не была помечена как актуальная. Попробуй позже."
             )
-        case IncomingMessageResultType.GITHUB_AUTO_SYNC_FAILED:
-            return (
-                "Не удалось проверить актуальность Obsidian vault в GitHub, "
-                "поэтому статья пока не обработана. Попробуй отправить её позже "
-                "или запусти `/github_sync`."
-            )
-        case IncomingMessageResultType.GITHUB_AUTO_SYNC_IN_PROGRESS:
-            return (
-                "Obsidian vault уже синхронизируется в другом связанном канале, "
-                "поэтому статья пока не обработана. Отправь её повторно после "
-                "завершения синхронизации."
-            )
         case IncomingMessageResultType.GITHUB_STATUS:
             return _format_github_status(result)
         case IncomingMessageResultType.GITHUB_DISCONNECT_NOT_CONNECTED:
@@ -386,21 +379,60 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
         case IncomingMessageResultType.ARTICLE_PROCESSED:
             if result.article_result is None:
                 return "Статья обработана, но результат не удалось подготовить."
-            return format_article_processing_result(result.article_result)
+            return _with_vault_sync_warning(
+                format_article_processing_result(result.article_result),
+                result,
+            )
         case IncomingMessageResultType.ARTICLE_ANALYZED:
             if result.article_result is None or result.analysis_result is None:
                 return "Анализ готов, но результат не удалось подготовить."
-            return format_article_analysis_result(
-                result.article_result,
-                result.analysis_result,
+            return _with_vault_sync_warning(
+                format_article_analysis_result(
+                    result.article_result,
+                    result.analysis_result,
+                ),
+                result,
             )
         case IncomingMessageResultType.ARTICLE_PROCESSING_FAILED:
             return _format_processing_error(result.error)
         case IncomingMessageResultType.ARTICLE_ANALYSIS_FAILED:
-            return (
-                "Статью удалось сохранить, но анализ пока не получился. "
-                "Попробуй отправить ссылку позже."
+            return _with_vault_sync_warning(
+                (
+                    "Статью удалось сохранить, но анализ пока не получился. "
+                    "Попробуй отправить ссылку позже."
+                ),
+                result,
             )
+
+
+def _with_vault_sync_warning(
+    reply: str,
+    result: ProcessIncomingMessageResult,
+) -> str:
+    """Добавляет предупреждение об использовании локальной копии vault."""
+    warning = result.vault_sync_warning
+    if warning is None:
+        return reply
+
+    if warning.reason is VaultSyncWarningReason.IN_PROGRESS:
+        reason = (
+            "Vault сейчас синхронизируется в другом связанном канале, "
+            "поэтому использована текущая локальная копия."
+        )
+    else:
+        reason = (
+            "Не удалось обновить vault из GitHub, "
+            "поэтому использована последняя локальная копия."
+        )
+
+    details = [f"Локально заметок: {warning.note_count}."]
+    if warning.last_checked_at is not None:
+        checked_at = warning.last_checked_at.astimezone(UTC)
+        details.append(
+            "Последняя успешная проверка GitHub: "
+            f"{checked_at:%Y-%m-%d %H:%M} UTC."
+        )
+    return f"{reply}\n\n⚠️ {reason}\n{' '.join(details)}"
 
 
 def _display_name(result: ProcessIncomingMessageResult) -> str:

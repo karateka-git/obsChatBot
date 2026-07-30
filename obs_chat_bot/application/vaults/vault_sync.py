@@ -33,6 +33,13 @@ class VaultSyncStatus(StrEnum):
     FRESH = "fresh"  # Недавняя проверка позволяет не обращаться к GitHub.
 
 
+class VaultSyncWarningReason(StrEnum):
+    """Причина использования последней локальной копии vault."""
+
+    UPDATE_FAILED = "update_failed"  # Автоматическое обновление завершилось ошибкой.
+    IN_PROGRESS = "in_progress"  # Vault синхронизируется в другом процессе.
+
+
 @dataclass(frozen=True, slots=True)
 class VaultSyncResult:
     """Содержит итог и счётчики синхронизации vault."""
@@ -44,6 +51,21 @@ class VaultSyncResult:
     added_notes: int = 0
     updated_notes: int = 0
     deleted_notes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class VaultSyncWarning:
+    """Описывает безопасный fallback на последнюю локальную копию."""
+
+    reason: VaultSyncWarningReason
+    note_count: int = 0
+    last_checked_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, VaultSyncWarningReason):
+            raise TypeError("reason must be a VaultSyncWarningReason")
+        if self.note_count < 0:
+            raise ValueError("note_count must not be negative")
 
 
 @dataclass(frozen=True, slots=True)

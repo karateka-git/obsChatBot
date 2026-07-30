@@ -37,6 +37,7 @@ from obs_chat_bot.application.vaults.vault_sync import (
     VaultStatus,
     VaultSyncResult,
     VaultSyncStatus,
+    VaultSyncWarningReason,
 )
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
@@ -500,8 +501,8 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(len(article_use_case.commands), 1)
         self.assertEqual(result.vault_sync_result.status, VaultSyncStatus.FRESH)
 
-    def test_execute_stops_article_when_automatic_github_check_fails(self) -> None:
-        """До реализации 9.10 сбой автоматической проверки останавливает статью."""
+    def test_execute_uses_local_vault_when_automatic_github_check_fails(self) -> None:
+        """Сбой GitHub не останавливает статью и возвращает предупреждение."""
         article_use_case = FakeArticleUrlUseCase()
         sync_manager = FakeVaultSyncManager(
             error=GitHubGatewayError("GitHub request failed with HTTP 503")
@@ -516,14 +517,17 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
             _telegram_message("https://example.com/article")
         )
 
+        self.assertEqual(result.type, IncomingMessageResultType.ARTICLE_PROCESSED)
+        self.assertEqual(len(article_use_case.commands), 1)
+        self.assertIsNone(result.error)
         self.assertEqual(
-            result.type,
-            IncomingMessageResultType.GITHUB_AUTO_SYNC_FAILED,
+            result.vault_sync_warning.reason,
+            VaultSyncWarningReason.UPDATE_FAILED,
         )
-        self.assertEqual(article_use_case.commands, [])
+        self.assertEqual(result.vault_sync_warning.note_count, 3)
 
-    def test_execute_defers_article_while_other_channel_syncs_vault(self) -> None:
-        """Активный lease не позволяет статье обойти незавершённую проверку."""
+    def test_execute_uses_local_vault_while_other_channel_syncs(self) -> None:
+        """Активный lease не останавливает статью и объясняется предупреждением."""
         article_use_case = FakeArticleUrlUseCase()
         use_case = ProcessIncomingMessageUseCase(
             article_url_use_case=article_use_case,
@@ -537,11 +541,14 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
             _telegram_message("https://example.com/article")
         )
 
+        self.assertEqual(result.type, IncomingMessageResultType.ARTICLE_PROCESSED)
+        self.assertEqual(len(article_use_case.commands), 1)
+        self.assertIsNone(result.error)
         self.assertEqual(
-            result.type,
-            IncomingMessageResultType.GITHUB_AUTO_SYNC_IN_PROGRESS,
+            result.vault_sync_warning.reason,
+            VaultSyncWarningReason.IN_PROGRESS,
         )
-        self.assertEqual(article_use_case.commands, [])
+        self.assertEqual(result.vault_sync_warning.note_count, 3)
 
     def test_execute_returns_missing_url_without_saving_message(self) -> None:
         """Сообщение без URL не сохраняется и возвращает structured result."""

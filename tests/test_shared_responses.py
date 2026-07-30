@@ -28,6 +28,10 @@ from obs_chat_bot.application.vaults.vault_selection import (
     VaultSelectionResult,
     VaultSelectionStatus,
 )
+from obs_chat_bot.application.vaults.vault_sync import (
+    VaultSyncWarning,
+    VaultSyncWarningReason,
+)
 from obs_chat_bot.application.users.identity import CreatedLinkCode
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
@@ -452,16 +456,58 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("да", reply)
         self.assertIn("нет", reply)
 
-    def test_format_automatic_sync_failure_explains_article_is_deferred(self) -> None:
-        """До 9.10 сбой проверки явно сообщает, что статья не обработана."""
+    def test_format_sync_failure_keeps_article_result_and_warns_about_fallback(
+        self,
+    ) -> None:
+        """Сбой GitHub сохраняет основной ответ и поясняет локальный fallback."""
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.GITHUB_AUTO_SYNC_FAILED,
+                type=IncomingMessageResultType.ARTICLE_PROCESSED,
+                article_result=ProcessArticleUrlResult(
+                    article=_article(),
+                    created=True,
+                    extracted=True,
+                ),
+                vault_sync_warning=VaultSyncWarning(
+                    reason=VaultSyncWarningReason.UPDATE_FAILED,
+                    note_count=17,
+                    last_checked_at=datetime(
+                        2026,
+                        7,
+                        30,
+                        7,
+                        15,
+                        tzinfo=UTC,
+                    ),
+                ),
             )
         )
 
-        self.assertIn("статья пока не обработана", reply)
-        self.assertIn("/github_sync", reply)
+        self.assertIn("статья сохранена.", reply)
+        self.assertIn("последняя локальная копия", reply)
+        self.assertIn("Локально заметок: 17.", reply)
+        self.assertIn("2026-07-30 07:15 UTC", reply)
+
+    def test_format_sync_in_progress_warns_about_current_local_copy(self) -> None:
+        """Параллельная синхронизация не скрывает успешный результат статьи."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_PROCESSED,
+                article_result=ProcessArticleUrlResult(
+                    article=_article(),
+                    created=True,
+                    extracted=True,
+                ),
+                vault_sync_warning=VaultSyncWarning(
+                    reason=VaultSyncWarningReason.IN_PROGRESS,
+                    note_count=17,
+                ),
+            )
+        )
+
+        self.assertIn("статья сохранена.", reply)
+        self.assertIn("другом связанном канале", reply)
+        self.assertIn("текущая локальная копия", reply)
 
     def test_format_incoming_message_result_reports_reanalysis(self) -> None:
         """Повторный анализ форматируется как полезный Markdown-ответ."""

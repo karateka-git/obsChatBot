@@ -54,6 +54,8 @@ from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncManager,
     VaultSyncResult,
     VaultSyncStatus,
+    VaultSyncWarning,
+    VaultSyncWarningReason,
 )
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
@@ -118,8 +120,6 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_VAULT_FAILED = "github_vault_failed"
     GITHUB_SYNC_COMPLETED = "github_sync_completed"
     GITHUB_SYNC_FAILED = "github_sync_failed"
-    GITHUB_AUTO_SYNC_FAILED = "github_auto_sync_failed"
-    GITHUB_AUTO_SYNC_IN_PROGRESS = "github_auto_sync_in_progress"
     GITHUB_STATUS = "github_status"
     GITHUB_DISCONNECT_NOT_CONNECTED = "github_disconnect_not_connected"
     GITHUB_DISCONNECT_CONFIRMATION_REQUIRED = (
@@ -150,6 +150,7 @@ class ProcessIncomingMessageResult:
     vault_sync_result: VaultSyncResult | None = None
     vault_status: VaultStatus | None = None
     vault_disconnect: VaultDisconnectResult | None = None
+    vault_sync_warning: VaultSyncWarning | None = None
     error: Exception | None = None
 
 
@@ -230,6 +231,16 @@ class ProcessIncomingMessageUseCase:
         if isinstance(auto_sync_result, ProcessIncomingMessageResult):
             _log_result(auto_sync_result)
             return auto_sync_result
+        vault_sync_warning = (
+            auto_sync_result
+            if isinstance(auto_sync_result, VaultSyncWarning)
+            else None
+        )
+        vault_sync_result = (
+            auto_sync_result
+            if isinstance(auto_sync_result, VaultSyncResult)
+            else None
+        )
 
         saved_message = self._save_incoming_message(incoming_message)
         incoming_message_id = saved_message.id if saved_message is not None else None
@@ -257,7 +268,8 @@ class ProcessIncomingMessageUseCase:
                 type=IncomingMessageResultType.ARTICLE_PROCESSING_FAILED,
                 app_user=app_user_result,
                 saved_message=saved_message,
-                vault_sync_result=auto_sync_result,
+                vault_sync_result=vault_sync_result,
+                vault_sync_warning=vault_sync_warning,
                 error=error,
             )
             _log_result(result)
@@ -280,7 +292,8 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user_result,
                 saved_message=saved_message,
                 article_result=article_result,
-                vault_sync_result=auto_sync_result,
+                vault_sync_result=vault_sync_result,
+                vault_sync_warning=vault_sync_warning,
             )
             _log_result(result)
             return result
@@ -299,7 +312,8 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user_result,
                 saved_message=saved_message,
                 article_result=article_result,
-                vault_sync_result=auto_sync_result,
+                vault_sync_result=vault_sync_result,
+                vault_sync_warning=vault_sync_warning,
                 error=error,
             )
             _log_result(result)
@@ -319,7 +333,8 @@ class ProcessIncomingMessageUseCase:
             saved_message=saved_message,
             article_result=article_result,
             analysis_result=analysis_result,
-            vault_sync_result=auto_sync_result,
+            vault_sync_result=vault_sync_result,
+            vault_sync_warning=vault_sync_warning,
         )
         _log_result(result)
         return result
@@ -327,17 +342,22 @@ class ProcessIncomingMessageUseCase:
     def _auto_sync_vault(
         self,
         app_user: AppUser,
-    ) -> VaultSyncResult | ProcessIncomingMessageResult | None:
+    ) -> VaultSyncResult | VaultSyncWarning | ProcessIncomingMessageResult | None:
         """Проверяет устаревший vault перед обработкой URL статьи."""
         if self._vault_sync_manager is None:
             return None
         try:
             sync_result = self._vault_sync_manager.sync_if_stale(app_user.id)
         except (GitHubGatewayError, OSError, ValueError, RuntimeError) as error:
-            return ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.GITHUB_AUTO_SYNC_FAILED,
-                app_user=app_user,
-                error=error,
+            LOGGER.warning(
+                "Automatic vault check failed, using local copy: "
+                "app_user_id=%s error_type=%s",
+                app_user.id,
+                type(error).__name__,
+            )
+            return self._vault_sync_warning(
+                app_user.id,
+                VaultSyncWarningReason.UPDATE_FAILED,
             )
         LOGGER.debug(
             "Automatic vault check completed: app_user_id=%s status=%s "
@@ -353,12 +373,33 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
         if sync_result.status is VaultSyncStatus.IN_PROGRESS:
-            return ProcessIncomingMessageResult(
-                type=IncomingMessageResultType.GITHUB_AUTO_SYNC_IN_PROGRESS,
-                app_user=app_user,
-                vault_sync_result=sync_result,
+            return self._vault_sync_warning(
+                app_user.id,
+                VaultSyncWarningReason.IN_PROGRESS,
             )
         return sync_result
+
+    def _vault_sync_warning(
+        self,
+        app_user_id: int,
+        reason: VaultSyncWarningReason,
+    ) -> VaultSyncWarning:
+        """Дополняет fallback доступным состоянием локальной копии."""
+        if self._vault_sync_manager is None:
+            return VaultSyncWarning(reason=reason)
+        try:
+            status = self._vault_sync_manager.get_status(app_user_id)
+        except (OSError, ValueError, RuntimeError):
+            return VaultSyncWarning(reason=reason)
+        return VaultSyncWarning(
+            reason=reason,
+            note_count=status.note_count,
+            last_checked_at=(
+                status.vault.last_checked_at
+                if status.vault is not None
+                else None
+            ),
+        )
 
     def _resolve_app_user(
         self,
@@ -1166,7 +1207,8 @@ def _text_kind(text: str) -> str:
 def _log_result(result: ProcessIncomingMessageResult) -> None:
     LOGGER.debug(
         "Incoming message processed: result=%s app_user_id=%s "
-        "incoming_message_id=%s article_id=%s analysis_id=%s error_type=%s",
+        "incoming_message_id=%s article_id=%s analysis_id=%s "
+        "vault_warning=%s error_type=%s",
         result.type.value,
         result.app_user.id if result.app_user is not None else None,
         result.saved_message.id if result.saved_message is not None else None,
@@ -1178,6 +1220,11 @@ def _log_result(result: ProcessIncomingMessageResult) -> None:
         (
             result.analysis_result.analysis.id
             if result.analysis_result is not None
+            else None
+        ),
+        (
+            result.vault_sync_warning.reason.value
+            if result.vault_sync_warning is not None
             else None
         ),
         type(result.error).__name__ if result.error is not None else None,
