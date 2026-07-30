@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+import logging
+import time
 from typing import Callable, Protocol
 from urllib.parse import unquote, urlsplit
 
@@ -20,6 +22,7 @@ from obs_chat_bot.domain.vaults.entities import (
 
 
 DEFAULT_CONFIRMATION_TTL = timedelta(minutes=10)
+LOGGER = logging.getLogger(__name__)
 
 
 class VaultSelectionStatus(StrEnum):
@@ -188,16 +191,45 @@ class GitHubVaultSelectionService(VaultSelectionManager):
                 "GitHub account has no available installations"
             )
 
+        inspection_started_at = time.monotonic()
+        LOGGER.info(
+            "GitHub repository inspection started: app_user_id=%s "
+            "repository=%s/%s installation_count=%s",
+            app_user_id,
+            owner,
+            repository,
+            len(installations),
+        )
         inspection = None
-        for installation in installations:
-            inspection = self._github_gateway.inspect_repository(
-                installation_id=installation.installation_id,
-                owner=owner,
-                repository=repository,
-                root_path=normalized_root,
+        try:
+            for installation in installations:
+                inspection = self._github_gateway.inspect_repository(
+                    installation_id=installation.installation_id,
+                    owner=owner,
+                    repository=repository,
+                    root_path=normalized_root,
+                )
+                if inspection is not None:
+                    break
+        except Exception:
+            LOGGER.exception(
+                "GitHub repository inspection failed: app_user_id=%s "
+                "repository=%s/%s duration_seconds=%.3f",
+                app_user_id,
+                owner,
+                repository,
+                time.monotonic() - inspection_started_at,
             )
-            if inspection is not None:
-                break
+            raise
+        LOGGER.info(
+            "GitHub repository inspection completed: app_user_id=%s "
+            "repository=%s/%s accessible=%s duration_seconds=%.3f",
+            app_user_id,
+            owner,
+            repository,
+            inspection is not None,
+            time.monotonic() - inspection_started_at,
+        )
         if inspection is None:
             raise GitHubRepositoryNotAccessibleError(
                 "GitHub repository is not accessible"

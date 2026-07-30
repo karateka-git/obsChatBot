@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import types
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
 
 from obs_chat_bot.application.vaults.github_models import (
@@ -357,6 +357,38 @@ class GitHubAppClientTest(unittest.TestCase):
 
         self.assertEqual(str(context.exception), "GitHub request failed with HTTP 401")
         self.assertNotIn("ghu-secret", str(context.exception))
+
+    def test_get_retries_transient_url_error_and_preserves_root_cause(self) -> None:
+        """Безопасный GET переживает временный timeout и логирует его причину."""
+        delays: list[float] = []
+        timeout = URLError(TimeoutError("read timed out"))
+        client = UrllibGitHubAppClient(
+            client_id="Iv1.client",
+            app_jwt_factory=lambda: "app-jwt",
+            sleeper=delays.append,
+        )
+        with (
+            patch(
+                "obs_chat_bot.data.github.github_app_client.urlopen",
+                side_effect=[
+                    timeout,
+                    timeout,
+                    FakeResponse({"id": 777, "login": "octocat"}),
+                ],
+            ) as opener,
+            self.assertLogs(
+                "obs_chat_bot.data.github.github_app_client",
+                level="WARNING",
+            ) as logs,
+        ):
+            account = client.get_authenticated_account(
+                GitHubUserAccessToken("ghu-secret")
+            )
+
+        self.assertEqual(account.login, "octocat")
+        self.assertEqual(opener.call_count, 3)
+        self.assertEqual(delays, [0.5, 1.0])
+        self.assertIn("TimeoutError: read timed out", "\n".join(logs.output))
 
     def test_fetch_vault_snapshot_downloads_only_changed_markdown_blobs(self) -> None:
         """Git tree формирует полный manifest, но неизменённый blob не скачивается."""

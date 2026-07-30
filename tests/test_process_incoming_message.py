@@ -800,8 +800,11 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
 
         self.assertEqual(started.type, IncomingMessageResultType.GITHUB_CONNECT_STARTED)
         self.assertEqual(
-            completions[0].type,
-            IncomingMessageResultType.GITHUB_VAULT_SELECTED,
+            [completion.type for completion in completions],
+            [
+                IncomingMessageResultType.GITHUB_AUTHORIZED_SYNC_STARTED,
+                IncomingMessageResultType.GITHUB_VAULT_SELECTED,
+            ],
         )
         self.assertEqual(
             manager.calls[-1],

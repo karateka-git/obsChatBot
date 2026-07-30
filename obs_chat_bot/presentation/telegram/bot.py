@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -210,17 +211,35 @@ async def safe_send_telegram_reply(
         limit: Безопасный предел длины одного сообщения.
         sleeper: Асинхронное ожидание между тестируемыми retry-попытками.
     """
-    for chunk in split_telegram_message(text, limit=limit):
+    chunks = split_telegram_message(text, limit=limit)
+    started_at = time.monotonic()
+    target_id = str(message.chat.id)
+    logger.info(
+        "Telegram response send started: chat_id=%s chunk_count=%s",
+        target_id,
+        len(chunks),
+    )
+    for chunk in chunks:
         sent = await safe_send_async(
             lambda chunk=chunk: message.answer(chunk),
             logger=logger,
             channel="Telegram",
-            target_id=str(message.chat.id),
+            target_id=target_id,
             retry_delay_resolver=_telegram_retry_delay,
             sleeper=sleeper,
         )
         if not sent:
+            logger.error(
+                "Telegram response send failed: chat_id=%s duration_seconds=%.3f",
+                target_id,
+                time.monotonic() - started_at,
+            )
             return
+    logger.info(
+        "Telegram response send completed: chat_id=%s duration_seconds=%.3f",
+        target_id,
+        time.monotonic() - started_at,
+    )
 
 
 def _telegram_retry_delay(error: Exception, failed_attempt: int) -> float | None:

@@ -312,7 +312,14 @@ def _safe_send_vk_message(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> None:
     """Отправляет VK-сообщение с per-chunk retries и стабильным `random_id`."""
-    for chunk in split_vk_message(text):
+    chunks = split_vk_message(text)
+    started_at = time.monotonic()
+    logger.info(
+        "VK response send started: peer_id=%s chunk_count=%s",
+        peer_id,
+        len(chunks),
+    )
+    for chunk in chunks:
         random_id = randint(1, 2_147_483_647)
         sent = safe_send(
             lambda chunk=chunk, random_id=random_id: client.send_message(
@@ -327,7 +334,17 @@ def _safe_send_vk_message(
             sleeper=sleeper,
         )
         if not sent:
+            logger.error(
+                "VK response send failed: peer_id=%s duration_seconds=%.3f",
+                peer_id,
+                time.monotonic() - started_at,
+            )
             return
+    logger.info(
+        "VK response send completed: peer_id=%s duration_seconds=%.3f",
+        peer_id,
+        time.monotonic() - started_at,
+    )
 
 
 def _vk_retry_delay(error: Exception, failed_attempt: int) -> float | None:

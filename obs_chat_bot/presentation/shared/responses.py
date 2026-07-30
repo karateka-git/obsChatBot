@@ -229,6 +229,11 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 "Подключение GitHub уже выполняется в другом привязанном канале. "
                 "Заверши его там или дождись истечения одноразового кода."
             )
+        case IncomingMessageResultType.GITHUB_AUTHORIZED_SYNC_STARTED:
+            return (
+                "GitHub авторизован. Начинаю проверку репозитория "
+                "и первую синхронизацию."
+            )
         case IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE:
             return "GitHub connector пока не настроен на сервере."
         case IncomingMessageResultType.GITHUB_CONNECT_FAILED:

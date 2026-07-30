@@ -5,6 +5,8 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import json
+import logging
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -45,9 +47,13 @@ GITHUB_WEB_BASE_URL = "https://github.com"
 GITHUB_ACCEPT = "application/vnd.github+json"
 GITHUB_USER_AGENT = "obsChatBot/0.1.0"
 DEFAULT_TIMEOUT_SECONDS = 15
+DEFAULT_READ_ATTEMPTS = 3
+DEFAULT_RETRY_BASE_DELAY_SECONDS = 0.5
 MAX_BLOB_DOWNLOAD_WORKERS = 6  # Ограничивает параллелизм первой синхронизации.
 MAX_CONFIGURATION_BYTES = 64 * 1024
 MAX_INSTRUCTION_BYTES = 256 * 1024
+RETRYABLE_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+LOGGER = logging.getLogger(__name__)
 
 
 class UrllibGitHubAppClient(
@@ -64,14 +70,24 @@ class UrllibGitHubAppClient(
         client_id: str,
         app_jwt_factory: Callable[[], str],
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        read_attempts: int = DEFAULT_READ_ATTEMPTS,
+        retry_base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         if not client_id.strip():
             raise ValueError("client_id must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if read_attempts <= 0:
+            raise ValueError("read_attempts must be positive")
+        if retry_base_delay_seconds < 0:
+            raise ValueError("retry_base_delay_seconds must not be negative")
         self._client_id = client_id
         self._app_jwt_factory = app_jwt_factory
         self._timeout_seconds = timeout_seconds
+        self._read_attempts = read_attempts
+        self._retry_base_delay_seconds = retry_base_delay_seconds
+        self._sleeper = sleeper
 
     def request_device_authorization(self) -> GitHubDeviceAuthorization:
         """Запрашивает Device Flow challenge по Client ID GitHub App."""
@@ -418,17 +434,46 @@ class UrllibGitHubAppClient(
             for _position, path, blob_sha in instruction_manifest
             if known_instruction_blobs.get(path) != blob_sha
         ]
-        downloaded = self._download_changed_text_files(
-            repository_url=repository_url,
-            token=token.value,
-            changed=changed,
-            max_bytes=None,
+        download_started_at = time.monotonic()
+        LOGGER.info(
+            "GitHub vault blob download started: app_user_id=%s "
+            "repository=%s/%s markdown_count=%s instruction_count=%s",
+            vault.app_user_id,
+            vault.owner,
+            vault.repository,
+            len(changed),
+            len(changed_instructions),
         )
-        downloaded_instructions = self._download_changed_text_files(
-            repository_url=repository_url,
-            token=token.value,
-            changed=changed_instructions,
-            max_bytes=MAX_INSTRUCTION_BYTES,
+        try:
+            downloaded = self._download_changed_text_files(
+                repository_url=repository_url,
+                token=token.value,
+                changed=changed,
+                max_bytes=None,
+            )
+            downloaded_instructions = self._download_changed_text_files(
+                repository_url=repository_url,
+                token=token.value,
+                changed=changed_instructions,
+                max_bytes=MAX_INSTRUCTION_BYTES,
+            )
+        except Exception:
+            LOGGER.exception(
+                "GitHub vault blob download failed: app_user_id=%s "
+                "repository=%s/%s duration_seconds=%.3f",
+                vault.app_user_id,
+                vault.owner,
+                vault.repository,
+                time.monotonic() - download_started_at,
+            )
+            raise
+        LOGGER.info(
+            "GitHub vault blob download completed: app_user_id=%s "
+            "repository=%s/%s duration_seconds=%.3f",
+            vault.app_user_id,
+            vault.owner,
+            vault.repository,
+            time.monotonic() - download_started_at,
         )
         files = [
             GitHubMarkdownFile(
@@ -649,10 +694,8 @@ class UrllibGitHubAppClient(
         allow_not_modified: bool,
     ) -> tuple[dict[str, Any], str | None, bool]:
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-                headers = getattr(response, "headers", None)
-                etag = headers.get("ETag") if headers is not None else None
+            payload, headers = self._read_json_response(request)
+            etag = headers.get("ETag") if headers is not None else None
         except HTTPError as error:
             if allow_not_modified and error.code == 304:
                 return {}, None, True
@@ -666,8 +709,14 @@ class UrllibGitHubAppClient(
             UnicodeDecodeError,
             json.JSONDecodeError,
         ) as error:
+            LOGGER.exception(
+                "GitHub request failed permanently: method=%s url=%s cause=%s",
+                request.get_method(),
+                request.full_url,
+                _describe_exception_chain(error),
+            )
             raise GitHubGatewayError(
-                f"GitHub request failed: {type(error).__name__}"
+                f"GitHub request failed: {_describe_exception_chain(error)}"
             ) from error
         if not isinstance(payload, dict):
             raise GitHubGatewayError("GitHub response is not a JSON object")
@@ -697,8 +746,7 @@ class UrllibGitHubAppClient(
         absent_statuses: frozenset[int] = frozenset(),
     ) -> Any | None:
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload, _headers = self._read_json_response(request)
         except HTTPError as error:
             if (allow_not_found and error.code == 404) or (
                 error.code in absent_statuses
@@ -714,10 +762,93 @@ class UrllibGitHubAppClient(
             UnicodeDecodeError,
             json.JSONDecodeError,
         ) as error:
+            LOGGER.exception(
+                "GitHub request failed permanently: method=%s url=%s cause=%s",
+                request.get_method(),
+                request.full_url,
+                _describe_exception_chain(error),
+            )
             raise GitHubGatewayError(
-                f"GitHub request failed: {type(error).__name__}"
+                f"GitHub request failed: {_describe_exception_chain(error)}"
             ) from error
         return payload
+
+    def _read_json_response(
+        self,
+        request: Request,
+    ) -> tuple[Any, Any]:
+        """Читает JSON и повторяет только временные ошибки безопасных GET-запросов.
+
+        Args:
+            request: Полностью сформированный HTTP-запрос GitHub.
+
+        Returns:
+            Декодированный JSON и заголовки ответа.
+
+        Raises:
+            HTTPError: GitHub вернул HTTP-ошибку, исчерпавшую повторы.
+            OSError: Сетевая ошибка сохранилась после всех повторов.
+            UnicodeDecodeError: Ответ не является UTF-8.
+            json.JSONDecodeError: Ответ не является корректным JSON.
+        """
+        attempts = self._read_attempts if request.get_method() == "GET" else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                with urlopen(request, timeout=self._timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    return payload, getattr(response, "headers", None)
+            except HTTPError as error:
+                retryable = error.code in RETRYABLE_HTTP_STATUSES
+                if not retryable or attempt == attempts:
+                    raise
+                self._wait_before_retry(request, error, attempt, attempts)
+            except (URLError, TimeoutError, OSError) as error:
+                if attempt == attempts:
+                    raise
+                self._wait_before_retry(request, error, attempt, attempts)
+        raise RuntimeError("GitHub request retry loop completed unexpectedly")
+
+    def _wait_before_retry(
+        self,
+        request: Request,
+        error: Exception,
+        attempt: int,
+        attempts: int,
+    ) -> None:
+        """Логирует исходную сетевую причину и выдерживает exponential backoff."""
+        delay = self._retry_base_delay_seconds * (2 ** (attempt - 1))
+        LOGGER.warning(
+            "GitHub read request failed; retrying: method=%s url=%s "
+            "failed_attempt=%s/%s retry_delay_seconds=%.3f cause=%s",
+            request.get_method(),
+            request.full_url,
+            attempt,
+            attempts,
+            delay,
+            _describe_exception_chain(error),
+        )
+        self._sleeper(delay)
+
+
+def _describe_exception_chain(error: BaseException) -> str:
+    """Возвращает типы и сообщения вложенных исключений без HTTP-заголовков."""
+    parts: list[str] = []
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        message = str(current).strip()
+        parts.append(
+            f"{type(current).__name__}: {message}"
+            if message
+            else type(current).__name__
+        )
+        nested = current.__cause__ or current.__context__
+        if nested is None and isinstance(current, URLError):
+            reason = current.reason
+            nested = reason if isinstance(reason, BaseException) else None
+        current = nested
+    return " <- ".join(parts)
 
 
 def _require_string(payload: dict[str, Any], name: str) -> str:

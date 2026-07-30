@@ -106,6 +106,7 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_CONNECT_UNAVAILABLE = "github_connect_unavailable"
     GITHUB_CONNECT_FAILED = "github_connect_failed"
     GITHUB_CONNECT_IN_PROGRESS = "github_connect_in_progress"
+    GITHUB_AUTHORIZED_SYNC_STARTED = "github_authorized_sync_started"
     REGISTRATION_VAULT_REQUIRED = "registration_vault_required"
     GITHUB_APP_REQUIRED = "github_app_required"
     GITHUB_VAULT_COMMAND_INVALID = "github_vault_command_invalid"
@@ -815,6 +816,20 @@ class ProcessIncomingMessageUseCase:
             )
 
         def complete_github(completion: GitHubConnectionCompletion) -> None:
+            if (
+                completion.status is GitHubConnectionCompletionStatus.CONNECTED
+                and completion_handler is not None
+            ):
+                completion_handler(
+                    ProcessIncomingMessageResult(
+                        type=(
+                            IncomingMessageResultType
+                            .GITHUB_AUTHORIZED_SYNC_STARTED
+                        ),
+                        app_user=app_user,
+                        github_completion=completion,
+                    )
+                )
             result = self._complete_github_registration(
                 repository_arguments,
                 app_user,

@@ -398,6 +398,17 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("installations/new", reply)
         self.assertIn("read and write", reply)
 
+    def test_format_github_authorized_announces_first_sync(self) -> None:
+        """После Device Flow пользователь сразу видит начало первой синхронизации."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_AUTHORIZED_SYNC_STARTED,
+            )
+        )
+
+        self.assertIn("GitHub авторизован", reply)
+        self.assertIn("первую синхронизацию", reply)
+
     def test_format_vault_selection_shows_repository_branch_and_path(self) -> None:
         """Успешный выбор vault возвращает понятные проверенные параметры."""
         reply = format_incoming_message_result(

@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+import logging
+import time
 from typing import Protocol
 from uuid import uuid4
 
@@ -26,6 +28,7 @@ from obs_chat_bot.domain.vaults.entities import (
 
 
 DEFAULT_AUTO_SYNC_INTERVAL = timedelta(hours=6)
+LOGGER = logging.getLogger(__name__)
 
 
 class VaultSyncStatus(StrEnum):
@@ -239,16 +242,43 @@ class VaultSyncService:
             instruction.path: instruction
             for instruction in local_instructions
         }
-        snapshot = self._github_gateway.fetch_vault_snapshot(
-            vault,
-            known_blobs={
-                note.path: note.blob_sha
-                for note in local_notes
-            },
-            known_instruction_blobs={
-                instruction.path: instruction.blob_sha
-                for instruction in local_instructions
-            },
+        github_started_at = time.monotonic()
+        LOGGER.info(
+            "GitHub vault snapshot fetch started: app_user_id=%s vault_id=%s "
+            "repository=%s/%s",
+            vault.app_user_id,
+            vault.id,
+            vault.owner,
+            vault.repository,
+        )
+        try:
+            snapshot = self._github_gateway.fetch_vault_snapshot(
+                vault,
+                known_blobs={
+                    note.path: note.blob_sha
+                    for note in local_notes
+                },
+                known_instruction_blobs={
+                    instruction.path: instruction.blob_sha
+                    for instruction in local_instructions
+                },
+            )
+        except Exception:
+            LOGGER.exception(
+                "GitHub vault snapshot fetch failed: app_user_id=%s "
+                "vault_id=%s duration_seconds=%.3f",
+                vault.app_user_id,
+                vault.id,
+                time.monotonic() - github_started_at,
+            )
+            raise
+        LOGGER.info(
+            "GitHub vault snapshot fetch completed: app_user_id=%s "
+            "vault_id=%s status=%s duration_seconds=%.3f",
+            vault.app_user_id,
+            vault.id,
+            snapshot.status.value,
+            time.monotonic() - github_started_at,
         )
         if snapshot.status is GitHubVaultSnapshotStatus.NOT_MODIFIED:
             updated = self._update_state(vault, snapshot, now=now, synced=False)
@@ -318,20 +348,47 @@ class VaultSyncService:
             else:
                 updated_count += 1
 
-        # Source SHA фиксируется лишь после успешной записи правил и заметок.
-        self._instruction_repository.replace_for_vault(
-            app_user_id=vault.app_user_id,
-            vault_id=vault.id,
-            instructions=tuple(pending_instructions),
+        sqlite_started_at = time.monotonic()
+        LOGGER.info(
+            "Vault SQLite write started: app_user_id=%s vault_id=%s "
+            "upsert_count=%s delete_count=%s instruction_count=%s",
+            vault.app_user_id,
+            vault.id,
+            len(pending_notes),
+            len(deleted_paths),
+            len(pending_instructions),
         )
-        for note in pending_notes:
-            self._note_repository.upsert(note)
-        deleted = self._note_repository.delete_paths(
-            app_user_id=vault.app_user_id,
-            vault_id=vault.id,
-            paths=deleted_paths,
+        try:
+            # Source SHA фиксируется лишь после успешной записи правил и заметок.
+            self._instruction_repository.replace_for_vault(
+                app_user_id=vault.app_user_id,
+                vault_id=vault.id,
+                instructions=tuple(pending_instructions),
+            )
+            for note in pending_notes:
+                self._note_repository.upsert(note)
+            deleted = self._note_repository.delete_paths(
+                app_user_id=vault.app_user_id,
+                vault_id=vault.id,
+                paths=deleted_paths,
+            )
+            updated_vault = self._update_state(vault, snapshot, now=now, synced=True)
+        except Exception:
+            LOGGER.exception(
+                "Vault SQLite write failed: app_user_id=%s vault_id=%s "
+                "duration_seconds=%.3f",
+                vault.app_user_id,
+                vault.id,
+                time.monotonic() - sqlite_started_at,
+            )
+            raise
+        LOGGER.info(
+            "Vault SQLite write completed: app_user_id=%s vault_id=%s "
+            "duration_seconds=%.3f",
+            vault.app_user_id,
+            vault.id,
+            time.monotonic() - sqlite_started_at,
         )
-        updated_vault = self._update_state(vault, snapshot, now=now, synced=True)
         return VaultSyncResult(
             status=VaultSyncStatus.SYNCED,
             vault=updated_vault,
