@@ -117,6 +117,33 @@ class VaultNote:
 
 
 @dataclass(frozen=True, slots=True)
+class VaultInstruction:
+    """Представляет обязательный текстовый файл с правилами конкретного vault."""
+
+    app_user_id: int
+    vault_id: int
+    position: int
+    path: str
+    blob_sha: str
+    content: str
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
+        if self.vault_id <= 0:
+            raise ValueError("vault_id must be positive")
+        if self.position < 0:
+            raise ValueError("position must not be negative")
+        _validate_repository_path(self.path, allow_root=False)
+        _require_text(self.blob_sha, "blob_sha")
+        if self.id is not None and self.id <= 0:
+            raise ValueError("id must be positive")
+
+
+@dataclass(frozen=True, slots=True)
 class VaultSyncLease:
     """Представляет временное право процесса синхронизировать один vault."""
 

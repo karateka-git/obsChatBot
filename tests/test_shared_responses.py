@@ -28,6 +28,10 @@ from obs_chat_bot.application.vaults.vault_selection import (
     VaultSelectionResult,
     VaultSelectionStatus,
 )
+from obs_chat_bot.application.vaults.vault_configuration import (
+    VaultConfigurationError,
+    VaultConfigurationErrorCode,
+)
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncWarning,
     VaultSyncWarningReason,
@@ -62,6 +66,37 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("/github_disconnect", reply)
         self.assertNotIn("/github_connect", reply)
         self.assertNotIn("/github_vault", reply)
+
+    def test_format_missing_vault_configuration_includes_ready_example(
+        self,
+    ) -> None:
+        """Ошибка первой синхронизации объясняет ручное создание YAML."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_SYNC_FAILED,
+                error=VaultConfigurationError(
+                    VaultConfigurationErrorCode.MISSING
+                ),
+            )
+        )
+
+        self.assertIn(".knowledge-catcher.yml", reply)
+        self.assertIn("memory-bank/AGENTS.md.txt", reply)
+        self.assertIn("```yaml", reply)
+
+    def test_format_missing_instruction_names_required_path(self) -> None:
+        """Ошибка перечисленного файла показывает исправляемый path."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_SYNC_FAILED,
+                error=VaultConfigurationError(
+                    VaultConfigurationErrorCode.INSTRUCTION_MISSING,
+                    path="memory-bank/docs/workflows.md.txt",
+                ),
+            )
+        )
+
+        self.assertIn("memory-bank/docs/workflows.md.txt", reply)
 
     def test_format_article_processing_result_reports_created_article(self) -> None:
         """Новая статья получает понятный текст с названием, статусом, ID и длиной."""

@@ -19,6 +19,7 @@ from obs_chat_bot.domain.vaults.entities import (
     GitHubInstallation,
     ObsidianVault,
     VaultActionConfirmation,
+    VaultInstruction,
     VaultNote,
     VaultSyncLease,
 )
@@ -114,6 +115,26 @@ class VaultNoteRepository(Protocol):
     ) -> int:
         """Удаляет перечисленные заметки и возвращает число удалённых строк."""
 
+
+class VaultInstructionRepository(Protocol):
+    """Описывает отдельное хранение обязательных правил подключённого vault."""
+
+    def replace_for_vault(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        instructions: tuple[VaultInstruction, ...],
+    ) -> list[VaultInstruction]:
+        """Атомарно заменяет полный упорядоченный набор правил vault."""
+
+    def list_for_vault(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+    ) -> list[VaultInstruction]:
+        """Возвращает правила в порядке, заданном пользователем."""
 
 class VaultSyncLeaseRepository(Protocol):
     """Описывает межпроцессный lease синхронизации vault."""
@@ -221,8 +242,9 @@ class GitHubVaultGateway(Protocol):
         vault: ObsidianVault,
         *,
         known_blobs: Mapping[str, str],
+        known_instruction_blobs: Mapping[str, str],
     ) -> GitHubVaultSnapshot:
-        """Возвращает удалённый manifest и содержимое только новых blobs."""
+        """Возвращает manifest заметок, правил и содержимое только новых blobs."""
 
 
 class GitHubAccountAccessWriter(Protocol):

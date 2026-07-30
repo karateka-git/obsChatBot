@@ -14,6 +14,9 @@ from obs_chat_bot.data.sqlite.obsidian_vault_repository import (
     SQLiteObsidianVaultRepository,
 )
 from obs_chat_bot.data.sqlite.vault_note_repository import SQLiteVaultNoteRepository
+from obs_chat_bot.data.sqlite.vault_instruction_repository import (
+    SQLiteVaultInstructionRepository,
+)
 from obs_chat_bot.data.sqlite.vault_sync_lease_repository import (
     SQLiteVaultSyncLeaseRepository,
 )
@@ -37,6 +40,7 @@ class SQLiteGitHubVaultSyncManager(VaultSyncManager):
             return VaultSyncService(
                 vault_repository=SQLiteObsidianVaultRepository(connection),
                 note_repository=SQLiteVaultNoteRepository(connection),
+                instruction_repository=SQLiteVaultInstructionRepository(connection),
                 lease_repository=SQLiteVaultSyncLeaseRepository(connection),
                 github_gateway=self._github_gateway,
             ).sync(app_user_id)
@@ -47,6 +51,7 @@ class SQLiteGitHubVaultSyncManager(VaultSyncManager):
             return VaultSyncService(
                 vault_repository=SQLiteObsidianVaultRepository(connection),
                 note_repository=SQLiteVaultNoteRepository(connection),
+                instruction_repository=SQLiteVaultInstructionRepository(connection),
                 lease_repository=SQLiteVaultSyncLeaseRepository(connection),
                 github_gateway=self._github_gateway,
             ).sync_if_stale(app_user_id)
@@ -57,6 +62,7 @@ class SQLiteGitHubVaultSyncManager(VaultSyncManager):
             return VaultSyncService(
                 vault_repository=SQLiteObsidianVaultRepository(connection),
                 note_repository=SQLiteVaultNoteRepository(connection),
+                instruction_repository=SQLiteVaultInstructionRepository(connection),
                 lease_repository=SQLiteVaultSyncLeaseRepository(connection),
                 github_gateway=self._github_gateway,
             ).get_status(app_user_id)

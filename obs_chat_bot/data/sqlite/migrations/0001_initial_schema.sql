@@ -259,6 +259,29 @@ CREATE INDEX idx_obsidian_notes_app_user_vault
 CREATE INDEX idx_obsidian_notes_vault_blob_sha
     ON obsidian_notes (vault_id, blob_sha);
 
+CREATE TABLE obsidian_vault_instructions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id, vault_id)
+        REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE,
+    UNIQUE (vault_id, path),
+    UNIQUE (vault_id, position),
+    UNIQUE (app_user_id, id),
+    CHECK (position >= 0)
+);
+
+CREATE INDEX idx_obsidian_vault_instructions_app_user_vault
+    ON obsidian_vault_instructions (app_user_id, vault_id);
+CREATE INDEX idx_obsidian_vault_instructions_vault_blob_sha
+    ON obsidian_vault_instructions (vault_id, blob_sha);
+
 CREATE TABLE obsidian_note_tags (
     app_user_id INTEGER NOT NULL,
     note_id INTEGER NOT NULL,

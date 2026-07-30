@@ -49,6 +49,9 @@ from obs_chat_bot.application.vaults.vault_selection import (
     VaultDisconnectResult,
     VaultDisconnectStatus,
 )
+from obs_chat_bot.application.vaults.vault_configuration import (
+    VaultConfigurationError,
+)
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultStatus,
     VaultSyncManager,
@@ -120,6 +123,7 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_VAULT_FAILED = "github_vault_failed"
     GITHUB_SYNC_COMPLETED = "github_sync_completed"
     GITHUB_SYNC_FAILED = "github_sync_failed"
+    GITHUB_VAULT_CONFIGURATION_REQUIRED = "github_vault_configuration_required"
     GITHUB_STATUS = "github_status"
     GITHUB_DISCONNECT_NOT_CONNECTED = "github_disconnect_not_connected"
     GITHUB_DISCONNECT_CONFIRMATION_REQUIRED = (
@@ -348,6 +352,15 @@ class ProcessIncomingMessageUseCase:
             return None
         try:
             sync_result = self._vault_sync_manager.sync_if_stale(app_user.id)
+        except VaultConfigurationError as error:
+            return ProcessIncomingMessageResult(
+                type=(
+                    IncomingMessageResultType
+                    .GITHUB_VAULT_CONFIGURATION_REQUIRED
+                ),
+                app_user=app_user,
+                error=error,
+            )
         except (GitHubGatewayError, OSError, ValueError, RuntimeError) as error:
             LOGGER.warning(
                 "Automatic vault check failed, using local copy: "

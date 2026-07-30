@@ -14,10 +14,15 @@ from obs_chat_bot.application.vaults.markdown import parse_markdown
 from obs_chat_bot.application.vaults.ports import (
     GitHubVaultGateway,
     ObsidianVaultRepository,
+    VaultInstructionRepository,
     VaultNoteRepository,
     VaultSyncLeaseRepository,
 )
-from obs_chat_bot.domain.vaults.entities import ObsidianVault, VaultNote
+from obs_chat_bot.domain.vaults.entities import (
+    ObsidianVault,
+    VaultInstruction,
+    VaultNote,
+)
 
 
 DEFAULT_AUTO_SYNC_INTERVAL = timedelta(hours=6)
@@ -51,6 +56,7 @@ class VaultSyncResult:
     added_notes: int = 0
     updated_notes: int = 0
     deleted_notes: int = 0
+    instruction_files: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +80,7 @@ class VaultStatus:
 
     vault: ObsidianVault | None
     note_count: int = 0
+    instruction_count: int = 0
 
 
 class VaultSyncManager(Protocol):
@@ -97,6 +104,7 @@ class VaultSyncService:
         *,
         vault_repository: ObsidianVaultRepository,
         note_repository: VaultNoteRepository,
+        instruction_repository: VaultInstructionRepository,
         lease_repository: VaultSyncLeaseRepository,
         github_gateway: GitHubVaultGateway,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -104,6 +112,7 @@ class VaultSyncService:
     ) -> None:
         self._vault_repository = vault_repository
         self._note_repository = note_repository
+        self._instruction_repository = instruction_repository
         self._lease_repository = lease_repository
         self._github_gateway = github_gateway
         self._clock = clock
@@ -199,7 +208,15 @@ class VaultSyncService:
             app_user_id=app_user_id,
             vault_id=vault.id,
         )
-        return VaultStatus(vault=vault, note_count=len(notes))
+        instructions = self._instruction_repository.list_for_vault(
+            app_user_id=app_user_id,
+            vault_id=vault.id,
+        )
+        return VaultStatus(
+            vault=vault,
+            note_count=len(notes),
+            instruction_count=len(instructions),
+        )
 
     def _sync_locked(
         self,
@@ -214,11 +231,23 @@ class VaultSyncService:
             vault_id=vault.id,
         )
         local_by_path = {note.path: note for note in local_notes}
+        local_instructions = self._instruction_repository.list_for_vault(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+        )
+        local_instructions_by_path = {
+            instruction.path: instruction
+            for instruction in local_instructions
+        }
         snapshot = self._github_gateway.fetch_vault_snapshot(
             vault,
             known_blobs={
                 note.path: note.blob_sha
                 for note in local_notes
+            },
+            known_instruction_blobs={
+                instruction.path: instruction.blob_sha
+                for instruction in local_instructions
             },
         )
         if snapshot.status is GitHubVaultSnapshotStatus.NOT_MODIFIED:
@@ -227,6 +256,7 @@ class VaultSyncService:
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
                 total_notes=len(local_notes),
+                instruction_files=len(local_instructions),
             )
         if snapshot.status is GitHubVaultSnapshotStatus.TREE_UNCHANGED:
             updated = self._update_state(vault, snapshot, now=now, synced=False)
@@ -234,6 +264,28 @@ class VaultSyncService:
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
                 total_notes=len(local_notes),
+                instruction_files=len(local_instructions),
+            )
+
+        pending_instructions: list[VaultInstruction] = []
+        for file in snapshot.instructions:
+            local = local_instructions_by_path.get(file.path)
+            content = (
+                local.content
+                if local is not None and local.blob_sha == file.blob_sha
+                else file.content
+            )
+            if content is None:
+                raise RuntimeError("Changed instruction blob has no content")
+            pending_instructions.append(
+                VaultInstruction(
+                    app_user_id=vault.app_user_id,
+                    vault_id=vault.id,
+                    position=file.position,
+                    path=file.path,
+                    blob_sha=file.blob_sha,
+                    content=content,
+                )
             )
 
         remote_paths = {file.path for file in snapshot.files}
@@ -266,7 +318,12 @@ class VaultSyncService:
             else:
                 updated_count += 1
 
-        # Source SHA фиксируется лишь после успешной записи всех заметок.
+        # Source SHA фиксируется лишь после успешной записи правил и заметок.
+        self._instruction_repository.replace_for_vault(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+            instructions=tuple(pending_instructions),
+        )
         for note in pending_notes:
             self._note_repository.upsert(note)
         deleted = self._note_repository.delete_paths(
@@ -283,6 +340,7 @@ class VaultSyncService:
             added_notes=added,
             updated_notes=updated_count,
             deleted_notes=deleted,
+            instruction_files=len(pending_instructions),
         )
 
     def _update_state(self, vault, snapshot, *, now, synced):

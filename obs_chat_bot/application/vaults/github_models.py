@@ -210,14 +210,36 @@ class GitHubMarkdownFile:
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubInstructionFile:
+    """Описывает обязательный текстовый instruction-файл из GitHub tree.
+
+    `content` отсутствует у неизменённого blob, уже сохранённого локально.
+    """
+
+    position: int
+    path: str
+    blob_sha: str
+    content: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.position < 0:
+            raise ValueError("position must not be negative")
+        if not self.path or self.path.startswith("/") or "\\" in self.path:
+            raise ValueError("path must be repository-relative")
+        if not self.blob_sha.strip():
+            raise ValueError("blob_sha must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class GitHubVaultSnapshot:
-    """Содержит условный снимок ветки и полный manifest Markdown-файлов."""
+    """Содержит снимок ветки, Markdown и обязательных instruction-файлов."""
 
     status: GitHubVaultSnapshotStatus
     head_commit_sha: str | None = None
     tree_sha: str | None = None
     head_etag: str | None = None
     files: tuple[GitHubMarkdownFile, ...] = ()
+    instructions: tuple[GitHubInstructionFile, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, GitHubVaultSnapshotStatus):
@@ -228,3 +250,9 @@ class GitHubVaultSnapshot:
         paths = [file.path for file in self.files]
         if len(paths) != len(set(paths)):
             raise ValueError("files must not contain duplicate paths")
+        instruction_paths = [file.path for file in self.instructions]
+        if len(instruction_paths) != len(set(instruction_paths)):
+            raise ValueError("instructions must not contain duplicate paths")
+        positions = [file.position for file in self.instructions]
+        if positions != list(range(len(positions))):
+            raise ValueError("instruction positions must be contiguous")

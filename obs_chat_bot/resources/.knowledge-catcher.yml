@@ -1,0 +1,9 @@
+version: 1
+
+instructions:
+  - memory-bank/AGENTS.md.txt
+  - memory-bank/docs/agent-preflight.md.txt
+  - memory-bank/docs/content-conventions.md.txt
+  - memory-bank/docs/note-types.md.txt
+  - memory-bank/docs/project-structure.md.txt
+  - memory-bank/docs/workflows.md.txt

@@ -15,6 +15,9 @@ from obs_chat_bot.data.sqlite.obsidian_vault_repository import (
     SQLiteObsidianVaultRepository,
 )
 from obs_chat_bot.data.sqlite.vault_note_repository import SQLiteVaultNoteRepository
+from obs_chat_bot.data.sqlite.vault_instruction_repository import (
+    SQLiteVaultInstructionRepository,
+)
 from obs_chat_bot.data.sqlite.vault_confirmation_repository import (
     SQLiteVaultActionConfirmationRepository,
 )
@@ -25,6 +28,7 @@ from obs_chat_bot.domain.vaults.entities import (
     ObsidianVault,
     VaultActionConfirmation,
     VaultConfirmationAction,
+    VaultInstruction,
     VaultNote,
 )
 from tests.sqlite_helpers import ensure_app_user
@@ -164,6 +168,55 @@ class VaultRepositoriesTest(unittest.TestCase):
                     path="Projects/Bot.md",
                 )
                 self.assertEqual(unchanged, first_note)
+
+    def test_instruction_replace_preserves_order_and_isolates_vault(self) -> None:
+        """Полный набор правил заменяется атомарно внутри области пользователя."""
+        with TemporaryDirectory(prefix="obs-chat-bot-vault-rules-") as directory:
+            with connect_database(Path(directory) / "test.db") as connection:
+                apply_migrations(connection)
+                vault = _prepare_vault(
+                    connection,
+                    app_user_id=1,
+                    installation_id=101,
+                )
+                repository = SQLiteVaultInstructionRepository(connection)
+                saved = repository.replace_for_vault(
+                    app_user_id=1,
+                    vault_id=vault.id,
+                    instructions=(
+                        _instruction(vault_id=vault.id, position=0),
+                        _instruction(
+                            vault_id=vault.id,
+                            position=1,
+                            path="memory-bank/docs/workflows.md.txt",
+                        ),
+                    ),
+                )
+
+                self.assertEqual(
+                    [instruction.position for instruction in saved],
+                    [0, 1],
+                )
+                replacement = repository.replace_for_vault(
+                    app_user_id=1,
+                    vault_id=vault.id,
+                    instructions=(
+                        _instruction(
+                            vault_id=vault.id,
+                            position=0,
+                            path="memory-bank/docs/workflows.md.txt",
+                            blob_sha="rules-2",
+                        ),
+                    ),
+                )
+                self.assertEqual(len(replacement), 1)
+                self.assertEqual(replacement[0].blob_sha, "rules-2")
+                with self.assertRaises(ValueError):
+                    repository.replace_for_vault(
+                        app_user_id=2,
+                        vault_id=vault.id,
+                        instructions=(),
+                    )
 
     def test_sync_state_update_is_scoped_by_user(self) -> None:
         """Source SHA нельзя обновить через ID другого пользователя."""
@@ -377,6 +430,24 @@ def _note(
         frontmatter=frontmatter,
         tags=tags,
         wikilinks=wikilinks,
+    )
+
+
+def _instruction(
+    *,
+    vault_id: int,
+    position: int,
+    path: str = "memory-bank/AGENTS.md.txt",
+    blob_sha: str = "rules-1",
+) -> VaultInstruction:
+    """Создаёт доменную модель обязательного instruction-файла."""
+    return VaultInstruction(
+        app_user_id=1,
+        vault_id=vault_id,
+        position=position,
+        path=path,
+        blob_sha=blob_sha,
+        content="Правила vault",
     )
 
 

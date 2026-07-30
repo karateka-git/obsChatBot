@@ -52,6 +52,21 @@ class VaultNoteDto:
 
 
 @dataclass(frozen=True, slots=True)
+class VaultInstructionDto:
+    """Представляет instruction-файл vault в форме SQLite."""
+
+    app_user_id: int
+    vault_id: int
+    position: int
+    path: str
+    blob_sha: str
+    content: str
+    id: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class VaultSyncLeaseDto:
     """Представляет межпроцессный lease синхронизации в SQLite."""
 

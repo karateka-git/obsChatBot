@@ -17,11 +17,18 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollStatus,
     GitHubGatewayError,
     GitHubInstallationAccessToken,
-    GitHubRepositoryInspection,
+    GitHubInstructionFile,
     GitHubMarkdownFile,
+    GitHubRepositoryInspection,
     GitHubUserAccessToken,
     GitHubVaultSnapshot,
     GitHubVaultSnapshotStatus,
+)
+from obs_chat_bot.application.vaults.vault_configuration import (
+    VAULT_CONFIGURATION_PATH,
+    VaultConfigurationError,
+    VaultConfigurationErrorCode,
+    parse_vault_configuration,
 )
 from obs_chat_bot.application.vaults.ports import (
     GitHubDeviceFlowGateway,
@@ -39,6 +46,8 @@ GITHUB_ACCEPT = "application/vnd.github+json"
 GITHUB_USER_AGENT = "obsChatBot/0.1.0"
 DEFAULT_TIMEOUT_SECONDS = 15
 MAX_BLOB_DOWNLOAD_WORKERS = 6  # Ограничивает параллелизм первой синхронизации.
+MAX_CONFIGURATION_BYTES = 64 * 1024
+MAX_INSTRUCTION_BYTES = 256 * 1024
 
 
 class UrllibGitHubAppClient(
@@ -275,18 +284,21 @@ class UrllibGitHubAppClient(
         vault: ObsidianVault,
         *,
         known_blobs: Mapping[str, str],
+        known_instruction_blobs: Mapping[str, str],
     ) -> GitHubVaultSnapshot:
-        """Читает Git tree vault и скачивает только неизвестные Markdown blobs.
+        """Читает Git tree, правила vault и изменённые Markdown blobs.
 
         Args:
             vault: Сохраненное подключение repository, ветки и корневой папки.
             known_blobs: Локальное соответствие пути и последнего blob SHA.
+            known_instruction_blobs: Локальные SHA обязательных правил.
 
         Returns:
             Условный снимок с полным manifest и содержимым изменённых файлов.
 
         Raises:
             GitHubGatewayError: GitHub недоступен или вернул некорректные данные.
+            VaultConfigurationError: Конфигурация правил отсутствует или неверна.
         """
         token = self.create_installation_token(
             installation_id=vault.installation_id,
@@ -356,7 +368,7 @@ class UrllibGitHubAppClient(
         tree = tree_payload.get("tree")
         if not isinstance(tree, list):
             raise GitHubGatewayError("GitHub tree response has unexpected format")
-        manifest: list[tuple[str, str]] = []
+        tree_blobs: dict[str, str] = {}
         for item in tree:
             if not isinstance(item, dict) or item.get("type") != "blob":
                 continue
@@ -364,34 +376,60 @@ class UrllibGitHubAppClient(
             blob_sha = item.get("sha")
             if (
                 not isinstance(path, str)
-                or not path.lower().endswith(".md")
                 or not isinstance(blob_sha, str)
                 or not blob_sha.strip()
             ):
                 continue
-            manifest.append((path, blob_sha))
+            tree_blobs[path] = blob_sha
+
+        configuration_sha = tree_blobs.get(VAULT_CONFIGURATION_PATH)
+        if configuration_sha is None:
+            raise VaultConfigurationError(VaultConfigurationErrorCode.MISSING)
+        configuration_content = self._download_text_blob(
+            repository_url=repository_url,
+            token=token.value,
+            blob_sha=configuration_sha,
+            max_bytes=MAX_CONFIGURATION_BYTES,
+        )
+        configuration = parse_vault_configuration(configuration_content)
+        instruction_manifest: list[tuple[int, str, str]] = []
+        for position, path in enumerate(configuration.instruction_paths):
+            blob_sha = tree_blobs.get(path)
+            if blob_sha is None:
+                raise VaultConfigurationError(
+                    VaultConfigurationErrorCode.INSTRUCTION_MISSING,
+                    path=path,
+                )
+            instruction_manifest.append((position, path, blob_sha))
+
+        instruction_paths = set(configuration.instruction_paths)
+        manifest = [
+            (path, blob_sha)
+            for path, blob_sha in tree_blobs.items()
+            if path.lower().endswith(".md") and path not in instruction_paths
+        ]
         changed = [
             (path, blob_sha)
             for path, blob_sha in manifest
             if known_blobs.get(path) != blob_sha
         ]
-        downloaded: dict[str, str] = {}
-        if changed:
-            with ThreadPoolExecutor(
-                max_workers=min(MAX_BLOB_DOWNLOAD_WORKERS, len(changed))
-            ) as executor:
-                contents = executor.map(
-                    lambda item: self._download_markdown_blob(
-                        repository_url=repository_url,
-                        token=token.value,
-                        blob_sha=item[1],
-                    ),
-                    changed,
-                )
-                downloaded = {
-                    path: markdown
-                    for (path, _blob_sha), markdown in zip(changed, contents)
-                }
+        changed_instructions = [
+            (path, blob_sha)
+            for _position, path, blob_sha in instruction_manifest
+            if known_instruction_blobs.get(path) != blob_sha
+        ]
+        downloaded = self._download_changed_text_files(
+            repository_url=repository_url,
+            token=token.value,
+            changed=changed,
+            max_bytes=None,
+        )
+        downloaded_instructions = self._download_changed_text_files(
+            repository_url=repository_url,
+            token=token.value,
+            changed=changed_instructions,
+            max_bytes=MAX_INSTRUCTION_BYTES,
+        )
         files = [
             GitHubMarkdownFile(
                 path=path,
@@ -400,12 +438,22 @@ class UrllibGitHubAppClient(
             )
             for path, blob_sha in manifest
         ]
+        instructions = [
+            GitHubInstructionFile(
+                position=position,
+                path=path,
+                blob_sha=blob_sha,
+                content=downloaded_instructions.get(path),
+            )
+            for position, path, blob_sha in instruction_manifest
+        ]
         return GitHubVaultSnapshot(
             status=GitHubVaultSnapshotStatus.CHANGED,
             head_commit_sha=head_commit_sha,
             tree_sha=vault_tree_sha,
             head_etag=ref_etag,
             files=tuple(sorted(files, key=lambda file: file.path)),
+            instructions=tuple(instructions),
         )
 
     def _resolve_vault_tree_sha(
@@ -445,12 +493,40 @@ class UrllibGitHubAppClient(
             current_sha = match["sha"]
         return current_sha
 
-    def _download_markdown_blob(
+    def _download_changed_text_files(
+        self,
+        *,
+        repository_url: str,
+        token: str,
+        changed: list[tuple[str, str]],
+        max_bytes: int | None,
+    ) -> dict[str, str]:
+        if not changed:
+            return {}
+        with ThreadPoolExecutor(
+            max_workers=min(MAX_BLOB_DOWNLOAD_WORKERS, len(changed))
+        ) as executor:
+            contents = executor.map(
+                lambda item: self._download_text_blob(
+                    repository_url=repository_url,
+                    token=token,
+                    blob_sha=item[1],
+                    max_bytes=max_bytes,
+                ),
+                changed,
+            )
+            return {
+                path: content
+                for (path, _blob_sha), content in zip(changed, contents)
+            }
+
+    def _download_text_blob(
         self,
         *,
         repository_url: str,
         token: str,
         blob_sha: str,
+        max_bytes: int | None,
     ) -> str:
         payload = self._request_json(
             Request(
@@ -463,9 +539,15 @@ class UrllibGitHubAppClient(
             raise GitHubGatewayError("GitHub blob encoding is not base64")
         encoded = _require_string_allow_empty(payload, "content")
         try:
-            return base64.b64decode(encoded, validate=False).decode("utf-8")
+            decoded = base64.b64decode(encoded, validate=False)
         except (ValueError, UnicodeDecodeError) as error:
-            raise GitHubGatewayError("GitHub Markdown blob is invalid") from error
+            raise GitHubGatewayError("GitHub text blob is invalid") from error
+        if max_bytes is not None and len(decoded) > max_bytes:
+            raise VaultConfigurationError(VaultConfigurationErrorCode.INVALID)
+        try:
+            return decoded.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise GitHubGatewayError("GitHub text blob is invalid") from error
 
     def _create_repository_write_token(
         self,

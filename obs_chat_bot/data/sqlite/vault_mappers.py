@@ -7,6 +7,7 @@ from obs_chat_bot.data.sqlite.vault_dtos import (
     GitHubInstallationDto,
     ObsidianVaultDto,
     VaultActionConfirmationDto,
+    VaultInstructionDto,
     VaultNoteDto,
     VaultSyncLeaseDto,
 )
@@ -15,6 +16,7 @@ from obs_chat_bot.domain.vaults.entities import (
     ObsidianVault,
     VaultActionConfirmation,
     VaultConfirmationAction,
+    VaultInstruction,
     VaultNote,
     VaultSyncLease,
 )
@@ -132,6 +134,38 @@ def vault_note_from_dto(dto: VaultNoteDto) -> VaultNote:
         frontmatter=dto.frontmatter,
         tags=dto.tags,
         wikilinks=dto.wikilinks,
+        created_at=parse_utc_timestamp(dto.created_at),
+        updated_at=parse_utc_timestamp(dto.updated_at),
+    )
+
+
+def vault_instruction_dto_from_row(row: sqlite3.Row) -> VaultInstructionDto:
+    """Преобразует строку SQLite в DTO instruction-файла vault."""
+    return VaultInstructionDto(
+        id=row["id"],
+        app_user_id=row["app_user_id"],
+        vault_id=row["vault_id"],
+        position=row["position"],
+        path=row["path"],
+        blob_sha=row["blob_sha"],
+        content=row["content"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def vault_instruction_from_dto(dto: VaultInstructionDto) -> VaultInstruction:
+    """Преобразует DTO instruction-файла в доменную модель."""
+    if dto.id is None or dto.created_at is None or dto.updated_at is None:
+        raise ValueError("Saved vault instruction DTO must contain id and timestamps")
+    return VaultInstruction(
+        id=dto.id,
+        app_user_id=dto.app_user_id,
+        vault_id=dto.vault_id,
+        position=dto.position,
+        path=dto.path,
+        blob_sha=dto.blob_sha,
+        content=dto.content,
         created_at=parse_utc_timestamp(dto.created_at),
         updated_at=parse_utc_timestamp(dto.updated_at),
     )

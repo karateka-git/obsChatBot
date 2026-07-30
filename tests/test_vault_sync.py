@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import unittest
 
 from obs_chat_bot.application.vaults.github_models import (
+    GitHubInstructionFile,
     GitHubMarkdownFile,
     GitHubVaultSnapshot,
     GitHubVaultSnapshotStatus,
@@ -13,7 +14,12 @@ from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncService,
     VaultSyncStatus,
 )
-from obs_chat_bot.domain.vaults.entities import ObsidianVault, VaultNote, VaultSyncLease
+from obs_chat_bot.domain.vaults.entities import (
+    ObsidianVault,
+    VaultInstruction,
+    VaultNote,
+    VaultSyncLease,
+)
 
 
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
@@ -68,6 +74,20 @@ class MemoryNoteRepository:
         return deleted
 
 
+class MemoryInstructionRepository:
+    """Хранит обязательные правила vault в памяти."""
+
+    def __init__(self, instructions=()):
+        self.instructions = list(instructions)
+
+    def list_for_vault(self, **_values):
+        return sorted(self.instructions, key=lambda item: item.position)
+
+    def replace_for_vault(self, *, instructions, **_values):
+        self.instructions = list(instructions)
+        return self.list_for_vault()
+
+
 class MemoryLeaseRepository:
     """Всегда выдаёт свободный lease и фиксирует освобождение."""
 
@@ -102,8 +122,15 @@ class SnapshotGateway:
         self.snapshot = snapshot
         self.known_blobs = None
 
-    def fetch_vault_snapshot(self, _vault, *, known_blobs):
+    def fetch_vault_snapshot(
+        self,
+        _vault,
+        *,
+        known_blobs,
+        known_instruction_blobs,
+    ):
         self.known_blobs = known_blobs
+        self.known_instruction_blobs = known_instruction_blobs
         return self.snapshot
 
 
@@ -134,6 +161,14 @@ class VaultSyncTest(unittest.TestCase):
                         markdown="---\ntags: [one, two]\n---\n# New\n[[Old]]",
                     ),
                 ),
+                instructions=(
+                    GitHubInstructionFile(
+                        position=0,
+                        path="memory-bank/AGENTS.md.txt",
+                        blob_sha="rules-sha",
+                        content="Правила",
+                    ),
+                ),
             )
         )
         vaults = MemoryVaultRepository(vault)
@@ -142,6 +177,7 @@ class VaultSyncTest(unittest.TestCase):
         result = VaultSyncService(
             vault_repository=vaults,
             note_repository=notes,
+            instruction_repository=MemoryInstructionRepository(),
             lease_repository=leases,
             github_gateway=gateway,
             clock=lambda: NOW,
@@ -152,6 +188,7 @@ class VaultSyncTest(unittest.TestCase):
         self.assertEqual(gateway.known_blobs, {"old.md": "old-sha"})
         self.assertEqual(notes.notes["new.md"].tags, ("one", "two"))
         self.assertEqual(notes.notes["new.md"].wikilinks, ("Old",))
+        self.assertEqual(result.instruction_files, 1)
         self.assertEqual(vaults.vault.tree_sha, "tree-2")
         self.assertEqual(vaults.vault.last_synced_at, NOW)
         self.assertTrue(leases.released)
@@ -162,6 +199,7 @@ class VaultSyncTest(unittest.TestCase):
         result = VaultSyncService(
             vault_repository=vaults,
             note_repository=MemoryNoteRepository([]),
+            instruction_repository=MemoryInstructionRepository(),
             lease_repository=MemoryLeaseRepository(),
             github_gateway=SnapshotGateway(
                 GitHubVaultSnapshot(
@@ -184,6 +222,7 @@ class VaultSyncTest(unittest.TestCase):
         service = VaultSyncService(
             vault_repository=vaults,
             note_repository=FailingNoteRepository([]),
+            instruction_repository=MemoryInstructionRepository(),
             lease_repository=leases,
             github_gateway=SnapshotGateway(
                 GitHubVaultSnapshot(
@@ -209,6 +248,51 @@ class VaultSyncTest(unittest.TestCase):
         self.assertEqual(vaults.vault.head_commit_sha, "commit-1")
         self.assertTrue(leases.released)
 
+    def test_sync_reuses_unchanged_instruction_content_by_blob_sha(self) -> None:
+        """Неизменённый instruction blob не требует повторного содержимого."""
+        local_instruction = VaultInstruction(
+            app_user_id=1,
+            vault_id=10,
+            position=0,
+            path="memory-bank/AGENTS.md.txt",
+            blob_sha="rules-sha",
+            content="Сохранённые правила",
+        )
+        instructions = MemoryInstructionRepository((local_instruction,))
+        gateway = SnapshotGateway(
+            GitHubVaultSnapshot(
+                status=GitHubVaultSnapshotStatus.CHANGED,
+                head_commit_sha="commit-2",
+                tree_sha="tree-2",
+                instructions=(
+                    GitHubInstructionFile(
+                        position=0,
+                        path=local_instruction.path,
+                        blob_sha=local_instruction.blob_sha,
+                    ),
+                ),
+            )
+        )
+
+        result = VaultSyncService(
+            vault_repository=MemoryVaultRepository(_vault()),
+            note_repository=MemoryNoteRepository([]),
+            instruction_repository=instructions,
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=gateway,
+            clock=lambda: NOW,
+        ).sync(1)
+
+        self.assertEqual(
+            gateway.known_instruction_blobs,
+            {"memory-bank/AGENTS.md.txt": "rules-sha"},
+        )
+        self.assertEqual(
+            instructions.instructions[0].content,
+            "Сохранённые правила",
+        )
+        self.assertEqual(result.instruction_files, 1)
+
     def test_sync_if_stale_skips_github_inside_six_hour_window(self) -> None:
         """Недавно проверенный vault не создаёт ни одного GitHub-запроса."""
         gateway = SnapshotGateway(
@@ -222,6 +306,7 @@ class VaultSyncTest(unittest.TestCase):
                 )
             ),
             note_repository=MemoryNoteRepository([]),
+            instruction_repository=MemoryInstructionRepository(),
             lease_repository=MemoryLeaseRepository(),
             github_gateway=gateway,
             clock=lambda: NOW,
@@ -248,6 +333,7 @@ class VaultSyncTest(unittest.TestCase):
                 )
             ),
             note_repository=MemoryNoteRepository([]),
+            instruction_repository=MemoryInstructionRepository(),
             lease_repository=MemoryLeaseRepository(),
             github_gateway=gateway,
             clock=lambda: NOW,

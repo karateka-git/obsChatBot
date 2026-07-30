@@ -33,6 +33,10 @@ from obs_chat_bot.application.vaults.vault_selection import (
     VaultSelectionResult,
     VaultSelectionStatus,
 )
+from obs_chat_bot.application.vaults.vault_configuration import (
+    VaultConfigurationError,
+    VaultConfigurationErrorCode,
+)
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultStatus,
     VaultSyncResult,
@@ -525,6 +529,31 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
             VaultSyncWarningReason.UPDATE_FAILED,
         )
         self.assertEqual(result.vault_sync_warning.note_count, 3)
+
+    def test_execute_stops_article_when_vault_configuration_is_missing(
+        self,
+    ) -> None:
+        """Ошибка обязательной конфигурации не маскируется GitHub fallback."""
+        article_use_case = FakeArticleUrlUseCase()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            user_identity_service=FakeUserIdentityService(),
+            vault_sync_manager=FakeVaultSyncManager(
+                error=VaultConfigurationError(
+                    VaultConfigurationErrorCode.MISSING
+                )
+            ),
+        )
+
+        result = use_case.execute(
+            _telegram_message("https://example.com/article")
+        )
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.GITHUB_VAULT_CONFIGURATION_REQUIRED,
+        )
+        self.assertEqual(article_use_case.commands, [])
 
     def test_execute_uses_local_vault_while_other_channel_syncs(self) -> None:
         """Активный lease не останавливает статью и объясняется предупреждением."""

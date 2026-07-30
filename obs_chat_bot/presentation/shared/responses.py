@@ -11,6 +11,12 @@ from obs_chat_bot.application.incoming.processing import (
 )
 from obs_chat_bot.application.incoming.commands import ChatCommand, CommandSection
 from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletionStatus
+from obs_chat_bot.application.vaults.vault_configuration import (
+    VAULT_CONFIGURATION_PATH,
+    VaultConfigurationError,
+    VaultConfigurationErrorCode,
+    load_vault_configuration_example,
+)
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncStatus,
     VaultSyncWarningReason,
@@ -319,9 +325,18 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
         case IncomingMessageResultType.GITHUB_SYNC_COMPLETED:
             return _format_vault_sync(result)
         case IncomingMessageResultType.GITHUB_SYNC_FAILED:
+            if isinstance(result.error, VaultConfigurationError):
+                return _format_vault_configuration_error(result.error)
             return (
                 "Не удалось синхронизировать Obsidian vault с GitHub. "
                 "Локальная копия не была помечена как актуальная. Попробуй позже."
+            )
+        case IncomingMessageResultType.GITHUB_VAULT_CONFIGURATION_REQUIRED:
+            if isinstance(result.error, VaultConfigurationError):
+                return _format_vault_configuration_error(result.error)
+            return (
+                f"`{VAULT_CONFIGURATION_PATH}` необходимо исправить "
+                "перед продолжением."
             )
         case IncomingMessageResultType.GITHUB_STATUS:
             return _format_github_status(result)
@@ -510,6 +525,12 @@ def _format_vault_selection(
         f"Vault path: `{root_path}`"
     )
     if result.error is not None:
+        if isinstance(result.error, VaultConfigurationError):
+            return (
+                f"{description}\n\n"
+                f"{_format_vault_configuration_error(result.error)}\n\n"
+                "Подключение сохранено. После исправления запусти `/github_sync`."
+            )
         return (
             f"{description}\n\n"
             "Первая синхронизация не завершилась. Подключение сохранено; "
@@ -532,18 +553,39 @@ def _format_vault_sync(result: ProcessIncomingMessageResult) -> str:
     if sync.status is VaultSyncStatus.FRESH:
         return (
             "Vault недавно проверен, повторный запрос к GitHub не требуется.\n"
-            f"Локально заметок: {sync.total_notes}."
+            f"Локально заметок: {sync.total_notes}. "
+            f"Файлов правил: {sync.instruction_files}."
         )
     if sync.status is VaultSyncStatus.UNCHANGED:
         return (
             "Vault проверен: изменений нет.\n"
-            f"Локально заметок: {sync.total_notes}."
+            f"Локально заметок: {sync.total_notes}. "
+            f"Файлов правил: {sync.instruction_files}."
         )
     return (
         "Vault синхронизирован.\n"
         f"Заметок: {sync.total_notes}; скачано: {sync.downloaded_notes}; "
         f"добавлено: {sync.added_notes}; обновлено: {sync.updated_notes}; "
-        f"удалено: {sync.deleted_notes}."
+        f"удалено: {sync.deleted_notes}.\n"
+        f"Файлов правил: {sync.instruction_files}."
+    )
+
+
+def _format_vault_configuration_error(error: VaultConfigurationError) -> str:
+    """Форматирует безопасную ошибку обязательных правил vault."""
+    if error.code is VaultConfigurationErrorCode.MISSING:
+        reason = (
+            f"В корне vault не найден обязательный `{VAULT_CONFIGURATION_PATH}`."
+        )
+    elif error.code is VaultConfigurationErrorCode.INSTRUCTION_MISSING:
+        reason = f"Не найден обязательный файл правил: `{error.path}`."
+    else:
+        reason = f"`{VAULT_CONFIGURATION_PATH}` заполнен некорректно."
+    return (
+        f"{reason}\n"
+        "Создай или исправь файл вручную и повтори синхронизацию.\n\n"
+        "Пример:\n"
+        f"```yaml\n{load_vault_configuration_example()}\n```"
     )
 
 
@@ -569,6 +611,7 @@ def _format_github_status(result: ProcessIncomingMessageResult) -> str:
         f"Ветка: `{vault.branch}`\n"
         f"Vault path: `{root}`\n"
         f"Локально заметок: {status.note_count}\n"
+        f"Файлов правил: {status.instruction_count}\n"
         f"Последняя проверка: {checked}\n"
         f"Последняя успешная синхронизация: {synced}"
     )

@@ -17,6 +17,10 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubUserAccessToken,
     GitHubVaultSnapshotStatus,
 )
+from obs_chat_bot.application.vaults.vault_configuration import (
+    VaultConfigurationError,
+    VaultConfigurationErrorCode,
+)
 from obs_chat_bot.data.github.github_app_client import UrllibGitHubAppClient
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
@@ -357,6 +361,10 @@ class GitHubAppClientTest(unittest.TestCase):
     def test_fetch_vault_snapshot_downloads_only_changed_markdown_blobs(self) -> None:
         """Git tree формирует полный manifest, но неизменённый blob не скачивается."""
         encoded = base64.b64encode("# Новая заметка".encode()).decode()
+        config = base64.b64encode(
+            b"version: 1\ninstructions:\n  - rules.txt\n"
+        ).decode()
+        rules = base64.b64encode("Правила".encode()).decode()
         responses = [
             FakeResponse(
                 {
@@ -374,12 +382,20 @@ class GitHubAppClientTest(unittest.TestCase):
                     "tree": [
                         {"type": "blob", "path": "same.md", "sha": "same-sha"},
                         {"type": "blob", "path": "new.md", "sha": "new-sha"},
+                        {
+                            "type": "blob",
+                            "path": ".knowledge-catcher.yml",
+                            "sha": "config-sha",
+                        },
+                        {"type": "blob", "path": "rules.txt", "sha": "rules-sha"},
                         {"type": "blob", "path": "image.png", "sha": "image-sha"},
                     ],
                     "truncated": False,
                 }
             ),
+            FakeResponse({"encoding": "base64", "content": config}),
             FakeResponse({"encoding": "base64", "content": encoded}),
+            FakeResponse({"encoding": "base64", "content": rules}),
         ]
         with patch(
             "obs_chat_bot.data.github.github_app_client.urlopen",
@@ -388,6 +404,7 @@ class GitHubAppClientTest(unittest.TestCase):
             snapshot = _client().fetch_vault_snapshot(
                 _vault(),
                 known_blobs={"same.md": "same-sha"},
+                known_instruction_blobs={},
             )
 
         self.assertEqual(snapshot.status, GitHubVaultSnapshotStatus.CHANGED)
@@ -395,7 +412,8 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertEqual([file.path for file in snapshot.files], ["new.md", "same.md"])
         self.assertEqual(snapshot.files[0].markdown, "# Новая заметка")
         self.assertIsNone(snapshot.files[1].markdown)
-        self.assertEqual(opener.call_count, 5)
+        self.assertEqual(snapshot.instructions[0].content, "Правила")
+        self.assertEqual(opener.call_count, 7)
         ref_request = opener.call_args_list[1].args[0]
         self.assertEqual(ref_request.get_header("If-none-match"), '"etag-1"')
 
@@ -421,13 +439,21 @@ class GitHubAppClientTest(unittest.TestCase):
             "obs_chat_bot.data.github.github_app_client.urlopen",
             side_effect=responses,
         ) as opener:
-            snapshot = _client().fetch_vault_snapshot(_vault(), known_blobs={})
+            snapshot = _client().fetch_vault_snapshot(
+                _vault(),
+                known_blobs={},
+                known_instruction_blobs={},
+            )
 
         self.assertEqual(snapshot.status, GitHubVaultSnapshotStatus.NOT_MODIFIED)
         self.assertEqual(opener.call_count, 2)
 
     def test_fetch_vault_snapshot_accepts_empty_markdown_blob(self) -> None:
         """Пустая Markdown-заметка является корректным Git blob."""
+        config = base64.b64encode(
+            b"version: 1\ninstructions:\n  - rules.txt\n"
+        ).decode()
+        rules = base64.b64encode(b"Rules").decode()
         responses = [
             FakeResponse(
                 {
@@ -440,20 +466,68 @@ class GitHubAppClientTest(unittest.TestCase):
             FakeResponse(
                 {
                     "tree": [
-                        {"type": "blob", "path": "empty.md", "sha": "empty-sha"}
+                        {"type": "blob", "path": "empty.md", "sha": "empty-sha"},
+                        {
+                            "type": "blob",
+                            "path": ".knowledge-catcher.yml",
+                            "sha": "config-sha",
+                        },
+                        {"type": "blob", "path": "rules.txt", "sha": "rules-sha"},
                     ],
                     "truncated": False,
                 }
             ),
+            FakeResponse({"encoding": "base64", "content": config}),
             FakeResponse({"encoding": "base64", "content": ""}),
+            FakeResponse({"encoding": "base64", "content": rules}),
         ]
         with patch(
             "obs_chat_bot.data.github.github_app_client.urlopen",
             side_effect=responses,
         ):
-            snapshot = _client().fetch_vault_snapshot(_vault(), known_blobs={})
+            snapshot = _client().fetch_vault_snapshot(
+                _vault(),
+                known_blobs={},
+                known_instruction_blobs={},
+            )
 
         self.assertEqual(snapshot.files[0].markdown, "")
+
+    def test_fetch_vault_snapshot_requires_configuration_file(self) -> None:
+        """Первичная синхронизация отклоняет vault без служебного YAML."""
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-27T13:00:00Z",
+                }
+            ),
+            FakeResponse({"object": {"sha": "commit-2"}}),
+            FakeResponse({"tree": {"sha": "tree-2"}}),
+            FakeResponse(
+                {
+                    "tree": [
+                        {"type": "blob", "path": "note.md", "sha": "note-sha"}
+                    ],
+                    "truncated": False,
+                }
+            ),
+        ]
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ):
+            with self.assertRaises(VaultConfigurationError) as context:
+                _client().fetch_vault_snapshot(
+                    _vault(),
+                    known_blobs={},
+                    known_instruction_blobs={},
+                )
+
+        self.assertEqual(
+            context.exception.code,
+            VaultConfigurationErrorCode.MISSING,
+        )
 
     def test_jwt_signer_uses_client_id_and_short_lifetime(self) -> None:
         """JWT signer использует рекомендуемый Client ID и окно меньше 10 минут."""
