@@ -20,6 +20,9 @@ from obs_chat_bot.application.vaults.ports import (
 from obs_chat_bot.domain.vaults.entities import ObsidianVault, VaultNote
 
 
+DEFAULT_AUTO_SYNC_INTERVAL = timedelta(hours=6)
+
+
 class VaultSyncStatus(StrEnum):
     """Описывает итог одной попытки синхронизации."""
 
@@ -27,6 +30,7 @@ class VaultSyncStatus(StrEnum):
     UNCHANGED = "unchanged"  # Удалённое дерево vault не изменилось.
     IN_PROGRESS = "in_progress"  # Другой процесс уже синхронизирует vault.
     NO_VAULT = "no_vault"  # Пользователь ещё не выбрал vault.
+    FRESH = "fresh"  # Недавняя проверка позволяет не обращаться к GitHub.
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +59,9 @@ class VaultSyncManager(Protocol):
 
     def sync(self, app_user_id: int) -> VaultSyncResult:
         """Синхронизирует активный vault пользователя."""
+
+    def sync_if_stale(self, app_user_id: int) -> VaultSyncResult:
+        """Синхронизирует vault, только если шестичасовое окно истекло."""
 
     def get_status(self, app_user_id: int) -> VaultStatus:
         """Возвращает состояние подключения и число локальных заметок."""
@@ -86,9 +93,62 @@ class VaultSyncService:
         if vault is None or vault.id is None:
             return VaultSyncResult(status=VaultSyncStatus.NO_VAULT)
         now = self._clock()
+        return self._sync_vault(vault, now=now)
+
+    def sync_if_stale(
+        self,
+        app_user_id: int,
+        *,
+        max_age: timedelta = DEFAULT_AUTO_SYNC_INTERVAL,
+    ) -> VaultSyncResult:
+        """Проверяет vault лишь после истечения допустимого возраста копии.
+
+        Args:
+            app_user_id: Внутренний ID пользователя приложения.
+            max_age: Время, в течение которого последняя проверка считается
+                актуальной.
+
+        Returns:
+            `FRESH` без GitHub-запроса либо результат обычной синхронизации.
+
+        Raises:
+            ValueError: `app_user_id` или `max_age` имеют некорректное значение.
+        """
+        if app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
+        if max_age <= timedelta(0):
+            raise ValueError("max_age must be positive")
+        vault = self._vault_repository.get_for_user(app_user_id)
+        if vault is None or vault.id is None:
+            return VaultSyncResult(status=VaultSyncStatus.NO_VAULT)
+        now = self._clock()
+        if (
+            vault.last_checked_at is not None
+            and now - vault.last_checked_at < max_age
+        ):
+            notes = self._note_repository.list_for_vault(
+                app_user_id=app_user_id,
+                vault_id=vault.id,
+            )
+            return VaultSyncResult(
+                status=VaultSyncStatus.FRESH,
+                vault=vault,
+                total_notes=len(notes),
+            )
+        return self._sync_vault(vault, now=now)
+
+    def _sync_vault(
+        self,
+        vault: ObsidianVault,
+        *,
+        now: datetime,
+    ) -> VaultSyncResult:
+        """Захватывает lease и синхронизирует уже найденный vault."""
+        if vault.id is None:
+            raise ValueError("vault must be saved before synchronization")
         owner = uuid4().hex
         lease = self._lease_repository.acquire(
-            app_user_id=app_user_id,
+            app_user_id=vault.app_user_id,
             vault_id=vault.id,
             owner=owner,
             now=now,
@@ -103,7 +163,7 @@ class VaultSyncService:
             return self._sync_locked(vault, now=now)
         finally:
             self._lease_repository.release(
-                app_user_id=app_user_id,
+                app_user_id=vault.app_user_id,
                 vault_id=vault.id,
                 owner=owner,
             )

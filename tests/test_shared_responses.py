@@ -452,6 +452,17 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("да", reply)
         self.assertIn("нет", reply)
 
+    def test_format_automatic_sync_failure_explains_article_is_deferred(self) -> None:
+        """До 9.10 сбой проверки явно сообщает, что статья не обработана."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_AUTO_SYNC_FAILED,
+            )
+        )
+
+        self.assertIn("статья пока не обработана", reply)
+        self.assertIn("/github_sync", reply)
+
     def test_format_incoming_message_result_reports_reanalysis(self) -> None:
         """Повторный анализ форматируется как полезный Markdown-ответ."""
         reply = format_incoming_message_result(

@@ -1,6 +1,7 @@
 """Тесты application-сервиса инкрементальной синхронизации vault."""
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 import unittest
 
 from obs_chat_bot.application.vaults.github_models import (
@@ -207,6 +208,55 @@ class VaultSyncTest(unittest.TestCase):
         self.assertEqual(vaults.updates, [])
         self.assertEqual(vaults.vault.head_commit_sha, "commit-1")
         self.assertTrue(leases.released)
+
+    def test_sync_if_stale_skips_github_inside_six_hour_window(self) -> None:
+        """Недавно проверенный vault не создаёт ни одного GitHub-запроса."""
+        gateway = SnapshotGateway(
+            GitHubVaultSnapshot(status=GitHubVaultSnapshotStatus.NOT_MODIFIED)
+        )
+        service = VaultSyncService(
+            vault_repository=MemoryVaultRepository(
+                replace(
+                    _vault(),
+                    last_checked_at=NOW - timedelta(hours=5, minutes=59),
+                )
+            ),
+            note_repository=MemoryNoteRepository([]),
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=gateway,
+            clock=lambda: NOW,
+        )
+
+        result = service.sync_if_stale(1)
+
+        self.assertEqual(result.status, VaultSyncStatus.FRESH)
+        self.assertIsNone(gateway.known_blobs)
+
+    def test_sync_if_stale_checks_github_at_six_hour_boundary(self) -> None:
+        """Ровно через шесть часов выполняется обычная условная проверка."""
+        gateway = SnapshotGateway(
+            GitHubVaultSnapshot(
+                status=GitHubVaultSnapshotStatus.NOT_MODIFIED,
+                head_etag='"etag-1"',
+            )
+        )
+        service = VaultSyncService(
+            vault_repository=MemoryVaultRepository(
+                replace(
+                    _vault(),
+                    last_checked_at=NOW - timedelta(hours=6),
+                )
+            ),
+            note_repository=MemoryNoteRepository([]),
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=gateway,
+            clock=lambda: NOW,
+        )
+
+        result = service.sync_if_stale(1)
+
+        self.assertEqual(result.status, VaultSyncStatus.UNCHANGED)
+        self.assertEqual(gateway.known_blobs, {})
 
 
 def _vault():

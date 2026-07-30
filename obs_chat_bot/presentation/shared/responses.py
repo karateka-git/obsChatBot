@@ -318,6 +318,18 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 "Не удалось синхронизировать Obsidian vault с GitHub. "
                 "Локальная копия не была помечена как актуальная. Попробуй позже."
             )
+        case IncomingMessageResultType.GITHUB_AUTO_SYNC_FAILED:
+            return (
+                "Не удалось проверить актуальность Obsidian vault в GitHub, "
+                "поэтому статья пока не обработана. Попробуй отправить её позже "
+                "или запусти `/github_sync`."
+            )
+        case IncomingMessageResultType.GITHUB_AUTO_SYNC_IN_PROGRESS:
+            return (
+                "Obsidian vault уже синхронизируется в другом связанном канале, "
+                "поэтому статья пока не обработана. Отправь её повторно после "
+                "завершения синхронизации."
+            )
         case IncomingMessageResultType.GITHUB_STATUS:
             return _format_github_status(result)
         case IncomingMessageResultType.GITHUB_DISCONNECT_NOT_CONNECTED:
@@ -485,6 +497,11 @@ def _format_vault_sync(result: ProcessIncomingMessageResult) -> str:
         return "Obsidian vault ещё не подключён."
     if sync.status is VaultSyncStatus.IN_PROGRESS:
         return "Этот vault уже синхронизируется. Дождись завершения."
+    if sync.status is VaultSyncStatus.FRESH:
+        return (
+            "Vault недавно проверен, повторный запрос к GitHub не требуется.\n"
+            f"Локально заметок: {sync.total_notes}."
+        )
     if sync.status is VaultSyncStatus.UNCHANGED:
         return (
             "Vault проверен: изменений нет.\n"

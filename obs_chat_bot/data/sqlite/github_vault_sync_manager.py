@@ -41,6 +41,16 @@ class SQLiteGitHubVaultSyncManager(VaultSyncManager):
                 github_gateway=self._github_gateway,
             ).sync(app_user_id)
 
+    def sync_if_stale(self, app_user_id: int) -> VaultSyncResult:
+        """Проверяет vault только после истечения шестичасового окна."""
+        with connect_database(self._database_path) as connection:
+            return VaultSyncService(
+                vault_repository=SQLiteObsidianVaultRepository(connection),
+                note_repository=SQLiteVaultNoteRepository(connection),
+                lease_repository=SQLiteVaultSyncLeaseRepository(connection),
+                github_gateway=self._github_gateway,
+            ).sync_if_stale(app_user_id)
+
     def get_status(self, app_user_id: int) -> VaultStatus:
         """Возвращает статус локальной копии выбранного vault."""
         with connect_database(self._database_path) as connection:

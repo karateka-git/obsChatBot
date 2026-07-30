@@ -53,6 +53,7 @@ from obs_chat_bot.application.vaults.vault_sync import (
     VaultStatus,
     VaultSyncManager,
     VaultSyncResult,
+    VaultSyncStatus,
 )
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
@@ -117,6 +118,8 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_VAULT_FAILED = "github_vault_failed"
     GITHUB_SYNC_COMPLETED = "github_sync_completed"
     GITHUB_SYNC_FAILED = "github_sync_failed"
+    GITHUB_AUTO_SYNC_FAILED = "github_auto_sync_failed"
+    GITHUB_AUTO_SYNC_IN_PROGRESS = "github_auto_sync_in_progress"
     GITHUB_STATUS = "github_status"
     GITHUB_DISCONNECT_NOT_CONNECTED = "github_disconnect_not_connected"
     GITHUB_DISCONNECT_CONFIRMATION_REQUIRED = (
@@ -223,6 +226,11 @@ class ProcessIncomingMessageUseCase:
             _log_result(result)
             return result
 
+        auto_sync_result = self._auto_sync_vault(app_user_result)
+        if isinstance(auto_sync_result, ProcessIncomingMessageResult):
+            _log_result(auto_sync_result)
+            return auto_sync_result
+
         saved_message = self._save_incoming_message(incoming_message)
         incoming_message_id = saved_message.id if saved_message is not None else None
         if saved_message is not None:
@@ -249,6 +257,7 @@ class ProcessIncomingMessageUseCase:
                 type=IncomingMessageResultType.ARTICLE_PROCESSING_FAILED,
                 app_user=app_user_result,
                 saved_message=saved_message,
+                vault_sync_result=auto_sync_result,
                 error=error,
             )
             _log_result(result)
@@ -271,6 +280,7 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user_result,
                 saved_message=saved_message,
                 article_result=article_result,
+                vault_sync_result=auto_sync_result,
             )
             _log_result(result)
             return result
@@ -289,6 +299,7 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user_result,
                 saved_message=saved_message,
                 article_result=article_result,
+                vault_sync_result=auto_sync_result,
                 error=error,
             )
             _log_result(result)
@@ -308,9 +319,46 @@ class ProcessIncomingMessageUseCase:
             saved_message=saved_message,
             article_result=article_result,
             analysis_result=analysis_result,
+            vault_sync_result=auto_sync_result,
         )
         _log_result(result)
         return result
+
+    def _auto_sync_vault(
+        self,
+        app_user: AppUser,
+    ) -> VaultSyncResult | ProcessIncomingMessageResult | None:
+        """Проверяет устаревший vault перед обработкой URL статьи."""
+        if self._vault_sync_manager is None:
+            return None
+        try:
+            sync_result = self._vault_sync_manager.sync_if_stale(app_user.id)
+        except (GitHubGatewayError, OSError, ValueError, RuntimeError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_AUTO_SYNC_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        LOGGER.debug(
+            "Automatic vault check completed: app_user_id=%s status=%s "
+            "downloaded_notes=%s total_notes=%s",
+            app_user.id,
+            sync_result.status.value,
+            sync_result.downloaded_notes,
+            sync_result.total_notes,
+        )
+        if sync_result.status is VaultSyncStatus.NO_VAULT:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.REGISTRATION_VAULT_REQUIRED,
+                app_user=app_user,
+            )
+        if sync_result.status is VaultSyncStatus.IN_PROGRESS:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_AUTO_SYNC_IN_PROGRESS,
+                app_user=app_user,
+                vault_sync_result=sync_result,
+            )
+        return sync_result
 
     def _resolve_app_user(
         self,
