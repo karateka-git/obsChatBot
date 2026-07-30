@@ -320,6 +320,45 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             )
         case IncomingMessageResultType.GITHUB_STATUS:
             return _format_github_status(result)
+        case IncomingMessageResultType.GITHUB_DISCONNECT_NOT_CONNECTED:
+            return "Obsidian vault ещё не подключён."
+        case (
+            IncomingMessageResultType
+            .GITHUB_DISCONNECT_CONFIRMATION_REQUIRED
+        ):
+            vault = (
+                result.vault_disconnect.vault
+                if result.vault_disconnect is not None
+                else None
+            )
+            repository = (
+                f"`{vault.owner}/{vault.repository}`"
+                if vault is not None
+                else "текущий vault"
+            )
+            return (
+                f"Отключить Obsidian vault {repository}?\n"
+                "Локальный Markdown и связанные metadata будут удалены. "
+                "Сам GitHub repository не изменится; профиль, связанные каналы, "
+                "статьи и анализы сохранятся.\n"
+                "Ответь `да` или `нет`."
+            )
+        case IncomingMessageResultType.GITHUB_DISCONNECTED:
+            return (
+                "Obsidian vault отключён, локальный Markdown удалён.\n"
+                "GitHub repository не изменён. Профиль, связанные каналы, "
+                "статьи и анализы сохранены."
+            )
+        case IncomingMessageResultType.GITHUB_DISCONNECT_CANCELLED:
+            return "Отключение отменено. Текущий Obsidian vault сохранён."
+        case (
+            IncomingMessageResultType
+            .GITHUB_DISCONNECT_CONFIRMATION_MISSING
+        ):
+            return (
+                "Нет ожидающего подтверждения отключения. "
+                "Сначала отправь `/github_disconnect`."
+            )
         case IncomingMessageResultType.REANALYZE_COMMAND_INVALID:
             return "Пришли команду в формате `/reanalyze <ID статьи>`."
         case IncomingMessageResultType.ARTICLE_REANALYZED:

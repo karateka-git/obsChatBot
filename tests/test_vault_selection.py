@@ -12,6 +12,7 @@ from obs_chat_bot.application.vaults.vault_selection import (
     GitHubRepositoryNotAccessibleError,
     GitHubVaultPathNotFoundError,
     GitHubVaultSelectionService,
+    VaultDisconnectStatus,
     VaultSelectionStatus,
     normalize_vault_root_path,
     parse_github_repository_url,
@@ -176,6 +177,91 @@ class GitHubVaultSelectionServiceTest(unittest.TestCase):
             self.assertEqual(replaced.vault.repository, "second")
             self.assertNotEqual(replaced.vault.id, first.vault.id)
             self.assertFalse(service.has_replacement_confirmation(1))
+
+    def test_disconnect_requires_confirmation_and_preserves_user_data(self) -> None:
+        """Подтверждение удаляет только vault-каталог, сохраняя профиль и статьи."""
+        with _database() as connection:
+            _prepare_installations(connection, {101})
+            service = _service(
+                connection,
+                FakeGitHubRepositoryGateway({101: _inspection()}),
+            )
+            selected = service.select(
+                app_user_id=1,
+                repository_url="https://github.com/octocat/notes",
+            )
+            connection.execute(
+                """
+                INSERT INTO obsidian_notes (
+                    app_user_id, vault_id, path, blob_sha, markdown
+                )
+                VALUES (1, ?, 'Note.md', 'blob-1', '# Note')
+                """,
+                (selected.vault.id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO articles (
+                    app_user_id, source_url, normalized_url, status
+                )
+                VALUES (
+                    1,
+                    'https://example.com/article',
+                    'https://example.com/article',
+                    'new'
+                )
+                """
+            )
+            connection.commit()
+
+            requested = service.request_disconnect(1)
+            disconnected = service.confirm_disconnect(1)
+
+            self.assertEqual(
+                requested.status,
+                VaultDisconnectStatus.CONFIRMATION_REQUIRED,
+            )
+            self.assertEqual(
+                disconnected.status,
+                VaultDisconnectStatus.DISCONNECTED,
+            )
+            self.assertIsNone(service.get_selected(1))
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM obsidian_notes").fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM app_users").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM github_accounts").fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0],
+                1,
+            )
+
+    def test_disconnect_can_be_cancelled_and_requires_active_vault(self) -> None:
+        """Ответ `нет` сохраняет vault, а повтор без vault не требует подтверждения."""
+        with _database() as connection:
+            _prepare_installations(connection, {101})
+            service = _service(
+                connection,
+                FakeGitHubRepositoryGateway({101: _inspection()}),
+            )
+            service.select(
+                app_user_id=1,
+                repository_url="https://github.com/octocat/notes",
+            )
+
+            service.request_disconnect(1)
+            cancelled = service.cancel_disconnect(1)
+
+            self.assertEqual(cancelled.status, VaultDisconnectStatus.CANCELLED)
+            self.assertIsNotNone(service.get_selected(1))
+            self.assertFalse(service.has_disconnect_confirmation(1))
 
     def test_select_distinguishes_repository_and_path_failures(self) -> None:
         """Недоступный repository и отсутствующий каталог имеют разные ошибки."""

@@ -46,6 +46,8 @@ from obs_chat_bot.application.vaults.vault_selection import (
     VaultSelectionManager,
     VaultSelectionResult,
     VaultSelectionStatus,
+    VaultDisconnectResult,
+    VaultDisconnectStatus,
 )
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultStatus,
@@ -116,6 +118,15 @@ class IncomingMessageResultType(StrEnum):
     GITHUB_SYNC_COMPLETED = "github_sync_completed"
     GITHUB_SYNC_FAILED = "github_sync_failed"
     GITHUB_STATUS = "github_status"
+    GITHUB_DISCONNECT_NOT_CONNECTED = "github_disconnect_not_connected"
+    GITHUB_DISCONNECT_CONFIRMATION_REQUIRED = (
+        "github_disconnect_confirmation_required"
+    )
+    GITHUB_DISCONNECTED = "github_disconnected"
+    GITHUB_DISCONNECT_CANCELLED = "github_disconnect_cancelled"
+    GITHUB_DISCONNECT_CONFIRMATION_MISSING = (
+        "github_disconnect_confirmation_missing"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +146,7 @@ class ProcessIncomingMessageResult:
     installation_url: str | None = None
     vault_sync_result: VaultSyncResult | None = None
     vault_status: VaultStatus | None = None
+    vault_disconnect: VaultDisconnectResult | None = None
     error: Exception | None = None
 
 
@@ -340,6 +352,14 @@ class ProcessIncomingMessageUseCase:
                 )
             ):
                 return self._confirm_vault_replacement(app_user)
+            if (
+                app_user is not None
+                and self._vault_selection_manager is not None
+                and self._vault_selection_manager.has_disconnect_confirmation(
+                    app_user.id
+                )
+            ):
+                return self._confirm_vault_disconnect(app_user)
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.CONFIRMATION_MISSING
             )
@@ -363,6 +383,15 @@ class ProcessIncomingMessageUseCase:
                         ),
                         app_user=app_user,
                         vault_selection=cancelled,
+                    )
+                disconnect_cancelled = (
+                    self._vault_selection_manager.cancel_disconnect(app_user.id)
+                )
+                if disconnect_cancelled is not None:
+                    return ProcessIncomingMessageResult(
+                        type=IncomingMessageResultType.GITHUB_DISCONNECT_CANCELLED,
+                        app_user=app_user,
+                        vault_disconnect=disconnect_cancelled,
                     )
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.CONFIRMATION_MISSING
@@ -568,6 +597,8 @@ class ProcessIncomingMessageUseCase:
             )
         if command is ChatCommand.GITHUB_SYNC:
             return self._sync_vault(app_user)
+        if command is ChatCommand.GITHUB_DISCONNECT:
+            return self._request_vault_disconnect(app_user)
         repository_arguments = _github_repository_arguments(text)
         if repository_arguments is not None:
             return self._connect_registration_vault(
@@ -889,6 +920,72 @@ class ProcessIncomingMessageUseCase:
             type=IncomingMessageResultType.GITHUB_SYNC_COMPLETED,
             app_user=app_user,
             vault_sync_result=sync_result,
+        )
+
+    def _request_vault_disconnect(
+        self,
+        app_user: AppUser,
+    ) -> ProcessIncomingMessageResult:
+        """Запрашивает явное подтверждение отключения активного vault."""
+        if self._vault_selection_manager is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                app_user=app_user,
+            )
+        try:
+            disconnect = self._vault_selection_manager.request_disconnect(app_user.id)
+        except (OSError, ValueError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        result_type = (
+            IncomingMessageResultType.GITHUB_DISCONNECT_NOT_CONNECTED
+            if disconnect.status is VaultDisconnectStatus.NOT_CONNECTED
+            else IncomingMessageResultType.GITHUB_DISCONNECT_CONFIRMATION_REQUIRED
+        )
+        return ProcessIncomingMessageResult(
+            type=result_type,
+            app_user=app_user,
+            vault_disconnect=disconnect,
+        )
+
+    def _confirm_vault_disconnect(
+        self,
+        app_user: AppUser,
+    ) -> ProcessIncomingMessageResult:
+        """Удаляет vault и локальную копию после ответа пользователя `да`."""
+        if self._vault_selection_manager is None:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_CONNECT_UNAVAILABLE,
+                app_user=app_user,
+            )
+        try:
+            disconnect = self._vault_selection_manager.confirm_disconnect(app_user.id)
+        except (OSError, ValueError) as error:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_VAULT_FAILED,
+                app_user=app_user,
+                error=error,
+            )
+        if disconnect is None:
+            return ProcessIncomingMessageResult(
+                type=(
+                    IncomingMessageResultType
+                    .GITHUB_DISCONNECT_CONFIRMATION_MISSING
+                ),
+                app_user=app_user,
+            )
+        result_type = (
+            IncomingMessageResultType.GITHUB_DISCONNECT_NOT_CONNECTED
+            if disconnect.status is VaultDisconnectStatus.NOT_CONNECTED
+            else IncomingMessageResultType.GITHUB_DISCONNECTED
+        )
+        return ProcessIncomingMessageResult(
+            type=result_type,
+            app_user=app_user,
+            vault_disconnect=disconnect,
         )
 
     def _reanalyze_article(

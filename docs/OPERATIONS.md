@@ -196,6 +196,18 @@ repository его URL нужно прислать повторно.
 копия остаётся доступной. Installation token, содержимое Markdown и HTTP-ответы
 GitHub не выводятся в логи.
 
+Отключение активного vault:
+
+```text
+/github_disconnect
+```
+
+Команда не удаляет данные сразу: в SQLite создаётся подтверждение с TTL 10
+минут. `да` удаляет строку vault, а SQLite каскадно очищает локальные заметки,
+tags, wikilinks и lease. `нет` удаляет только подтверждение. GitHub account,
+installation IDs, пользователь, identities, статьи и анализы сохраняются.
+Сам GitHub repository команда не изменяет.
+
 ## Частые проблемы
 
 - `TelegramConflictError`: уже запущен другой экземпляр бота с тем же token.

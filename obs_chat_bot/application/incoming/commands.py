@@ -92,6 +92,12 @@ class ChatCommand(StrEnum):
         "",
         "проверить GitHub и синхронизировать vault",
     )
+    GITHUB_DISCONNECT = (
+        "/github_disconnect",
+        CommandSection.GITHUB,
+        "",
+        "отключить vault после подтверждения",
+    )
     REANALYZE = (
         "/reanalyze",
         CommandSection.ARTICLES,

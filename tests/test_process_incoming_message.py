@@ -28,6 +28,8 @@ from obs_chat_bot.application.vaults.github_models import (
 )
 from obs_chat_bot.application.vaults.vault_selection import (
     GitHubAccountNotConnectedError,
+    VaultDisconnectResult,
+    VaultDisconnectStatus,
     VaultSelectionResult,
     VaultSelectionStatus,
 )
@@ -301,6 +303,7 @@ class FakeVaultSelectionManager:
         self.selected = selected
         self.calls: list[tuple[int, str, str]] = []
         self.replacement_pending = False
+        self.disconnect_pending = False
 
     def get_selected(self, _app_user_id: int) -> ObsidianVault | None:
         """Возвращает настроенный активный vault."""
@@ -356,6 +359,45 @@ class FakeVaultSelectionManager:
         return VaultSelectionResult(
             VaultSelectionStatus.CANCELLED,
             _test_vault(app_user_id),
+        )
+
+    def request_disconnect(self, app_user_id: int) -> VaultDisconnectResult:
+        """Запрашивает тестовое подтверждение отключения."""
+        if self.selected is None:
+            return VaultDisconnectResult(VaultDisconnectStatus.NOT_CONNECTED)
+        self.disconnect_pending = True
+        return VaultDisconnectResult(
+            VaultDisconnectStatus.CONFIRMATION_REQUIRED,
+            self.selected,
+        )
+
+    def has_disconnect_confirmation(self, _app_user_id: int) -> bool:
+        """Возвращает состояние ожидающего отключения."""
+        return self.disconnect_pending
+
+    def confirm_disconnect(
+        self,
+        app_user_id: int,
+    ) -> VaultDisconnectResult | None:
+        """Подтверждает тестовое отключение."""
+        if not self.disconnect_pending:
+            return None
+        self.disconnect_pending = False
+        vault = self.selected or _test_vault(app_user_id)
+        self.selected = None
+        return VaultDisconnectResult(VaultDisconnectStatus.DISCONNECTED, vault)
+
+    def cancel_disconnect(
+        self,
+        app_user_id: int,
+    ) -> VaultDisconnectResult | None:
+        """Отменяет тестовое отключение."""
+        if not self.disconnect_pending:
+            return None
+        self.disconnect_pending = False
+        return VaultDisconnectResult(
+            VaultDisconnectStatus.CANCELLED,
+            self.selected or _test_vault(app_user_id),
         )
 
 
@@ -524,6 +566,49 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(
             cancelled.type,
             IncomingMessageResultType.GITHUB_VAULT_REPLACEMENT_CANCELLED,
+        )
+
+    def test_execute_disconnects_vault_only_after_confirmation(self) -> None:
+        """Команда создаёт подтверждение, `нет` отменяет, а `да` удаляет vault."""
+        manager = FakeVaultSelectionManager(selected=_test_vault(42))
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            vault_selection_manager=manager,
+        )
+
+        requested = use_case.execute(_telegram_message("/github_disconnect"))
+        cancelled = use_case.execute(_telegram_message("нет"))
+        use_case.execute(_telegram_message("/github_disconnect"))
+        confirmed = use_case.execute(_telegram_message("да"))
+
+        self.assertEqual(
+            requested.type,
+            IncomingMessageResultType.GITHUB_DISCONNECT_CONFIRMATION_REQUIRED,
+        )
+        self.assertEqual(
+            cancelled.type,
+            IncomingMessageResultType.GITHUB_DISCONNECT_CANCELLED,
+        )
+        self.assertEqual(
+            confirmed.type,
+            IncomingMessageResultType.GITHUB_DISCONNECTED,
+        )
+        self.assertIsNone(manager.selected)
+
+    def test_execute_disconnect_reports_missing_vault(self) -> None:
+        """Команда без активного vault не создаёт подтверждение."""
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            user_identity_service=FakeUserIdentityService(),
+            vault_selection_manager=FakeVaultSelectionManager(),
+        )
+
+        result = use_case.execute(_telegram_message("/github_disconnect"))
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.GITHUB_DISCONNECT_NOT_CONNECTED,
         )
 
     def test_execute_hides_github_gateway_failure_behind_typed_result(self) -> None:

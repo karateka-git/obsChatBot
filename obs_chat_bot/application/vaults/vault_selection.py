@@ -34,6 +34,15 @@ class VaultSelectionStatus(StrEnum):
     CANCELLED = "cancelled"  # Ожидающая замена отменена.
 
 
+class VaultDisconnectStatus(StrEnum):
+    """Результат запроса или подтверждения отключения vault."""
+
+    NOT_CONNECTED = "not_connected"  # Активный vault отсутствует.
+    CONFIRMATION_REQUIRED = "confirmation_required"  # Ожидается ответ да/нет.
+    DISCONNECTED = "disconnected"  # Vault и его локальные данные удалены.
+    CANCELLED = "cancelled"  # Пользователь сохранил текущее подключение.
+
+
 @dataclass(frozen=True, slots=True)
 class VaultSelectionResult:
     """Содержит статус выбора и соответствующий активный или предложенный vault."""
@@ -46,6 +55,23 @@ class VaultSelectionResult:
             raise TypeError("status must be a VaultSelectionStatus")
         if not isinstance(self.vault, ObsidianVault):
             raise TypeError("vault must be an ObsidianVault")
+
+
+@dataclass(frozen=True, slots=True)
+class VaultDisconnectResult:
+    """Содержит итог управления отключением и прежний или активный vault."""
+
+    status: VaultDisconnectStatus
+    vault: ObsidianVault | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, VaultDisconnectStatus):
+            raise TypeError("status must be a VaultDisconnectStatus")
+        requires_vault = self.status is not VaultDisconnectStatus.NOT_CONNECTED
+        if requires_vault and self.vault is None:
+            raise ValueError("vault is required for this disconnect status")
+        if not requires_vault and self.vault is not None:
+            raise ValueError("vault is not allowed for not connected status")
 
 
 class VaultSelectionError(RuntimeError):
@@ -87,6 +113,18 @@ class VaultSelectionManager(Protocol):
 
     def cancel_replacement(self, app_user_id: int) -> VaultSelectionResult | None:
         """Отменяет ожидающую замену или возвращает `None`."""
+
+    def request_disconnect(self, app_user_id: int) -> VaultDisconnectResult:
+        """Запрашивает подтверждение удаления активного vault."""
+
+    def has_disconnect_confirmation(self, app_user_id: int) -> bool:
+        """Проверяет наличие активного подтверждения отключения."""
+
+    def confirm_disconnect(self, app_user_id: int) -> VaultDisconnectResult | None:
+        """Удаляет vault после согласия или возвращает `None`."""
+
+    def cancel_disconnect(self, app_user_id: int) -> VaultDisconnectResult | None:
+        """Отменяет отключение либо возвращает `None`."""
 
 
 class GitHubVaultSelectionService(VaultSelectionManager):
@@ -232,6 +270,54 @@ class GitHubVaultSelectionService(VaultSelectionManager):
             return None
         return VaultSelectionResult(VaultSelectionStatus.CANCELLED, current)
 
+    def request_disconnect(self, app_user_id: int) -> VaultDisconnectResult:
+        """Создаёт короткоживущее подтверждение отключения активного vault."""
+        if app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
+        current = self._vault_repository.get_for_user(app_user_id)
+        if current is None:
+            self._confirmation_repository.delete(app_user_id)
+            return VaultDisconnectResult(VaultDisconnectStatus.NOT_CONNECTED)
+        now = self._clock()
+        self._confirmation_repository.save(
+            VaultActionConfirmation(
+                app_user_id=app_user_id,
+                action=VaultConfirmationAction.DISCONNECT,
+                expires_at=now + self._confirmation_ttl,
+                created_at=now,
+            )
+        )
+        return VaultDisconnectResult(
+            VaultDisconnectStatus.CONFIRMATION_REQUIRED,
+            current,
+        )
+
+    def has_disconnect_confirmation(self, app_user_id: int) -> bool:
+        """Проверяет наличие активного подтверждения отключения vault."""
+        return self._active_disconnect(app_user_id) is not None
+
+    def confirm_disconnect(self, app_user_id: int) -> VaultDisconnectResult | None:
+        """Удаляет активный vault и зависимые локальные данные после согласия."""
+        if self._active_disconnect(app_user_id) is None:
+            return None
+        current = self._vault_repository.get_for_user(app_user_id)
+        if current is None:
+            self._confirmation_repository.delete(app_user_id)
+            return VaultDisconnectResult(VaultDisconnectStatus.NOT_CONNECTED)
+        self._vault_repository.delete_for_user(app_user_id)
+        self._confirmation_repository.delete(app_user_id)
+        return VaultDisconnectResult(VaultDisconnectStatus.DISCONNECTED, current)
+
+    def cancel_disconnect(self, app_user_id: int) -> VaultDisconnectResult | None:
+        """Отменяет ожидающее отключение и сохраняет активный vault."""
+        if self._active_disconnect(app_user_id) is None:
+            return None
+        current = self._vault_repository.get_for_user(app_user_id)
+        self._confirmation_repository.delete(app_user_id)
+        if current is None:
+            return VaultDisconnectResult(VaultDisconnectStatus.NOT_CONNECTED)
+        return VaultDisconnectResult(VaultDisconnectStatus.CANCELLED, current)
+
     def _active_replacement(
         self,
         app_user_id: int,
@@ -243,6 +329,21 @@ class GitHubVaultSelectionService(VaultSelectionManager):
         if (
             confirmation is None
             or confirmation.action is not VaultConfirmationAction.REPLACE
+        ):
+            return None
+        return confirmation
+
+    def _active_disconnect(
+        self,
+        app_user_id: int,
+    ) -> VaultActionConfirmation | None:
+        confirmation = self._confirmation_repository.find_active(
+            app_user_id=app_user_id,
+            now=self._clock(),
+        )
+        if (
+            confirmation is None
+            or confirmation.action is not VaultConfirmationAction.DISCONNECT
         ):
             return None
         return confirmation

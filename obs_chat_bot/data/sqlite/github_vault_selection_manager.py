@@ -6,6 +6,7 @@ from pathlib import Path
 from obs_chat_bot.application.vaults.ports import GitHubRepositoryGateway
 from obs_chat_bot.application.vaults.vault_selection import (
     GitHubVaultSelectionService,
+    VaultDisconnectResult,
     VaultSelectionManager,
     VaultSelectionResult,
 )
@@ -74,6 +75,26 @@ class SQLiteGitHubVaultSelectionManager(VaultSelectionManager):
         """Отменяет ожидающую замену vault."""
         with connect_database(self._database_path) as connection:
             return self._service(connection).cancel_replacement(app_user_id)
+
+    def request_disconnect(self, app_user_id: int) -> VaultDisconnectResult:
+        """Создаёт подтверждение отключения активного vault."""
+        with connect_database(self._database_path) as connection:
+            return self._service(connection).request_disconnect(app_user_id)
+
+    def has_disconnect_confirmation(self, app_user_id: int) -> bool:
+        """Проверяет наличие ожидающего отключения vault."""
+        with connect_database(self._database_path) as connection:
+            return self._service(connection).has_disconnect_confirmation(app_user_id)
+
+    def confirm_disconnect(self, app_user_id: int) -> VaultDisconnectResult | None:
+        """Удаляет подтверждённый vault и локальный каталог."""
+        with connect_database(self._database_path) as connection:
+            return self._service(connection).confirm_disconnect(app_user_id)
+
+    def cancel_disconnect(self, app_user_id: int) -> VaultDisconnectResult | None:
+        """Отменяет ожидающее отключение vault."""
+        with connect_database(self._database_path) as connection:
+            return self._service(connection).cancel_disconnect(app_user_id)
 
     def _service(
         self,

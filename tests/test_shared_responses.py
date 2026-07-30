@@ -23,6 +23,8 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubDeviceAuthorization,
 )
 from obs_chat_bot.application.vaults.vault_selection import (
+    VaultDisconnectResult,
+    VaultDisconnectStatus,
     VaultSelectionResult,
     VaultSelectionStatus,
 )
@@ -53,7 +55,7 @@ class TelegramResponsesTest(unittest.TestCase):
                 self.assertIn(str(command), reply)
         self.assertIn("/github_sync", reply)
         self.assertIn("/github_status", reply)
-        self.assertNotIn("/github_disconnect", reply)
+        self.assertIn("/github_disconnect", reply)
         self.assertNotIn("/github_connect", reply)
         self.assertNotIn("/github_vault", reply)
 
@@ -418,6 +420,35 @@ class TelegramResponsesTest(unittest.TestCase):
         )
 
         self.assertIn("заменит текущее", reply)
+        self.assertIn("да", reply)
+        self.assertIn("нет", reply)
+
+    def test_format_vault_disconnect_explains_scope_and_confirmation(self) -> None:
+        """Отключение предупреждает об очистке локальных, но не пользовательских данных."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=(
+                    IncomingMessageResultType
+                    .GITHUB_DISCONNECT_CONFIRMATION_REQUIRED
+                ),
+                vault_disconnect=VaultDisconnectResult(
+                    VaultDisconnectStatus.CONFIRMATION_REQUIRED,
+                    ObsidianVault(
+                        id=1,
+                        app_user_id=42,
+                        installation_id=101,
+                        repository_id=501,
+                        owner="octocat",
+                        repository="notes",
+                        branch="main",
+                    ),
+                ),
+            )
+        )
+
+        self.assertIn("octocat/notes", reply)
+        self.assertIn("GitHub repository не изменится", reply)
+        self.assertIn("статьи и анализы сохранятся", reply)
         self.assertIn("да", reply)
         self.assertIn("нет", reply)
 
