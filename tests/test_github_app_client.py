@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 import base64
+from io import BytesIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,6 +11,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
+from zipfile import ZipFile
 
 from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollStatus,
@@ -21,7 +23,8 @@ from obs_chat_bot.application.vaults.vault_configuration import (
     VaultConfigurationError,
     VaultConfigurationErrorCode,
 )
-from obs_chat_bot.data.github.github_app_client import UrllibGitHubAppClient
+from obs_chat_bot.data.github import github_app_client as github_client_module
+from obs_chat_bot.data.github.github_app_client import HttpxGitHubAppClient
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
 
@@ -42,6 +45,24 @@ class FakeResponse:
     def read(self) -> bytes:
         """Возвращает сериализованный JSON payload."""
         return self._body
+
+
+class FakeBinaryResponse:
+    """Имитирует ограниченно читаемый бинарный HTTP-ответ."""
+
+    def __init__(self, body: bytes, *, headers: dict | None = None) -> None:
+        self._body = body
+        self.headers = headers or {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _type, _value, _traceback) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        """Возвращает не более запрошенного числа байт."""
+        return self._body if size < 0 else self._body[:size]
 
 
 class GitHubAppClientTest(unittest.TestCase):
@@ -362,10 +383,11 @@ class GitHubAppClientTest(unittest.TestCase):
         """Безопасный GET переживает временный timeout и логирует его причину."""
         delays: list[float] = []
         timeout = URLError(TimeoutError("read timed out"))
-        client = UrllibGitHubAppClient(
+        client = HttpxGitHubAppClient(
             client_id="Iv1.client",
             app_jwt_factory=lambda: "app-jwt",
             sleeper=delays.append,
+            request_opener=_test_request_opener,
         )
         with (
             patch(
@@ -389,6 +411,41 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertEqual(opener.call_count, 3)
         self.assertEqual(delays, [0.5, 1.0])
         self.assertIn("TimeoutError: read timed out", "\n".join(logs.output))
+
+    def test_get_uses_retry_after_for_temporary_http_error(self) -> None:
+        """GitHub Retry-After имеет приоритет над локальным backoff."""
+        delays: list[float] = []
+        unavailable = HTTPError(
+            url="https://api.github.com/user",
+            code=403,
+            msg="Secondary rate limit",
+            hdrs={"Retry-After": "2.5"},
+            fp=None,
+        )
+        client = HttpxGitHubAppClient(
+            client_id="Iv1.client",
+            app_jwt_factory=lambda: "app-jwt",
+            sleeper=delays.append,
+            request_opener=_test_request_opener,
+        )
+        with (
+            patch(
+                "obs_chat_bot.data.github.github_app_client.urlopen",
+                side_effect=[
+                    unavailable,
+                    FakeResponse({"id": 777, "login": "octocat"}),
+                ],
+            ),
+            self.assertLogs(
+                "obs_chat_bot.data.github.github_app_client",
+                level="WARNING",
+            ),
+        ):
+            client.get_authenticated_account(
+                GitHubUserAccessToken("ghu-secret")
+            )
+
+        self.assertEqual(delays, [2.5])
 
     def test_fetch_vault_snapshot_downloads_only_changed_markdown_blobs(self) -> None:
         """Git tree формирует полный manifest, но неизменённый blob не скачивается."""
@@ -448,6 +505,91 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertEqual(opener.call_count, 7)
         ref_request = opener.call_args_list[1].args[0]
         self.assertEqual(ref_request.get_header("If-none-match"), '"etag-1"')
+
+    def test_fetch_vault_snapshot_uses_archive_for_bulk_download(self) -> None:
+        """Первая массовая загрузка читает нужные тексты из одного ZIP snapshot."""
+        config = base64.b64encode(
+            b"version: 1\ninstructions:\n  - rules.txt\n"
+        ).decode()
+        archive_buffer = BytesIO()
+        with ZipFile(archive_buffer, "w") as archive:
+            archive.writestr("owner-notes-commit/note-a.md", "# A")
+            archive.writestr("owner-notes-commit/note-b.md", "# B")
+            archive.writestr("owner-notes-commit/rules.txt", "Rules")
+            archive.writestr("owner-notes-commit/image.png", b"ignored")
+        responses = [
+            FakeResponse(
+                {
+                    "token": "ghs-secret",
+                    "expires_at": "2026-07-27T13:00:00Z",
+                }
+            ),
+            FakeResponse({"object": {"sha": "commit-2"}}),
+            FakeResponse({"tree": {"sha": "tree-2"}}),
+            FakeResponse(
+                {
+                    "tree": [
+                        {
+                            "type": "blob",
+                            "path": "note-a.md",
+                            "sha": "a-sha",
+                            "size": 3,
+                        },
+                        {
+                            "type": "blob",
+                            "path": "note-b.md",
+                            "sha": "b-sha",
+                            "size": 3,
+                        },
+                        {
+                            "type": "blob",
+                            "path": ".knowledge-catcher.yml",
+                            "sha": "config-sha",
+                            "size": 44,
+                        },
+                        {
+                            "type": "blob",
+                            "path": "rules.txt",
+                            "sha": "rules-sha",
+                            "size": 5,
+                        },
+                    ],
+                    "truncated": False,
+                }
+            ),
+            FakeResponse({"encoding": "base64", "content": config}),
+            FakeBinaryResponse(
+                archive_buffer.getvalue(),
+                headers={
+                    "Content-Length": str(len(archive_buffer.getvalue()))
+                },
+            ),
+        ]
+        client = HttpxGitHubAppClient(
+            client_id="Iv1.client",
+            app_jwt_factory=lambda: "app-jwt",
+            bulk_download_threshold=2,
+            request_opener=_test_request_opener,
+        )
+        with patch(
+            "obs_chat_bot.data.github.github_app_client.urlopen",
+            side_effect=responses,
+        ) as opener:
+            snapshot = client.fetch_vault_snapshot(
+                _vault(),
+                known_blobs={},
+                known_instruction_blobs={},
+            )
+
+        self.assertEqual(
+            [file.markdown for file in snapshot.files],
+            ["# A", "# B"],
+        )
+        self.assertEqual(snapshot.instructions[0].content, "Rules")
+        urls = [call.args[0].full_url for call in opener.call_args_list]
+        self.assertEqual(len(urls), 6)
+        self.assertTrue(any("/zipball/commit-2" in url for url in urls))
+        self.assertFalse(any("/git/blobs/a-sha" in url for url in urls))
 
     def test_fetch_vault_snapshot_accepts_not_modified_etag(self) -> None:
         """HTTP 304 завершает проверку до чтения commit, tree и blobs."""
@@ -617,12 +759,18 @@ class GitHubAppClientTest(unittest.TestCase):
         self.assertEqual(payload["iss"], "Iv1.client")
 
 
-def _client() -> UrllibGitHubAppClient:
+def _client() -> HttpxGitHubAppClient:
     """Создаёт HTTP client с предсказуемым App JWT."""
-    return UrllibGitHubAppClient(
+    return HttpxGitHubAppClient(
         client_id="Iv1.client",
         app_jwt_factory=lambda: "app-jwt",
+        request_opener=_test_request_opener,
     )
+
+
+def _test_request_opener(request, timeout):
+    """Передаёт тестовый запрос в патченный urllib opener."""
+    return github_client_module.urlopen(request, timeout=timeout)
 
 
 def _vault() -> ObsidianVault:

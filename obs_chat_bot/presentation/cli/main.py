@@ -57,6 +57,10 @@ def configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # httpx пишет redirect URL целиком, а временная codeload-ссылка приватного
+    # archive содержит credential в query string.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def parse_args() -> argparse.Namespace:

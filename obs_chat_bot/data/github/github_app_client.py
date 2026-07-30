@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import json
 import logging
+from pathlib import PurePosixPath
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+from zipfile import BadZipFile, ZipFile
+
+import httpx
 
 from obs_chat_bot.application.vaults.github_models import (
     GitHubAuthenticatedAccount,
@@ -46,17 +51,106 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_WEB_BASE_URL = "https://github.com"
 GITHUB_ACCEPT = "application/vnd.github+json"
 GITHUB_USER_AGENT = "obsChatBot/0.1.0"
-DEFAULT_TIMEOUT_SECONDS = 15
+DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_READ_ATTEMPTS = 3
 DEFAULT_RETRY_BASE_DELAY_SECONDS = 0.5
+DEFAULT_BULK_DOWNLOAD_THRESHOLD = 50
 MAX_BLOB_DOWNLOAD_WORKERS = 6  # Ограничивает параллелизм первой синхронизации.
 MAX_CONFIGURATION_BYTES = 64 * 1024
 MAX_INSTRUCTION_BYTES = 256 * 1024
+MAX_MARKDOWN_BYTES = 4 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+MAX_ARCHIVE_VAULT_BYTES = 100 * 1024 * 1024
+MAX_ARCHIVE_EXTRACTED_BYTES = 64 * 1024 * 1024
 RETRYABLE_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
 LOGGER = logging.getLogger(__name__)
 
 
-class UrllibGitHubAppClient(
+class _GitHubArchiveTooLargeError(GitHubGatewayError):
+    """Архив repository превышает безопасный предел массовой загрузки."""
+
+
+class _HttpxResponseAdapter:
+    """Предоставляет минимальный file-like интерфейс потокового ответа httpx."""
+
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        self._iterator = response.iter_bytes()
+        self._buffer = bytearray()
+        self.headers = response.headers
+
+    def __enter__(self) -> _HttpxResponseAdapter:
+        return self
+
+    def __exit__(self, _type: Any, _value: Any, _traceback: Any) -> None:
+        self._response.close()
+
+    def read(self, size: int = -1) -> bytes:
+        """Читает весь ответ либо не более заданного числа байт."""
+        try:
+            if size < 0:
+                self._buffer.extend(b"".join(self._iterator))
+                result = bytes(self._buffer)
+                self._buffer.clear()
+                return result
+            while len(self._buffer) < size:
+                try:
+                    self._buffer.extend(next(self._iterator))
+                except StopIteration:
+                    break
+            result = bytes(self._buffer[:size])
+            del self._buffer[:size]
+            return result
+        except httpx.TimeoutException as error:
+            raise URLError(TimeoutError(type(error).__name__)) from None
+        except httpx.RequestError as error:
+            raise URLError(f"httpx {type(error).__name__}") from None
+
+
+class _PooledHttpxRequestOpener:
+    """Открывает GitHub-запросы через общий thread-safe connection pool."""
+
+    def __init__(self) -> None:
+        self._client = httpx.Client(
+            follow_redirects=True,
+            limits=httpx.Limits(
+                max_connections=12,
+                max_keepalive_connections=6,
+            ),
+        )
+
+    def __call__(self, request: Request, timeout: float) -> _HttpxResponseAdapter:
+        """Преобразует urllib Request в потоковый запрос общего httpx.Client."""
+        try:
+            outgoing = self._client.build_request(
+                request.get_method(),
+                request.full_url,
+                headers=dict(request.header_items()),
+                content=request.data,
+                timeout=timeout,
+            )
+            response = self._client.send(
+                outgoing,
+                stream=True,
+                follow_redirects=True,
+            )
+        except httpx.TimeoutException as error:
+            raise URLError(TimeoutError(type(error).__name__)) from None
+        except httpx.RequestError as error:
+            raise URLError(f"httpx {type(error).__name__}") from None
+        if response.status_code >= 300:
+            response.close()
+            raise HTTPError(
+                url=request.full_url,
+                code=response.status_code,
+                msg=response.reason_phrase,
+                hdrs=response.headers,
+                fp=None,
+            )
+        return _HttpxResponseAdapter(response)
+
+
+class HttpxGitHubAppClient(
     GitHubDeviceFlowGateway,
     GitHubInstallationTokenProvider,
     GitHubRepositoryGateway,
@@ -73,6 +167,8 @@ class UrllibGitHubAppClient(
         read_attempts: int = DEFAULT_READ_ATTEMPTS,
         retry_base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
         sleeper: Callable[[float], None] = time.sleep,
+        bulk_download_threshold: int = DEFAULT_BULK_DOWNLOAD_THRESHOLD,
+        request_opener: Callable[[Request, float], Any] | None = None,
     ) -> None:
         if not client_id.strip():
             raise ValueError("client_id must not be empty")
@@ -82,12 +178,16 @@ class UrllibGitHubAppClient(
             raise ValueError("read_attempts must be positive")
         if retry_base_delay_seconds < 0:
             raise ValueError("retry_base_delay_seconds must not be negative")
+        if bulk_download_threshold <= 0:
+            raise ValueError("bulk_download_threshold must be positive")
         self._client_id = client_id
         self._app_jwt_factory = app_jwt_factory
         self._timeout_seconds = timeout_seconds
         self._read_attempts = read_attempts
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._sleeper = sleeper
+        self._bulk_download_threshold = bulk_download_threshold
+        self._request_opener = request_opener or _PooledHttpxRequestOpener()
 
     def request_device_authorization(self) -> GitHubDeviceAuthorization:
         """Запрашивает Device Flow challenge по Client ID GitHub App."""
@@ -385,6 +485,8 @@ class UrllibGitHubAppClient(
         if not isinstance(tree, list):
             raise GitHubGatewayError("GitHub tree response has unexpected format")
         tree_blobs: dict[str, str] = {}
+        vault_bytes = 0
+        archive_size_known = True
         for item in tree:
             if not isinstance(item, dict) or item.get("type") != "blob":
                 continue
@@ -397,6 +499,11 @@ class UrllibGitHubAppClient(
             ):
                 continue
             tree_blobs[path] = blob_sha
+            size = item.get("size")
+            if isinstance(size, int) and not isinstance(size, bool) and size >= 0:
+                vault_bytes += size
+            else:
+                archive_size_known = False
 
         configuration_sha = tree_blobs.get(VAULT_CONFIGURATION_PATH)
         if configuration_sha is None:
@@ -434,45 +541,107 @@ class UrllibGitHubAppClient(
             for _position, path, blob_sha in instruction_manifest
             if known_instruction_blobs.get(path) != blob_sha
         ]
+        changed_count = len(changed) + len(changed_instructions)
+        use_archive = (
+            changed_count >= self._bulk_download_threshold
+            and archive_size_known
+            and vault_bytes <= MAX_ARCHIVE_VAULT_BYTES
+        )
+        download_mode = "archive" if use_archive else "blobs"
         download_started_at = time.monotonic()
         LOGGER.info(
-            "GitHub vault blob download started: app_user_id=%s "
-            "repository=%s/%s markdown_count=%s instruction_count=%s",
+            "GitHub vault content download started: app_user_id=%s "
+            "repository=%s/%s mode=%s markdown_count=%s "
+            "instruction_count=%s vault_bytes=%s",
             vault.app_user_id,
             vault.owner,
             vault.repository,
+            download_mode,
             len(changed),
             len(changed_instructions),
+            vault_bytes if archive_size_known else "unknown",
         )
         try:
-            downloaded = self._download_changed_text_files(
-                repository_url=repository_url,
-                token=token.value,
-                changed=changed,
-                max_bytes=None,
-            )
-            downloaded_instructions = self._download_changed_text_files(
-                repository_url=repository_url,
-                token=token.value,
-                changed=changed_instructions,
-                max_bytes=MAX_INSTRUCTION_BYTES,
-            )
+            if use_archive:
+                try:
+                    archive_files = self._download_archive_text_files(
+                        repository_url=repository_url,
+                        token=token.value,
+                        commit_sha=head_commit_sha,
+                        root_path=vault.root_path,
+                        limits={
+                            **{
+                                path: MAX_MARKDOWN_BYTES
+                                for path, _blob_sha in changed
+                            },
+                            **{
+                                path: MAX_INSTRUCTION_BYTES
+                                for path, _blob_sha in changed_instructions
+                            },
+                        },
+                    )
+                    downloaded = {
+                        path: archive_files[path]
+                        for path, _blob_sha in changed
+                    }
+                    downloaded_instructions = {
+                        path: archive_files[path]
+                        for path, _blob_sha in changed_instructions
+                    }
+                except _GitHubArchiveTooLargeError:
+                    download_mode = "blobs_fallback"
+                    LOGGER.warning(
+                        "GitHub archive is too large; falling back to blobs: "
+                        "app_user_id=%s repository=%s/%s",
+                        vault.app_user_id,
+                        vault.owner,
+                        vault.repository,
+                    )
+                    downloaded = self._download_changed_text_files(
+                        repository_url=repository_url,
+                        token=token.value,
+                        changed=changed,
+                        max_bytes=MAX_MARKDOWN_BYTES,
+                    )
+                    downloaded_instructions = (
+                        self._download_changed_text_files(
+                            repository_url=repository_url,
+                            token=token.value,
+                            changed=changed_instructions,
+                            max_bytes=MAX_INSTRUCTION_BYTES,
+                        )
+                    )
+            else:
+                downloaded = self._download_changed_text_files(
+                    repository_url=repository_url,
+                    token=token.value,
+                    changed=changed,
+                    max_bytes=MAX_MARKDOWN_BYTES,
+                )
+                downloaded_instructions = self._download_changed_text_files(
+                    repository_url=repository_url,
+                    token=token.value,
+                    changed=changed_instructions,
+                    max_bytes=MAX_INSTRUCTION_BYTES,
+                )
         except Exception:
             LOGGER.exception(
-                "GitHub vault blob download failed: app_user_id=%s "
-                "repository=%s/%s duration_seconds=%.3f",
+                "GitHub vault content download failed: app_user_id=%s "
+                "repository=%s/%s mode=%s duration_seconds=%.3f",
                 vault.app_user_id,
                 vault.owner,
                 vault.repository,
+                download_mode,
                 time.monotonic() - download_started_at,
             )
             raise
         LOGGER.info(
-            "GitHub vault blob download completed: app_user_id=%s "
-            "repository=%s/%s duration_seconds=%.3f",
+            "GitHub vault content download completed: app_user_id=%s "
+            "repository=%s/%s mode=%s duration_seconds=%.3f",
             vault.app_user_id,
             vault.owner,
             vault.repository,
+            download_mode,
             time.monotonic() - download_started_at,
         )
         files = [
@@ -565,6 +734,99 @@ class UrllibGitHubAppClient(
                 for (path, _blob_sha), content in zip(changed, contents)
             }
 
+    def _download_archive_text_files(
+        self,
+        *,
+        repository_url: str,
+        token: str,
+        commit_sha: str,
+        root_path: str,
+        limits: Mapping[str, int],
+    ) -> dict[str, str]:
+        """Скачивает ZIP snapshot и безопасно читает только нужные UTF-8 файлы.
+
+        Args:
+            repository_url: REST URL выбранного repository.
+            token: Краткоживущий installation token.
+            commit_sha: Неизменяемый commit, которому должен соответствовать архив.
+            root_path: Корень vault внутри repository.
+            limits: Максимальный размер каждого требуемого пути.
+
+        Returns:
+            Соответствие vault-relative пути и его полного текста.
+
+        Raises:
+            GitHubGatewayError: Архив слишком велик, повреждён или не содержит
+                согласованный с tree набор файлов.
+        """
+        if not limits:
+            return {}
+        archive_bytes = self._request_bytes(
+            Request(
+                f"{repository_url}/zipball/{quote(commit_sha, safe='')}",
+                headers=self._api_headers(token),
+                method="GET",
+            ),
+            max_bytes=MAX_ARCHIVE_BYTES,
+        )
+        normalized_root = root_path.strip("/")
+        root_prefix = f"{normalized_root}/" if normalized_root else ""
+        wanted = set(limits)
+        extracted: dict[str, str] = {}
+        extracted_bytes = 0
+        try:
+            with ZipFile(BytesIO(archive_bytes)) as archive:
+                for info in archive.infolist():
+                    if info.is_dir():
+                        continue
+                    parts = PurePosixPath(info.filename).parts
+                    if (
+                        len(parts) < 2
+                        or info.filename.startswith("/")
+                        or ".." in parts
+                    ):
+                        continue
+                    repository_path = PurePosixPath(*parts[1:]).as_posix()
+                    if root_prefix:
+                        if not repository_path.startswith(root_prefix):
+                            continue
+                        relative_path = repository_path[len(root_prefix):]
+                    else:
+                        relative_path = repository_path
+                    if relative_path not in wanted:
+                        continue
+                    if relative_path in extracted:
+                        raise GitHubGatewayError(
+                            "GitHub archive contains a duplicate vault path"
+                        )
+                    file_limit = limits[relative_path]
+                    if info.file_size > file_limit:
+                        raise GitHubGatewayError(
+                            f"GitHub vault file exceeds size limit: {relative_path}"
+                        )
+                    with archive.open(info) as source:
+                        content = source.read(file_limit + 1)
+                    if len(content) > file_limit:
+                        raise GitHubGatewayError(
+                            f"GitHub vault file exceeds size limit: {relative_path}"
+                        )
+                    extracted_bytes += len(content)
+                    if extracted_bytes > MAX_ARCHIVE_EXTRACTED_BYTES:
+                        raise GitHubGatewayError(
+                            "GitHub vault extracted content exceeds size limit"
+                        )
+                    extracted[relative_path] = content.decode("utf-8")
+        except (BadZipFile, UnicodeDecodeError) as error:
+            raise GitHubGatewayError(
+                "GitHub repository archive is not a valid UTF-8 vault snapshot"
+            ) from error
+        missing = wanted - set(extracted)
+        if missing:
+            raise GitHubGatewayError(
+                "GitHub repository archive is inconsistent with its tree"
+            )
+        return extracted
+
     def _download_text_blob(
         self,
         *,
@@ -593,6 +855,66 @@ class UrllibGitHubAppClient(
             return decoded.decode("utf-8")
         except UnicodeDecodeError as error:
             raise GitHubGatewayError("GitHub text blob is invalid") from error
+
+    def _request_bytes(
+        self,
+        request: Request,
+        *,
+        max_bytes: int,
+    ) -> bytes:
+        """Читает ограниченный бинарный GET с общими retry-правилами GitHub."""
+        for attempt in range(1, self._read_attempts + 1):
+            try:
+                with self._request_opener(
+                    request,
+                    self._timeout_seconds,
+                ) as response:
+                    content_length = _parse_content_length(
+                        getattr(response, "headers", None)
+                    )
+                    if content_length is not None and content_length > max_bytes:
+                        raise _GitHubArchiveTooLargeError(
+                            "GitHub repository archive exceeds size limit"
+                        )
+                    payload = response.read(max_bytes + 1)
+                    if len(payload) > max_bytes:
+                        raise _GitHubArchiveTooLargeError(
+                            "GitHub repository archive exceeds size limit"
+                        )
+                    return payload
+            except HTTPError as error:
+                if (
+                    not _is_retryable_http_error(error)
+                    or attempt == self._read_attempts
+                ):
+                    raise GitHubGatewayError(
+                        f"GitHub request failed with HTTP {error.code}"
+                    ) from error
+                self._wait_before_retry(
+                    request,
+                    error,
+                    attempt,
+                    self._read_attempts,
+                )
+            except (URLError, TimeoutError, OSError) as error:
+                if attempt == self._read_attempts:
+                    LOGGER.exception(
+                        "GitHub archive request failed permanently: "
+                        "url=%s cause=%s",
+                        request.full_url,
+                        _describe_exception_chain(error),
+                    )
+                    raise GitHubGatewayError(
+                        "GitHub request failed: "
+                        f"{_describe_exception_chain(error)}"
+                    ) from error
+                self._wait_before_retry(
+                    request,
+                    error,
+                    attempt,
+                    self._read_attempts,
+                )
+        raise RuntimeError("GitHub archive retry loop completed unexpectedly")
 
     def _create_repository_write_token(
         self,
@@ -794,11 +1116,14 @@ class UrllibGitHubAppClient(
         attempts = self._read_attempts if request.get_method() == "GET" else 1
         for attempt in range(1, attempts + 1):
             try:
-                with urlopen(request, timeout=self._timeout_seconds) as response:
+                with self._request_opener(
+                    request,
+                    self._timeout_seconds,
+                ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                     return payload, getattr(response, "headers", None)
             except HTTPError as error:
-                retryable = error.code in RETRYABLE_HTTP_STATUSES
+                retryable = _is_retryable_http_error(error)
                 if not retryable or attempt == attempts:
                     raise
                 self._wait_before_retry(request, error, attempt, attempts)
@@ -816,7 +1141,9 @@ class UrllibGitHubAppClient(
         attempts: int,
     ) -> None:
         """Логирует исходную сетевую причину и выдерживает exponential backoff."""
-        delay = self._retry_base_delay_seconds * (2 ** (attempt - 1))
+        delay = _retry_after_seconds(error)
+        if delay is None:
+            delay = self._retry_base_delay_seconds * (2 ** (attempt - 1))
         LOGGER.warning(
             "GitHub read request failed; retrying: method=%s url=%s "
             "failed_attempt=%s/%s retry_delay_seconds=%.3f cause=%s",
@@ -828,6 +1155,44 @@ class UrllibGitHubAppClient(
             _describe_exception_chain(error),
         )
         self._sleeper(delay)
+
+
+def _parse_content_length(headers: Any) -> int | None:
+    """Читает безопасное неотрицательное значение Content-Length."""
+    if headers is None:
+        return None
+    raw_value = headers.get("Content-Length")
+    if raw_value is None:
+        return None
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _retry_after_seconds(error: Exception) -> float | None:
+    """Возвращает ограниченную задержку GitHub Retry-After, если она задана."""
+    if not isinstance(error, HTTPError) or error.headers is None:
+        return None
+    raw_value = error.headers.get("Retry-After")
+    if raw_value is None:
+        return None
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    return min(value, 120.0)
+
+
+def _is_retryable_http_error(error: HTTPError) -> bool:
+    """Разрешает retry 403 только при явной паузе secondary rate limit."""
+    return (
+        error.code in RETRYABLE_HTTP_STATUSES
+        or (error.code == 403 and _retry_after_seconds(error) is not None)
+    )
 
 
 def _describe_exception_chain(error: BaseException) -> str:
@@ -843,7 +1208,9 @@ def _describe_exception_chain(error: BaseException) -> str:
             if message
             else type(current).__name__
         )
-        nested = current.__cause__ or current.__context__
+        nested = current.__cause__
+        if nested is None and not current.__suppress_context__:
+            nested = current.__context__
         if nested is None and isinstance(current, URLError):
             reason = current.reason
             nested = reason if isinstance(reason, BaseException) else None

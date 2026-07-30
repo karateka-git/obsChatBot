@@ -25,7 +25,7 @@ from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
 )
 from obs_chat_bot.data.http.article_html_fetcher import UrllibArticleHtmlFetcher
 from obs_chat_bot.data.llm.openai_article_analyzer import OpenAIArticleAnalyzer
-from obs_chat_bot.data.github.github_app_client import UrllibGitHubAppClient
+from obs_chat_bot.data.github.github_app_client import HttpxGitHubAppClient
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
 from obs_chat_bot.data.sqlite.analysis_result_repository import (
     SQLiteArticleAnalysisResultRepository,
@@ -170,7 +170,7 @@ def create_process_incoming_message_use_case(
     )
 
 
-def create_github_app_client(config: GitHubAppConfig) -> UrllibGitHubAppClient:
+def create_github_app_client(config: GitHubAppConfig) -> HttpxGitHubAppClient:
     """Создаёт общий HTTP adapter зарегистрированного GitHub App.
 
     Args:
@@ -183,7 +183,7 @@ def create_github_app_client(config: GitHubAppConfig) -> UrllibGitHubAppClient:
         client_id=config.client_id,
         private_key_path=config.private_key_path,
     )
-    return UrllibGitHubAppClient(
+    return HttpxGitHubAppClient(
         client_id=config.client_id,
         app_jwt_factory=signer.create,
     )
@@ -233,7 +233,7 @@ def create_github_connection_coordinator(
     *,
     database_path: Path,
     config: GitHubAppConfig,
-    gateway: UrllibGitHubAppClient | None = None,
+    gateway: HttpxGitHubAppClient | None = None,
 ) -> GitHubConnectionCoordinator:
     """Собирает процессный coordinator GitHub Device Flow.
 
