@@ -38,6 +38,46 @@ class ConfigTest(unittest.TestCase):
 
         self.assertFalse(config.app_debug)
 
+    def test_load_config_reads_optional_chunking_settings(self) -> None:
+        """Технические размеры chunks читаются отдельно от правил vault."""
+        with patch.dict(
+            os.environ,
+            _env(
+                CHUNK_MINIMUM_SIZE_CHARS="100",
+                CHUNK_TARGET_SIZE_CHARS="1000",
+                CHUNK_MAXIMUM_SIZE_CHARS="2000",
+            ),
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertEqual(config.chunking.minimum_size_chars, 100)
+        self.assertEqual(config.chunking.target_size_chars, 1000)
+        self.assertEqual(config.chunking.maximum_size_chars, 2000)
+
+    def test_load_config_uses_default_chunking_settings(self) -> None:
+        """Без CHUNK_* приложение получает согласованную безопасную policy."""
+        with patch.dict(os.environ, _env(), clear=True):
+            config = load_config()
+
+        self.assertEqual(config.chunking.minimum_size_chars, 300)
+        self.assertEqual(config.chunking.target_size_chars, 3000)
+        self.assertEqual(config.chunking.maximum_size_chars, 6000)
+
+    def test_load_config_rejects_inconsistent_chunking_settings(self) -> None:
+        """Minimum, target и maximum должны сохранять допустимый порядок."""
+        with patch.dict(
+            os.environ,
+            _env(
+                CHUNK_MINIMUM_SIZE_CHARS="1000",
+                CHUNK_TARGET_SIZE_CHARS="500",
+                CHUNK_MAXIMUM_SIZE_CHARS="2000",
+            ),
+            clear=True,
+        ):
+            with self.assertRaises(ConfigError):
+                load_config()
+
     def test_load_config_reads_optional_github_app_group(self) -> None:
         """GitHub App включается только полным набором безопасных настроек."""
         with patch.dict(

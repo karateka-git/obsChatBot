@@ -4,10 +4,18 @@ import sqlite3
 from pathlib import Path
 from typing import Callable
 
+from document_chunker import (
+    ChunkingPolicy,
+    DocumentChunker,
+    DocumentFormat,
+    MarkdownDocumentParser,
+)
+
 from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
 from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
+from obs_chat_bot.application.search.ports import VaultNoteChunker
 from obs_chat_bot.application.users.identity import UserIdentityService
 from obs_chat_bot.application.vaults.github_connection import (
     GitHubConnectionCoordinator,
@@ -19,7 +27,8 @@ from obs_chat_bot.application.vaults.ports import (
 )
 from obs_chat_bot.application.vaults.vault_selection import VaultSelectionManager
 from obs_chat_bot.application.vaults.vault_sync import VaultSyncManager
-from obs_chat_bot.data.config import GitHubAppConfig
+from obs_chat_bot.data.chunking.document_note_chunker import DocumentVaultNoteChunker
+from obs_chat_bot.data.config import ChunkingConfig, GitHubAppConfig
 from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
     TrafilaturaArticleTextExtractor,
 )
@@ -65,6 +74,28 @@ AnalyzeArticleUseCaseFactory = Callable[
     [sqlite3.Connection],
     AnalyzeArticleUseCase,
 ]
+
+
+def create_vault_note_chunker(config: ChunkingConfig) -> VaultNoteChunker:
+    """Собирает project adapter независимого Markdown document chunker.
+
+    Args:
+        config: Технические размеры chunks из конфигурации приложения.
+
+    Returns:
+        Adapter, добавляющий к универсальным chunks project IDs заметки.
+    """
+    engine = DocumentChunker(
+        parsers={
+            DocumentFormat.MARKDOWN: MarkdownDocumentParser(),
+        },
+        policy=ChunkingPolicy(
+            minimum_size_chars=config.minimum_size_chars,
+            target_size_chars=config.target_size_chars,
+            maximum_size_chars=config.maximum_size_chars,
+        ),
+    )
+    return DocumentVaultNoteChunker(engine)
 
 
 def create_process_article_url_use_case(

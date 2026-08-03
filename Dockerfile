@@ -14,6 +14,6 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY obs_chat_bot ./obs_chat_bot
+COPY document_chunker ./document_chunker
 
 CMD ["python", "-m", "obs_chat_bot"]
-

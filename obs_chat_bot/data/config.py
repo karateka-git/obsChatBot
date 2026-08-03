@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
@@ -23,6 +23,27 @@ REQUIRED_ENV_VARS = (
 
 class ConfigError(ValueError):
     """Raised when required application configuration is missing."""
+
+
+@dataclass(frozen=True)
+class ChunkingConfig:
+    """Содержит технические размеры chunks для composition root."""
+
+    minimum_size_chars: int = 300
+    target_size_chars: int = 3000
+    maximum_size_chars: int = 6000
+
+    def __post_init__(self) -> None:
+        if self.minimum_size_chars <= 0:
+            raise ValueError("minimum_size_chars must be positive")
+        if self.target_size_chars < self.minimum_size_chars:
+            raise ValueError(
+                "target_size_chars must not be less than minimum_size_chars"
+            )
+        if self.maximum_size_chars < self.target_size_chars:
+            raise ValueError(
+                "maximum_size_chars must not be less than target_size_chars"
+            )
 
 
 @dataclass(frozen=True)
@@ -60,6 +81,7 @@ class AppConfig:
     openai_base_url: str
     openai_api_key: str
     openai_model: str
+    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     app_debug: bool = False
     vk_bot_token: str = ""
     vk_group_id: int | None = None
@@ -77,6 +99,9 @@ class AppConfig:
             "openai_base_url": self.openai_base_url,
             "openai_api_key": _presence(self.openai_api_key),
             "openai_model": self.openai_model,
+            "chunk_minimum_size_chars": str(self.chunking.minimum_size_chars),
+            "chunk_target_size_chars": str(self.chunking.target_size_chars),
+            "chunk_maximum_size_chars": str(self.chunking.maximum_size_chars),
             "app_debug": str(self.app_debug).lower(),
             "vk_bot_token": _presence(self.vk_bot_token),
             "vk_group_id": str(self.vk_group_id) if self.vk_group_id is not None else "missing",
@@ -103,6 +128,7 @@ def load_config() -> AppConfig:
         openai_base_url=_get_required("OPENAI_BASE_URL").rstrip("/"),
         openai_api_key=_get_required("OPENAI_API_KEY"),
         openai_model=_get_required("OPENAI_MODEL"),
+        chunking=_load_chunking_config(),
         app_debug=_get_bool("APP_DEBUG", default=False),
         vk_bot_token=os.getenv("VK_BOT_TOKEN", ""),
         vk_group_id=_get_optional_int("VK_GROUP_ID"),
@@ -145,6 +171,39 @@ def _get_optional_int(name: str) -> int | None:
     if parsed <= 0:
         raise ConfigError(f"Environment variable {name} must be positive")
     return parsed
+
+
+def _get_positive_int(name: str, *, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise ConfigError(f"Environment variable {name} must be integer") from error
+    if parsed <= 0:
+        raise ConfigError(f"Environment variable {name} must be positive")
+    return parsed
+
+
+def _load_chunking_config() -> ChunkingConfig:
+    try:
+        return ChunkingConfig(
+            minimum_size_chars=_get_positive_int(
+                "CHUNK_MINIMUM_SIZE_CHARS",
+                default=300,
+            ),
+            target_size_chars=_get_positive_int(
+                "CHUNK_TARGET_SIZE_CHARS",
+                default=3000,
+            ),
+            maximum_size_chars=_get_positive_int(
+                "CHUNK_MAXIMUM_SIZE_CHARS",
+                default=6000,
+            ),
+        )
+    except ValueError as error:
+        raise ConfigError(f"Invalid chunking configuration: {error}") from error
 
 
 def _load_github_app_config() -> GitHubAppConfig | None:
