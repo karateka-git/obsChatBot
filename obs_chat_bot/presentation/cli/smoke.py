@@ -47,7 +47,7 @@ class AnalysisSmokeError(RuntimeError):
 
 
 def run_sqlite_smoke() -> None:
-    """Проверяет миграции и `ArticleRepository` на временной базе.
+    """Проверяет миграции, FTS5 и `ArticleRepository` на временной базе.
 
     Raises:
         SQLiteSmokeError: Если миграции или чтение сохранённой статьи не работают.
@@ -113,6 +113,11 @@ def _run_sqlite_scenario(database_path: Path) -> None:
         second_run = apply_migrations(connection)
         if second_run:
             raise SQLiteSmokeError("Migrations were applied more than once")
+
+        connection.execute(
+            "INSERT INTO obsidian_note_chunks_fts(obsidian_note_chunks_fts) "
+            "VALUES ('integrity-check')"
+        )
 
         _create_smoke_user(connection)
         repository = SQLiteArticleRepository(connection)

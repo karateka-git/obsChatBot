@@ -514,3 +514,27 @@
   SQLite adapters напрямую.
 
 Полная спецификация: [`docs/DOCUMENT_CHUNKER.md`](DOCUMENT_CHUNKER.md).
+
+## 2026-08-03. SQLite FTS5 как точный поисковый индекс chunks
+
+Решение:
+
+- Хранить FTS5 как производную проекцию `obsidian_note_chunks`, включающую
+  title заметки, path, tags, heading path и текст chunk.
+- Поддерживать проекцию SQLite triggers при изменении chunks, title, tags и при
+  каскадном удалении source note, чтобы FTS не имел отдельного жизненного цикла.
+- Принимать в application-port обычный текст. Data-adapter извлекает Unicode
+  terms и формирует безопасное OR-выражение вместо исполнения сырого FTS5.
+- Ранжировать совпадения BM25; title, tags и headings получают больший вес, чем
+  path и body-текст.
+- Возвращать результаты только при совпадении `app_user_id`, vault и ожидаемой
+  index signature с generation marker Этапа 10.2.
+
+Причины и последствия:
+
+- Точные термины, имена технологий, названия заметок и tags находятся локально,
+  без LLM и внешнего API.
+- Частичная индексация или смена chunking policy не может незаметно выдать stale
+  FTS-результаты.
+- FTS5 пока не является отдельной chat-командой: следующие подэтапы используют
+  его как один из независимых источников hybrid retrieval.

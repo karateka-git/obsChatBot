@@ -356,6 +356,119 @@ CREATE TABLE obsidian_chunk_index_states (
     CHECK (length(trim(index_signature)) > 0)
 );
 
+CREATE VIRTUAL TABLE obsidian_note_chunks_fts USING fts5 (
+    app_user_id UNINDEXED,
+    vault_id UNINDEXED,
+    chunk_id UNINDEXED,
+    title,
+    path,
+    tags,
+    headings,
+    text,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER trg_obsidian_note_chunks_fts_insert
+AFTER INSERT ON obsidian_note_chunks
+BEGIN
+    INSERT INTO obsidian_note_chunks_fts (
+        rowid,
+        app_user_id,
+        vault_id,
+        chunk_id,
+        title,
+        path,
+        tags,
+        headings,
+        text
+    )
+    VALUES (
+        NEW.id,
+        NEW.app_user_id,
+        NEW.vault_id,
+        NEW.id,
+        COALESCE((SELECT title FROM obsidian_notes WHERE id = NEW.note_id), ''),
+        NEW.note_path,
+        COALESCE((
+            SELECT group_concat(tag, ' ')
+            FROM (
+                SELECT tag
+                FROM obsidian_note_tags
+                WHERE note_id = NEW.note_id
+                ORDER BY position
+            )
+        ), ''),
+        NEW.heading_path,
+        NEW.text
+    );
+END;
+
+CREATE TRIGGER trg_obsidian_note_chunks_fts_update
+AFTER UPDATE OF note_path, heading_path, text ON obsidian_note_chunks
+WHEN OLD.note_path IS NOT NEW.note_path
+    OR OLD.heading_path IS NOT NEW.heading_path
+    OR OLD.text IS NOT NEW.text
+BEGIN
+    UPDATE obsidian_note_chunks_fts
+    SET path = NEW.note_path,
+        headings = NEW.heading_path,
+        text = NEW.text
+    WHERE rowid = NEW.id;
+END;
+
+CREATE TRIGGER trg_obsidian_note_chunks_fts_delete
+AFTER DELETE ON obsidian_note_chunks
+BEGIN
+    DELETE FROM obsidian_note_chunks_fts WHERE rowid = OLD.id;
+END;
+
+CREATE TRIGGER trg_obsidian_notes_fts_title_update
+AFTER UPDATE OF title ON obsidian_notes
+WHEN OLD.title IS NOT NEW.title
+BEGIN
+    UPDATE obsidian_note_chunks_fts
+    SET title = COALESCE(NEW.title, '')
+    WHERE rowid IN (
+        SELECT id FROM obsidian_note_chunks WHERE note_id = NEW.id
+    );
+END;
+
+CREATE TRIGGER trg_obsidian_note_tags_fts_insert
+AFTER INSERT ON obsidian_note_tags
+BEGIN
+    UPDATE obsidian_note_chunks_fts
+    SET tags = COALESCE((
+        SELECT group_concat(tag, ' ')
+        FROM (
+            SELECT tag
+            FROM obsidian_note_tags
+            WHERE note_id = NEW.note_id
+            ORDER BY position
+        )
+    ), '')
+    WHERE rowid IN (
+        SELECT id FROM obsidian_note_chunks WHERE note_id = NEW.note_id
+    );
+END;
+
+CREATE TRIGGER trg_obsidian_note_tags_fts_delete
+AFTER DELETE ON obsidian_note_tags
+BEGIN
+    UPDATE obsidian_note_chunks_fts
+    SET tags = COALESCE((
+        SELECT group_concat(tag, ' ')
+        FROM (
+            SELECT tag
+            FROM obsidian_note_tags
+            WHERE note_id = OLD.note_id
+            ORDER BY position
+        )
+    ), '')
+    WHERE rowid IN (
+        SELECT id FROM obsidian_note_chunks WHERE note_id = OLD.note_id
+    );
+END;
+
 CREATE TABLE obsidian_vault_sync_leases (
     app_user_id INTEGER NOT NULL,
     vault_id INTEGER NOT NULL PRIMARY KEY,

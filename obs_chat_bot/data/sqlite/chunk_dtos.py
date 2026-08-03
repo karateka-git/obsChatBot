@@ -32,3 +32,11 @@ class VaultChunkIndexStateDto:
     vault_id: int
     index_signature: str
     indexed_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class VaultChunkSearchHitDto:
+    """Представляет найденный SQLite FTS5 chunk и его BM25 score."""
+
+    chunk: VaultNoteChunkDto
+    score: float

@@ -15,6 +15,7 @@ from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
 from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
+from obs_chat_bot.application.search.full_text import VaultFullTextSearchService
 from obs_chat_bot.application.search.ports import VaultNoteChunker
 from obs_chat_bot.application.users.identity import UserIdentityService
 from obs_chat_bot.application.vaults.github_connection import (
@@ -58,6 +59,9 @@ from obs_chat_bot.data.sqlite.github_vault_sync_manager import (
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
+from obs_chat_bot.data.sqlite.vault_full_text_search_repository import (
+    SQLiteVaultFullTextSearchRepository,
+)
 from obs_chat_bot.data.sqlite.user_identity_repository import (
     SQLiteAppUserRepository,
     SQLiteExternalIdentityRepository,
@@ -96,6 +100,26 @@ def create_vault_note_chunker(config: ChunkingConfig) -> VaultNoteChunker:
         ),
     )
     return DocumentVaultNoteChunker(engine)
+
+
+def create_vault_full_text_search_service(
+    connection: sqlite3.Connection,
+    *,
+    chunking_config: ChunkingConfig = ChunkingConfig(),
+) -> VaultFullTextSearchService:
+    """Собирает поиск FTS5 с проверкой текущей chunking signature.
+
+    Args:
+        connection: Открытое SQLite-соединение приложения.
+        chunking_config: Policy, определяющая допустимое поколение chunks.
+
+    Returns:
+        Application-сервис изолированного полнотекстового поиска по vault.
+    """
+    return VaultFullTextSearchService(
+        repository=SQLiteVaultFullTextSearchRepository(connection),
+        chunker=create_vault_note_chunker(chunking_config),
+    )
 
 
 def create_process_article_url_use_case(

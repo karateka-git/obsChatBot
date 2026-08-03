@@ -7,10 +7,15 @@ import sqlite3
 
 from obs_chat_bot.data.sqlite.chunk_dtos import (
     VaultChunkIndexStateDto,
+    VaultChunkSearchHitDto,
     VaultNoteChunkDto,
 )
 from obs_chat_bot.data.sqlite.vault_mappers import parse_utc_timestamp
-from obs_chat_bot.domain.search.entities import VaultChunkIndexState, VaultNoteChunk
+from obs_chat_bot.domain.search.entities import (
+    VaultChunkIndexState,
+    VaultChunkSearchHit,
+    VaultNoteChunk,
+)
 
 
 def vault_note_chunk_dto_from_row(row: sqlite3.Row) -> VaultNoteChunkDto:
@@ -79,4 +84,22 @@ def vault_chunk_index_state_from_dto(
         vault_id=dto.vault_id,
         index_signature=dto.index_signature,
         indexed_at=parse_utc_timestamp(dto.indexed_at),
+    )
+
+
+def vault_chunk_search_hit_dto_from_row(row: sqlite3.Row) -> VaultChunkSearchHitDto:
+    """Преобразует объединённую строку FTS5/chunks в DTO результата."""
+    return VaultChunkSearchHitDto(
+        chunk=vault_note_chunk_dto_from_row(row),
+        score=row["score"],
+    )
+
+
+def vault_chunk_search_hit_from_dto(
+    dto: VaultChunkSearchHitDto,
+) -> VaultChunkSearchHit:
+    """Преобразует SQLite DTO в доменный результат полнотекстового поиска."""
+    return VaultChunkSearchHit(
+        chunk=vault_note_chunk_from_dto(dto.chunk),
+        score=dto.score,
     )

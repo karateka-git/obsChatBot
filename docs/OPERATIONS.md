@@ -132,6 +132,10 @@ con.close()
 - `incoming_messages` — сообщения внешних каналов со ссылками;
 - `analysis_results` — сохранённые LLM-сводки;
 - `processing_errors` — диагностика ошибок загрузки, извлечения и анализа.
+- `obsidian_notes` — полные Markdown-заметки активных vault;
+- `obsidian_note_chunks` — структурные chunks текущей локальной копии;
+- `obsidian_note_chunks_fts` — автоматически обновляемая FTS5-проекция chunks;
+- `obsidian_chunk_index_states` — marker согласованного поколения parser/policy.
 
 ## Повторная отправка ответов каналов
 

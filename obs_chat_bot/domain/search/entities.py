@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from math import isfinite
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,3 +66,21 @@ class VaultChunkIndexState:
             raise ValueError("vault_id must be positive")
         if not self.index_signature.strip():
             raise ValueError("index_signature must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class VaultChunkSearchHit:
+    """Представляет chunk, найденный полнотекстовым поиском.
+
+    Attributes:
+        chunk: Сохранённый chunk, доступный текущему пользователю и vault.
+        score: Релевантность результата; большее значение означает более
+            высокую позицию в выдаче.
+    """
+
+    chunk: VaultNoteChunk
+    score: float
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.score) or self.score < 0:
+            raise ValueError("score must be finite and not negative")

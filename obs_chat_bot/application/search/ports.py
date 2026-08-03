@@ -8,7 +8,11 @@ from obs_chat_bot.application.search.models import (
     ChunkIndexUpdate,
     VaultNoteChunkDraft,
 )
-from obs_chat_bot.domain.search.entities import VaultChunkIndexState, VaultNoteChunk
+from obs_chat_bot.domain.search.entities import (
+    VaultChunkIndexState,
+    VaultChunkSearchHit,
+    VaultNoteChunk,
+)
 from obs_chat_bot.domain.vaults.entities import VaultNote
 
 
@@ -101,3 +105,29 @@ class VaultChunkIndexRepository(Protocol):
         index_signature: str,
     ) -> VaultChunkIndexState:
         """Фиксирует завершение успешного инкрементального обновления."""
+
+
+class VaultFullTextSearchRepository(Protocol):
+    """Описывает точный полнотекстовый поиск по сохранённым chunks vault."""
+
+    def search(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        query: str,
+        expected_index_signature: str,
+        limit: int,
+    ) -> tuple[VaultChunkSearchHit, ...]:
+        """Возвращает релевантные chunks только из актуального поколения.
+
+        Args:
+            app_user_id: Внутренний ID пользователя приложения.
+            vault_id: ID активного Obsidian vault.
+            query: Пользовательский текст, а не сырой синтаксис FTS5.
+            expected_index_signature: Signature текущих parser и policy.
+            limit: Максимальное число результатов.
+
+        Returns:
+            Chunks в порядке убывания полнотекстовой релевантности.
+        """
