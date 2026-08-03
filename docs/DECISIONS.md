@@ -453,3 +453,56 @@
 - Пороговый режим не загружает весь repository при обычном изменении одной
   заметки.
 - Явные лимиты защищают процесс от чрезмерного archive и decompression bomb.
+
+## 2026-08-03. Независимый document chunker и project adapter
+
+Решение:
+
+- Реализовать chunking как независимый пакет `document_chunker` внутри текущего
+  repository; отдельный repository/PyPI отложить до появления второго
+  потребителя.
+- Сделать общий pipeline `SourceDocument -> DocumentParser -> DocumentBlock[] ->
+  ChunkAssembler -> DocumentChunk[]`, но в Этапе 10 реализовать только
+  Markdown/Obsidian parser.
+- Не передавать библиотеке `app_user_id`, vault/note IDs, SQLite ID или детали
+  FTS/embeddings. Проектные ID добавляет `DocumentVaultNoteChunker` adapter после
+  получения универсальных chunks.
+- Использовать application-owned `VaultNoteChunker` port; indexing use case не
+  зависит напрямую от пакета.
+- Хранить структурный `chunk_key` отдельно от SQLite `chunk_id` и
+  `content_hash`. Изоляцию обеспечивать составной областью пользователя, vault,
+  заметки и `chunk_key`, а не глобальным hash.
+- Определять размеры через валидируемый `ChunkingPolicy`, который приложение
+  создаёт из необязательных `CHUNK_*_SIZE_CHARS`; не помещать технические
+  параметры в `.knowledge-catcher.yml`.
+- Хранить версию chunker/parser и hash policy. Их изменение означает полную
+  переиндексацию vault независимо от GitHub blob SHA.
+- Выполнять разбиение детерминированно без LLM; FTS5 и embeddings работают с
+  сохранёнными chunks и не вызывают parser напрямую.
+
+Причины:
+
+- Разбор заголовков, Markdown-блоков и размеров полезен за пределами
+  `obsChatBot`, тогда как пользовательские и SQLite ID являются деталями
+  конкретного приложения.
+- Отдельный port сохраняет архитектурное направление зависимостей и позволяет
+  заменить реализацию без изменения indexing workflow.
+- Форматы документов имеют разные структуры, поэтому универсальным является
+  общий pipeline и результат, а синтаксический parser остаётся format-specific.
+- Детерминированные keys и hashes позволяют повторно использовать неизменённые
+  chunks и embeddings.
+- Policy без версии привела бы к смешиванию несовместимых поколений индекса после
+  изменения размеров или алгоритма.
+
+Последствия:
+
+- В Этапе 10.1 появляются отдельный Python-пакет, application-port, adapter и
+  необходимость включить пакет в Docker image.
+- Этап 10.2 обязан уметь выполнять как обычное инкрементальное обновление, так и
+  полный rebuild при смене policy/parser.
+- FTS5, embeddings, hybrid retrieval, review workflow и GitHub write-back не
+  меняют функциональных контрактов; они получают chunks из project storage.
+- Automation Этапа 11 должна вызывать общий indexing use case, а не parser или
+  SQLite adapters напрямую.
+
+Полная спецификация: [`docs/DOCUMENT_CHUNKER.md`](DOCUMENT_CHUNKER.md).
