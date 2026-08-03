@@ -500,6 +500,14 @@
   необходимость включить пакет в Docker image.
 - Этап 10.2 обязан уметь выполнять как обычное инкрементальное обновление, так и
   полный rebuild при смене policy/parser.
+- Согласованность полного поколения chunks отмечается отдельным marker с общей
+  signature parser и policy. Marker удаляется до потенциально частичной серии
+  записей и восстанавливается только после успешного обновления всех chunks.
+- При актуальной signature GitHub sync индексирует только изменённые заметки и
+  удаляет chunks исчезнувших заметок. При stale signature все chunks vault
+  атомарно заменяются из полного Markdown, уже сохранённого в SQLite.
+- Stale index исправляется даже при `NOT_MODIFIED`/`TREE_UNCHANGED`; внутри
+  шестичасового freshness-window это происходит без обращения к GitHub.
 - FTS5, embeddings, hybrid retrieval, review workflow и GitHub write-back не
   меняют функциональных контрактов; они получают chunks из project storage.
 - Automation Этапа 11 должна вызывать общий indexing use case, а не parser или

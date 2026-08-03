@@ -251,7 +251,8 @@ CREATE TABLE obsidian_notes (
     FOREIGN KEY (app_user_id, vault_id)
         REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE,
     UNIQUE (vault_id, path),
-    UNIQUE (app_user_id, id)
+    UNIQUE (app_user_id, id),
+    UNIQUE (app_user_id, vault_id, id)
 );
 
 CREATE INDEX idx_obsidian_notes_app_user_vault
@@ -307,6 +308,53 @@ CREATE TABLE obsidian_note_wikilinks (
 
 CREATE INDEX idx_obsidian_note_wikilinks_app_user_target
     ON obsidian_note_wikilinks (app_user_id, target);
+
+CREATE TABLE obsidian_note_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    note_id INTEGER NOT NULL,
+    note_path TEXT NOT NULL,
+    chunk_key TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    heading_path TEXT NOT NULL,
+    part_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id, vault_id)
+        REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (app_user_id, vault_id, note_id)
+        REFERENCES obsidian_notes (app_user_id, vault_id, id) ON DELETE CASCADE,
+    UNIQUE (note_id, chunk_key),
+    UNIQUE (note_id, position),
+    UNIQUE (app_user_id, id),
+    CHECK (position >= 0),
+    CHECK (part_index >= 0),
+    CHECK (length(trim(note_path)) > 0),
+    CHECK (length(trim(chunk_key)) > 0),
+    CHECK (length(trim(text)) > 0),
+    CHECK (length(trim(content_hash)) > 0)
+);
+
+CREATE INDEX idx_obsidian_note_chunks_app_user_vault
+    ON obsidian_note_chunks (app_user_id, vault_id);
+CREATE INDEX idx_obsidian_note_chunks_note_position
+    ON obsidian_note_chunks (note_id, position);
+CREATE INDEX idx_obsidian_note_chunks_vault_content_hash
+    ON obsidian_note_chunks (vault_id, content_hash);
+
+CREATE TABLE obsidian_chunk_index_states (
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    index_signature TEXT NOT NULL,
+    indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (app_user_id, vault_id),
+    FOREIGN KEY (app_user_id, vault_id)
+        REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE,
+    CHECK (length(trim(index_signature)) > 0)
+);
 
 CREATE TABLE obsidian_vault_sync_leases (
     app_user_id INTEGER NOT NULL,

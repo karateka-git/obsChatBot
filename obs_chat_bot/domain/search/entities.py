@@ -1,13 +1,14 @@
-"""Application-модели chunks до сохранения в project storage."""
+"""Доменные сущности chunks и состояния поискового индекса."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True, slots=True)
-class VaultNoteChunkDraft:
-    """Связывает универсальный chunk с сохранённой заметкой пользователя."""
+class VaultNoteChunk:
+    """Представляет сохранённый структурный fragment Markdown-заметки."""
 
     app_user_id: int
     vault_id: int
@@ -19,6 +20,9 @@ class VaultNoteChunkDraft:
     part_index: int
     text: str
     content_hash: str
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.app_user_id <= 0:
@@ -41,31 +45,23 @@ class VaultNoteChunkDraft:
             raise ValueError("text must not be empty")
         if not self.content_hash.strip():
             raise ValueError("content_hash must not be empty")
+        if self.id is not None and self.id <= 0:
+            raise ValueError("id must be positive")
 
 
 @dataclass(frozen=True, slots=True)
-class ChunkIndexUpdate:
-    """Содержит счётчики одной операции обновления chunk index."""
+class VaultChunkIndexState:
+    """Фиксирует signature полностью согласованного индекса одного vault."""
 
-    created: int = 0
-    updated: int = 0
-    deleted: int = 0
-    unchanged: int = 0
+    app_user_id: int
+    vault_id: int
+    index_signature: str
+    indexed_at: datetime
 
     def __post_init__(self) -> None:
-        if min(self.created, self.updated, self.deleted, self.unchanged) < 0:
-            raise ValueError("chunk index counters must not be negative")
-
-    @property
-    def processed(self) -> int:
-        """Возвращает число chunks в новом наборе без удалённых записей."""
-        return self.created + self.updated + self.unchanged
-
-    def merge(self, other: ChunkIndexUpdate) -> ChunkIndexUpdate:
-        """Объединяет независимые счётчики последовательных операций."""
-        return ChunkIndexUpdate(
-            created=self.created + other.created,
-            updated=self.updated + other.updated,
-            deleted=self.deleted + other.deleted,
-            unchanged=self.unchanged + other.unchanged,
-        )
+        if self.app_user_id <= 0:
+            raise ValueError("app_user_id must be positive")
+        if self.vault_id <= 0:
+            raise ValueError("vault_id must be positive")
+        if not self.index_signature.strip():
+            raise ValueError("index_signature must not be empty")

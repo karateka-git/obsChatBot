@@ -35,7 +35,13 @@ from obs_chat_bot.bootstrap import (
     create_vault_selection_manager,
     create_vault_sync_manager,
 )
-from obs_chat_bot.data.config import AppConfig, ConfigError, GitHubAppConfig, load_config
+from obs_chat_bot.data.config import (
+    AppConfig,
+    ChunkingConfig,
+    ConfigError,
+    GitHubAppConfig,
+    load_config,
+)
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
 from obs_chat_bot.data.http.url_safety import UnsafeUrlError, validate_public_http_url
 from obs_chat_bot.data.sqlite.connection import connect_database
@@ -157,6 +163,7 @@ def main() -> int:
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
             github_app_config=config.github_app,
+            chunking_config=config.chunking,
             logger=logger,
         )
 
@@ -169,6 +176,7 @@ def main() -> int:
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
             github_app_config=config.github_app,
+            chunking_config=config.chunking,
             logger=logger,
         )
 
@@ -455,6 +463,7 @@ def run_telegram_bot_command(
     openai_api_key: str = "",
     openai_model: str = "",
     github_app_config: GitHubAppConfig | None = None,
+    chunking_config: ChunkingConfig = ChunkingConfig(),
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
@@ -469,6 +478,7 @@ def run_telegram_bot_command(
         openai_api_key: API key провайдера LLM.
         openai_model: Имя модели для анализа статей.
         github_app_config: Настройки GitHub App или `None`.
+        chunking_config: Policy разбиения заметок на chunks.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case, полезная для тестов без polling.
         analysis_use_case_factory: Factory use case анализа, полезная для тестов.
@@ -505,6 +515,7 @@ def run_telegram_bot_command(
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
                     github_repository_gateway=github_gateway,
+                    chunking_config=chunking_config,
                     completion_handler=completion_handler,
                 )
             ),
@@ -532,6 +543,7 @@ def run_vk_bot_command(
     openai_api_key: str = "",
     openai_model: str = "",
     github_app_config: GitHubAppConfig | None = None,
+    chunking_config: ChunkingConfig = ChunkingConfig(),
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
@@ -547,6 +559,7 @@ def run_vk_bot_command(
         openai_api_key: API key провайдера LLM.
         openai_model: Имя модели для анализа статей.
         github_app_config: Настройки GitHub App или `None`.
+        chunking_config: Policy разбиения заметок на chunks.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case для тестов.
         analysis_use_case_factory: Factory analysis use case для тестов.
@@ -587,6 +600,7 @@ def run_vk_bot_command(
                     analysis_use_case_factory=analysis_use_case_factory,
                     github_connection_starter=connection_starter,
                     github_repository_gateway=github_gateway,
+                    chunking_config=chunking_config,
                     completion_handler=completion_handler,
                 )
             ),
@@ -616,6 +630,7 @@ def process_channel_incoming_message(
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
     github_connection_starter: GitHubConnectionStarter | None = None,
     github_repository_gateway: GitHubRepositoryGateway | None = None,
+    chunking_config: ChunkingConfig = ChunkingConfig(),
     completion_handler: IncomingCompletionHandler | None = None,
 ) -> ProcessIncomingMessageResult:
     """Обрабатывает одно сообщение внешнего канала внутри worker thread.
@@ -630,6 +645,7 @@ def process_channel_incoming_message(
         analysis_use_case_factory: Factory analysis use case для тестов.
         github_connection_starter: Процессный coordinator GitHub Device Flow.
         github_repository_gateway: GitHub App gateway чтения repository.
+        chunking_config: Policy разбиения заметок на chunks.
         completion_handler: Callback итогового ответа в исходный чат.
 
     Returns:
@@ -669,6 +685,7 @@ def process_channel_incoming_message(
                 create_vault_sync_manager(
                     database_path=database_path,
                     github_gateway=github_repository_gateway,
+                    chunking_config=chunking_config,
                 )
                 if (
                     github_repository_gateway is not None

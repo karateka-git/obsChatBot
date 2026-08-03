@@ -10,6 +10,7 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubVaultSnapshot,
     GitHubVaultSnapshotStatus,
 )
+from obs_chat_bot.application.search.models import ChunkIndexUpdate
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncService,
     VaultSyncStatus,
@@ -134,6 +135,42 @@ class SnapshotGateway:
         return self.snapshot
 
 
+class MemoryChunkIndexer:
+    """Имитирует согласованный chunk index для unit-тестов sync orchestration."""
+
+    def __init__(self, *, current=True):
+        self.current = current
+        self.indexed_paths = []
+        self.rebuilds = []
+        self.invalidations = 0
+
+    @property
+    def index_signature(self):
+        return "test-parser:test-policy"
+
+    def is_current(self, **_values):
+        return self.current
+
+    def invalidate(self, **_values):
+        self.current = False
+        self.invalidations += 1
+
+    def index_note(self, note):
+        self.indexed_paths.append(note.path)
+        return ChunkIndexUpdate(created=1)
+
+    def delete_notes(self, notes):
+        return len(notes)
+
+    def rebuild(self, *, notes, **_values):
+        self.rebuilds.append(tuple(note.path for note in notes))
+        self.current = True
+        return ChunkIndexUpdate(created=len(notes))
+
+    def mark_current(self, **_values):
+        self.current = True
+
+
 class VaultSyncTest(unittest.TestCase):
     """Проверяет добавление, изменение, удаление и фиксацию source SHA."""
 
@@ -180,6 +217,7 @@ class VaultSyncTest(unittest.TestCase):
             instruction_repository=MemoryInstructionRepository(),
             lease_repository=leases,
             github_gateway=gateway,
+            chunk_indexer=MemoryChunkIndexer(),
             clock=lambda: NOW,
         ).sync(1)
 
@@ -207,6 +245,7 @@ class VaultSyncTest(unittest.TestCase):
                     head_etag='"etag-1"',
                 )
             ),
+            chunk_indexer=MemoryChunkIndexer(),
             clock=lambda: NOW,
         ).sync(1)
 
@@ -238,6 +277,7 @@ class VaultSyncTest(unittest.TestCase):
                     ),
                 )
             ),
+            chunk_indexer=MemoryChunkIndexer(),
             clock=lambda: NOW,
         )
 
@@ -280,6 +320,7 @@ class VaultSyncTest(unittest.TestCase):
             instruction_repository=instructions,
             lease_repository=MemoryLeaseRepository(),
             github_gateway=gateway,
+            chunk_indexer=MemoryChunkIndexer(),
             clock=lambda: NOW,
         ).sync(1)
 
@@ -309,6 +350,7 @@ class VaultSyncTest(unittest.TestCase):
             instruction_repository=MemoryInstructionRepository(),
             lease_repository=MemoryLeaseRepository(),
             github_gateway=gateway,
+            chunk_indexer=MemoryChunkIndexer(),
             clock=lambda: NOW,
         )
 
@@ -336,6 +378,7 @@ class VaultSyncTest(unittest.TestCase):
             instruction_repository=MemoryInstructionRepository(),
             lease_repository=MemoryLeaseRepository(),
             github_gateway=gateway,
+            chunk_indexer=MemoryChunkIndexer(),
             clock=lambda: NOW,
         )
 
@@ -343,6 +386,104 @@ class VaultSyncTest(unittest.TestCase):
 
         self.assertEqual(result.status, VaultSyncStatus.UNCHANGED)
         self.assertEqual(gateway.known_blobs, {})
+
+    def test_not_modified_rebuilds_index_after_signature_change(self) -> None:
+        """Новая parser/policy signature переиндексирует локальные заметки."""
+        note = replace(
+            VaultNote(
+                app_user_id=1,
+                vault_id=10,
+                path="note.md",
+                blob_sha="blob-sha",
+                markdown="# Note",
+            ),
+            id=11,
+        )
+        indexer = MemoryChunkIndexer(current=False)
+        result = VaultSyncService(
+            vault_repository=MemoryVaultRepository(_vault()),
+            note_repository=MemoryNoteRepository([note]),
+            instruction_repository=MemoryInstructionRepository(),
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=SnapshotGateway(
+                GitHubVaultSnapshot(status=GitHubVaultSnapshotStatus.NOT_MODIFIED)
+            ),
+            chunk_indexer=indexer,
+            clock=lambda: NOW,
+        ).sync(1)
+
+        self.assertEqual(result.status, VaultSyncStatus.UNCHANGED)
+        self.assertTrue(result.index_rebuilt)
+        self.assertEqual(indexer.rebuilds, [("note.md",)])
+
+    def test_fresh_vault_rebuilds_stale_index_without_github(self) -> None:
+        """Stale chunk generation исправляется внутри окна без GitHub-запроса."""
+        gateway = SnapshotGateway(
+            GitHubVaultSnapshot(status=GitHubVaultSnapshotStatus.NOT_MODIFIED)
+        )
+        indexer = MemoryChunkIndexer(current=False)
+        service = VaultSyncService(
+            vault_repository=MemoryVaultRepository(
+                replace(_vault(), last_checked_at=NOW - timedelta(minutes=5))
+            ),
+            note_repository=MemoryNoteRepository([]),
+            instruction_repository=MemoryInstructionRepository(),
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=gateway,
+            chunk_indexer=indexer,
+            clock=lambda: NOW,
+        )
+
+        result = service.sync_if_stale(1)
+
+        self.assertEqual(result.status, VaultSyncStatus.FRESH)
+        self.assertTrue(result.index_rebuilt)
+        self.assertIsNone(gateway.known_blobs)
+
+    def test_changed_snapshot_indexes_only_changed_note(self) -> None:
+        """Текущая signature не запускает полный rebuild неизменённых заметок."""
+        unchanged = replace(
+            VaultNote(
+                app_user_id=1,
+                vault_id=10,
+                path="stable.md",
+                blob_sha="stable-sha",
+                markdown="# Stable",
+            ),
+            id=11,
+        )
+        indexer = MemoryChunkIndexer()
+        result = VaultSyncService(
+            vault_repository=MemoryVaultRepository(_vault()),
+            note_repository=MemoryNoteRepository([unchanged]),
+            instruction_repository=MemoryInstructionRepository(),
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=SnapshotGateway(
+                GitHubVaultSnapshot(
+                    status=GitHubVaultSnapshotStatus.CHANGED,
+                    head_commit_sha="commit-2",
+                    tree_sha="tree-2",
+                    files=(
+                        GitHubMarkdownFile(
+                            path="stable.md",
+                            blob_sha="stable-sha",
+                        ),
+                        GitHubMarkdownFile(
+                            path="changed.md",
+                            blob_sha="changed-sha",
+                            markdown="# Changed",
+                        ),
+                    ),
+                )
+            ),
+            chunk_indexer=indexer,
+            clock=lambda: NOW,
+        ).sync(1)
+
+        self.assertEqual(indexer.indexed_paths, ["changed.md"])
+        self.assertEqual(indexer.rebuilds, [])
+        self.assertFalse(result.index_rebuilt)
+        self.assertEqual(result.created_chunks, 1)
 
 
 def _vault():

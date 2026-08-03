@@ -244,12 +244,14 @@ def create_vault_sync_manager(
     *,
     database_path: Path,
     github_gateway: GitHubVaultGateway,
+    chunking_config: ChunkingConfig = ChunkingConfig(),
 ) -> VaultSyncManager:
     """Собирает GitHub/SQLite-сценарий синхронизации vault.
 
     Args:
         database_path: Путь к общей SQLite-базе adapters.
         github_gateway: GitHub App gateway чтения Git trees и blobs.
+        chunking_config: Policy разбиения Markdown-заметок на chunks.
 
     Returns:
         Менеджер с отдельным соединением для каждой операции.
@@ -257,6 +259,7 @@ def create_vault_sync_manager(
     return SQLiteGitHubVaultSyncManager(
         database_path=database_path,
         github_gateway=github_gateway,
+        note_chunker=create_vault_note_chunker(chunking_config),
     )
 
 

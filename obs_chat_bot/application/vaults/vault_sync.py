@@ -9,6 +9,8 @@ import time
 from typing import Protocol
 from uuid import uuid4
 
+from obs_chat_bot.application.search.indexing import VaultChunkIndexer
+from obs_chat_bot.application.search.models import ChunkIndexUpdate
 from obs_chat_bot.application.vaults.github_models import (
     GitHubVaultSnapshotStatus,
 )
@@ -60,6 +62,11 @@ class VaultSyncResult:
     updated_notes: int = 0
     deleted_notes: int = 0
     instruction_files: int = 0
+    created_chunks: int = 0
+    updated_chunks: int = 0
+    deleted_chunks: int = 0
+    unchanged_chunks: int = 0
+    index_rebuilt: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +117,7 @@ class VaultSyncService:
         instruction_repository: VaultInstructionRepository,
         lease_repository: VaultSyncLeaseRepository,
         github_gateway: GitHubVaultGateway,
+        chunk_indexer: VaultChunkIndexer,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         lease_duration: timedelta = timedelta(minutes=5),
     ) -> None:
@@ -118,6 +126,7 @@ class VaultSyncService:
         self._instruction_repository = instruction_repository
         self._lease_repository = lease_repository
         self._github_gateway = github_gateway
+        self._chunk_indexer = chunk_indexer
         self._clock = clock
         self._lease_duration = lease_duration
 
@@ -160,6 +169,18 @@ class VaultSyncService:
             vault.last_checked_at is not None
             and now - vault.last_checked_at < max_age
         ):
+            if not self._chunk_indexer.is_current(
+                app_user_id=app_user_id,
+                vault_id=vault.id,
+            ):
+                return self._run_with_lease(
+                    vault,
+                    now=now,
+                    operation=lambda: self._rebuild_local_index(
+                        vault,
+                        status=VaultSyncStatus.FRESH,
+                    ),
+                )
             notes = self._note_repository.list_for_vault(
                 app_user_id=app_user_id,
                 vault_id=vault.id,
@@ -180,6 +201,22 @@ class VaultSyncService:
         """Захватывает lease и синхронизирует уже найденный vault."""
         if vault.id is None:
             raise ValueError("vault must be saved before synchronization")
+        return self._run_with_lease(
+            vault,
+            now=now,
+            operation=lambda: self._sync_locked(vault, now=now),
+        )
+
+    def _run_with_lease(
+        self,
+        vault: ObsidianVault,
+        *,
+        now: datetime,
+        operation: Callable[[], VaultSyncResult],
+    ) -> VaultSyncResult:
+        """Выполняет локальную или GitHub-синхронизацию под общим lease."""
+        if vault.id is None:
+            raise ValueError("vault must be saved before synchronization")
         owner = uuid4().hex
         lease = self._lease_repository.acquire(
             app_user_id=vault.app_user_id,
@@ -194,7 +231,7 @@ class VaultSyncService:
                 vault=vault,
             )
         try:
-            return self._sync_locked(vault, now=now)
+            return operation()
         finally:
             self._lease_repository.release(
                 app_user_id=vault.app_user_id,
@@ -242,6 +279,10 @@ class VaultSyncService:
             instruction.path: instruction
             for instruction in local_instructions
         }
+        index_current = self._chunk_indexer.is_current(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+        )
         github_started_at = time.monotonic()
         LOGGER.info(
             "GitHub vault snapshot fetch started: app_user_id=%s vault_id=%s "
@@ -281,20 +322,32 @@ class VaultSyncService:
             time.monotonic() - github_started_at,
         )
         if snapshot.status is GitHubVaultSnapshotStatus.NOT_MODIFIED:
+            chunk_update = self._ensure_current_index(
+                vault,
+                local_notes=tuple(local_notes),
+                index_current=index_current,
+            )
             updated = self._update_state(vault, snapshot, now=now, synced=False)
             return VaultSyncResult(
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
                 total_notes=len(local_notes),
                 instruction_files=len(local_instructions),
+                **_chunk_result_fields(chunk_update, rebuilt=not index_current),
             )
         if snapshot.status is GitHubVaultSnapshotStatus.TREE_UNCHANGED:
+            chunk_update = self._ensure_current_index(
+                vault,
+                local_notes=tuple(local_notes),
+                index_current=index_current,
+            )
             updated = self._update_state(vault, snapshot, now=now, synced=False)
             return VaultSyncResult(
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
                 total_notes=len(local_notes),
                 instruction_files=len(local_instructions),
+                **_chunk_result_fields(chunk_update, rebuilt=not index_current),
             )
 
         pending_instructions: list[VaultInstruction] = []
@@ -359,19 +412,58 @@ class VaultSyncService:
             len(pending_instructions),
         )
         try:
-            # Source SHA фиксируется лишь после успешной записи правил и заметок.
+            requires_index_write = (
+                bool(pending_notes or deleted_paths) or not index_current
+            )
+            if requires_index_write:
+                # Marker удаляется до серии отдельных транзакций. При любом сбое
+                # следующий запуск безопасно выполнит полный локальный rebuild.
+                self._chunk_indexer.invalidate(
+                    app_user_id=vault.app_user_id,
+                    vault_id=vault.id,
+                )
             self._instruction_repository.replace_for_vault(
                 app_user_id=vault.app_user_id,
                 vault_id=vault.id,
                 instructions=tuple(pending_instructions),
             )
+            chunk_update = ChunkIndexUpdate()
             for note in pending_notes:
-                self._note_repository.upsert(note)
+                saved_note = self._note_repository.upsert(note)
+                if index_current:
+                    chunk_update = chunk_update.merge(
+                        self._chunk_indexer.index_note(saved_note)
+                    )
+            deleted_notes = tuple(
+                local_by_path[path]
+                for path in sorted(deleted_paths)
+            )
+            if index_current:
+                chunk_update = chunk_update.merge(
+                    ChunkIndexUpdate(
+                        deleted=self._chunk_indexer.delete_notes(deleted_notes)
+                    )
+                )
             deleted = self._note_repository.delete_paths(
                 app_user_id=vault.app_user_id,
                 vault_id=vault.id,
                 paths=deleted_paths,
             )
+            if not index_current:
+                final_notes = self._note_repository.list_for_vault(
+                    app_user_id=vault.app_user_id,
+                    vault_id=vault.id,
+                )
+                chunk_update = self._rebuild_index(
+                    vault,
+                    notes=tuple(final_notes),
+                )
+            elif requires_index_write:
+                self._chunk_indexer.mark_current(
+                    app_user_id=vault.app_user_id,
+                    vault_id=vault.id,
+                )
+            # Source SHA фиксируется только после успешной записи всех данных.
             updated_vault = self._update_state(vault, snapshot, now=now, synced=True)
         except Exception:
             LOGGER.exception(
@@ -398,7 +490,83 @@ class VaultSyncService:
             updated_notes=updated_count,
             deleted_notes=deleted,
             instruction_files=len(pending_instructions),
+            **_chunk_result_fields(chunk_update, rebuilt=not index_current),
         )
+
+    def _ensure_current_index(
+        self,
+        vault: ObsidianVault,
+        *,
+        local_notes: tuple[VaultNote, ...],
+        index_current: bool,
+    ) -> ChunkIndexUpdate:
+        """Перестраивает stale index при неизменившемся GitHub tree."""
+        if index_current:
+            return ChunkIndexUpdate()
+        return self._rebuild_index(vault, notes=local_notes)
+
+    def _rebuild_local_index(
+        self,
+        vault: ObsidianVault,
+        *,
+        status: VaultSyncStatus,
+    ) -> VaultSyncResult:
+        """Обновляет только chunks, не выполняя лишний запрос к GitHub."""
+        if vault.id is None:
+            raise ValueError("vault must be saved before indexing")
+        notes = self._note_repository.list_for_vault(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+        )
+        update = self._rebuild_index(vault, notes=tuple(notes))
+        instructions = self._instruction_repository.list_for_vault(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+        )
+        return VaultSyncResult(
+            status=status,
+            vault=vault,
+            total_notes=len(notes),
+            instruction_files=len(instructions),
+            **_chunk_result_fields(update, rebuilt=True),
+        )
+
+    def _rebuild_index(
+        self,
+        vault: ObsidianVault,
+        *,
+        notes: tuple[VaultNote, ...],
+    ) -> ChunkIndexUpdate:
+        """Атомарно заменяет полное поколение chunks текущей signature."""
+        if vault.id is None:
+            raise ValueError("vault must be saved before indexing")
+        started_at = time.monotonic()
+        LOGGER.info(
+            "Vault chunk index rebuild started: app_user_id=%s vault_id=%s "
+            "note_count=%s index_signature=%s",
+            vault.app_user_id,
+            vault.id,
+            len(notes),
+            self._chunk_indexer.index_signature,
+        )
+        self._chunk_indexer.invalidate(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+        )
+        update = self._chunk_indexer.rebuild(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+            notes=notes,
+        )
+        LOGGER.info(
+            "Vault chunk index rebuild completed: app_user_id=%s vault_id=%s "
+            "chunk_count=%s duration_seconds=%.3f",
+            vault.app_user_id,
+            vault.id,
+            update.created,
+            time.monotonic() - started_at,
+        )
+        return update
 
     def _update_state(self, vault, snapshot, *, now, synced):
         updated = self._vault_repository.update_sync_state(
@@ -413,3 +581,18 @@ class VaultSyncService:
         if updated is None:
             raise RuntimeError("Synchronized vault could not be read")
         return updated
+
+
+def _chunk_result_fields(
+    update: ChunkIndexUpdate,
+    *,
+    rebuilt: bool,
+) -> dict[str, int | bool]:
+    """Преобразует внутренние счётчики индекса в поля результата sync."""
+    return {
+        "created_chunks": update.created,
+        "updated_chunks": update.updated,
+        "deleted_chunks": update.deleted,
+        "unchanged_chunks": update.unchanged,
+        "index_rebuilt": rebuilt,
+    }
