@@ -192,3 +192,32 @@ class VaultEmbeddingIndexState:
             raise ValueError("embedding models must not be empty")
         if self.dimension is not None and self.dimension <= 0:
             raise ValueError("dimension must be positive when present")
+
+
+@dataclass(frozen=True, slots=True)
+class ArticleSearchQuery:
+    """Представляет два компактных поисковых представления одной статьи.
+
+    Attributes:
+        app_user_id: Внутренний ID владельца статьи и будущей выдачи.
+        article_id: ID проанализированной статьи.
+        analysis_id: ID сохранённого LLM-анализа, если он уже назначен.
+        semantic_text: Текст для embedding query и vector search.
+        lexical_text: Короткий текст терминов для полнотекстового поиска.
+    """
+
+    app_user_id: int
+    article_id: int
+    analysis_id: int | None
+    semantic_text: str
+    lexical_text: str
+
+    def __post_init__(self) -> None:
+        if min(self.app_user_id, self.article_id) <= 0:
+            raise ValueError("search query IDs must be positive")
+        if self.analysis_id is not None and self.analysis_id <= 0:
+            raise ValueError("analysis_id must be positive when present")
+        if not self.semantic_text.strip():
+            raise ValueError("semantic_text must not be empty")
+        if not self.lexical_text.strip():
+            raise ValueError("lexical_text must not be empty")
