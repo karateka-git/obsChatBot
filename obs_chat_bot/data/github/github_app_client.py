@@ -30,6 +30,8 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubUserAccessToken,
     GitHubVaultSnapshot,
     GitHubVaultSnapshotStatus,
+    GitHubVaultCommitResult,
+    GitHubVaultTargetState,
 )
 from obs_chat_bot.application.vaults.vault_configuration import (
     VAULT_CONFIGURATION_PATH,
@@ -42,6 +44,7 @@ from obs_chat_bot.application.vaults.ports import (
     GitHubInstallationTokenProvider,
     GitHubRepositoryGateway,
     GitHubVaultGateway,
+    GitHubVaultWriteGateway,
 )
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
 
@@ -155,6 +158,7 @@ class HttpxGitHubAppClient(
     GitHubInstallationTokenProvider,
     GitHubRepositoryGateway,
     GitHubVaultGateway,
+    GitHubVaultWriteGateway,
 ):
     """Выполняет GitHub Device Flow и выпускает installation tokens."""
 
@@ -669,6 +673,154 @@ class HttpxGitHubAppClient(
             files=tuple(sorted(files, key=lambda file: file.path)),
             instructions=tuple(instructions),
         )
+
+    def inspect_vault_target(
+        self,
+        vault: ObsidianVault,
+        *,
+        target_path: str,
+    ) -> GitHubVaultTargetState:
+        """Повторно читает HEAD/tree и target blob перед подтверждённой записью."""
+        token = self.create_installation_token(
+            installation_id=vault.installation_id,
+            repository_id=vault.repository_id,
+        )
+        repository_url = _repository_api_url(vault)
+        headers = self._api_headers(token.value)
+        ref_payload = self._request_json(
+            Request(
+                f"{repository_url}/git/ref/heads/{quote(vault.branch, safe='')}",
+                headers=headers,
+                method="GET",
+            )
+        )
+        head_commit_sha = _require_nested_string(
+            ref_payload,
+            container_name="object",
+            field_name="sha",
+        )
+        commit_payload = self._request_json(
+            Request(
+                f"{repository_url}/git/commits/{quote(head_commit_sha, safe='')}",
+                headers=headers,
+                method="GET",
+            )
+        )
+        repository_tree_sha = _require_nested_string(
+            commit_payload,
+            container_name="tree",
+            field_name="sha",
+        )
+        tree_sha = self._resolve_vault_tree_sha(
+            repository_url=repository_url,
+            token=token.value,
+            tree_sha=repository_tree_sha,
+            root_path=vault.root_path,
+        )
+        repository_path = _vault_repository_path(vault, target_path)
+        contents = self._request_json_value(
+            Request(
+                f"{repository_url}/contents/{quote(repository_path, safe='/')}?"
+                f"{urlencode({'ref': vault.branch})}",
+                headers=headers,
+                method="GET",
+            ),
+            allow_not_found=True,
+        )
+        if contents is None:
+            target_blob_sha = None
+            target_markdown = None
+        elif not isinstance(contents, dict) or contents.get("type") != "file":
+            raise GitHubGatewayError("GitHub target path is not a regular file")
+        else:
+            target_blob_sha = _require_string(contents, "sha")
+            target_markdown = self._download_text_blob(
+                repository_url=repository_url,
+                token=token.value,
+                blob_sha=target_blob_sha,
+                max_bytes=MAX_MARKDOWN_BYTES,
+            )
+        return GitHubVaultTargetState(
+            head_commit_sha=head_commit_sha,
+            tree_sha=tree_sha,
+            target_blob_sha=target_blob_sha,
+            target_markdown=target_markdown,
+        )
+
+    def commit_vault_markdown(
+        self,
+        vault: ObsidianVault,
+        *,
+        target_path: str,
+        markdown: str,
+        expected_blob_sha: str | None,
+    ) -> GitHubVaultCommitResult:
+        """Создаёт один прямой commit в default branch через Contents API.
+
+        Запрос записи намеренно не повторяется автоматически: после потерянного
+        ответа повтор может создать второй commit. Pending proposal сохраняется,
+        а следующий явный ответ снова начинает с проверки удалённых SHA.
+        """
+        if not markdown.strip():
+            raise ValueError("markdown must not be empty")
+        if expected_blob_sha is not None and not expected_blob_sha.strip():
+            raise ValueError("expected_blob_sha must not be empty")
+        token = self.create_installation_token(
+            installation_id=vault.installation_id,
+            repository_id=vault.repository_id,
+        )
+        repository_path = _vault_repository_path(vault, target_path)
+        body: dict[str, Any] = {
+            "message": (
+                f"Knowledge Catcher: {'update' if expected_blob_sha else 'add'} "
+                f"{target_path}"
+            ),
+            "content": base64.b64encode(markdown.encode("utf-8")).decode("ascii"),
+            "branch": vault.branch,
+        }
+        if expected_blob_sha is not None:
+            body["sha"] = expected_blob_sha
+        payload = self._request_json(
+            Request(
+                f"{_repository_api_url(vault)}/contents/"
+                f"{quote(repository_path, safe='/')}",
+                data=json.dumps(body).encode("utf-8"),
+                headers={
+                    **self._api_headers(token.value),
+                    "Content-Type": "application/json",
+                },
+                method="PUT",
+            )
+        )
+        content = payload.get("content")
+        commit = payload.get("commit")
+        if not isinstance(content, dict) or not isinstance(commit, dict):
+            raise GitHubGatewayError("GitHub commit response has unexpected format")
+        tree = commit.get("tree")
+        if not isinstance(tree, dict):
+            raise GitHubGatewayError("GitHub commit tree has unexpected format")
+        repository_tree_sha = _require_string(tree, "sha")
+        vault_tree_sha = self._resolve_vault_tree_sha(
+            repository_url=_repository_api_url(vault),
+            token=token.value,
+            tree_sha=repository_tree_sha,
+            root_path=vault.root_path,
+        )
+        result = GitHubVaultCommitResult(
+            commit_sha=_require_string(commit, "sha"),
+            tree_sha=vault_tree_sha,
+            blob_sha=_require_string(content, "sha"),
+        )
+        LOGGER.info(
+            "GitHub vault Markdown committed: app_user_id=%s vault_id=%s "
+            "action=%s target_path=%s commit_sha=%s",
+            vault.app_user_id,
+            vault.id,
+            "update" if expected_blob_sha is not None else "add",
+            target_path,
+            result.commit_sha,
+        )
+        return result
 
     def _resolve_vault_tree_sha(
         self,
@@ -1216,6 +1368,27 @@ def _describe_exception_chain(error: BaseException) -> str:
             nested = reason if isinstance(reason, BaseException) else None
         current = nested
     return " <- ".join(parts)
+
+
+def _repository_api_url(vault: ObsidianVault) -> str:
+    """Возвращает REST URL repository без пользовательского содержимого."""
+    return (
+        f"{GITHUB_API_BASE_URL}/repos/{quote(vault.owner, safe='')}/"
+        f"{quote(vault.repository, safe='')}"
+    )
+
+
+def _vault_repository_path(vault: ObsidianVault, target_path: str) -> str:
+    """Безопасно объединяет root vault и относительный Markdown target."""
+    if (
+        not target_path
+        or target_path.startswith("/")
+        or "\\" in target_path
+        or not target_path.lower().endswith(".md")
+        or any(part in {"", ".", ".."} for part in target_path.split("/"))
+    ):
+        raise ValueError("target_path must be a safe relative Markdown path")
+    return f"{vault.root_path}/{target_path}" if vault.root_path else target_path
 
 
 def _require_string(payload: dict[str, Any], name: str) -> str:

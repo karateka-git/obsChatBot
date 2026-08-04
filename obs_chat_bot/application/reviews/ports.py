@@ -8,7 +8,7 @@ from typing import Protocol
 from obs_chat_bot.application.search.models import VaultSearchResult
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
-from obs_chat_bot.domain.reviews.entities import ObsidianReviewPlan
+from obs_chat_bot.domain.reviews.entities import ObsidianProposal, ObsidianReviewPlan
 from obs_chat_bot.domain.search.entities import ArticleSearchQuery
 from obs_chat_bot.domain.vaults.entities import VaultInstruction, VaultNote
 
@@ -59,3 +59,49 @@ class ObsidianProposalGenerator(Protocol):
 
     def write_markdown(self, context: ObsidianWritingContext) -> str:
         """Генерирует полный Markdown после загрузки соседних заметок."""
+
+
+class ObsidianProposalRepository(Protocol):
+    """Хранит pending-предложения и атомарно завершает review workflow."""
+
+    def save_pending(self, proposal: ObsidianProposal) -> ObsidianProposal:
+        """Сохраняет предложение, если у пользователя нет другого pending."""
+
+    def get_pending(self, app_user_id: int) -> ObsidianProposal | None:
+        """Возвращает текущее ожидающее предложение пользователя."""
+
+    def get_latest_applied_for_article(
+        self,
+        *,
+        app_user_id: int,
+        article_id: int,
+    ) -> ObsidianProposal | None:
+        """Возвращает последний применённый результат review статьи."""
+
+    def mark_cancelled(
+        self,
+        *,
+        proposal_id: int,
+        app_user_id: int,
+    ) -> ObsidianProposal | None:
+        """Отменяет только текущее pending-предложение пользователя."""
+
+    def mark_conflict(
+        self,
+        *,
+        proposal_id: int,
+        app_user_id: int,
+    ) -> ObsidianProposal | None:
+        """Помечает предложение устаревшим после расхождения GitHub SHA."""
+
+    def complete_applied(
+        self,
+        *,
+        proposal_id: int,
+        app_user_id: int,
+        applied_commit_sha: str | None,
+        head_commit_sha: str | None,
+        tree_sha: str | None,
+        note: VaultNote | None,
+    ) -> ObsidianProposal | None:
+        """Атомарно фиксирует GitHub/local result, статью и proposal."""

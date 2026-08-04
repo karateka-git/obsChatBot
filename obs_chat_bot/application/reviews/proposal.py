@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from difflib import unified_diff
 from pathlib import PurePosixPath
 
 from obs_chat_bot.application.articles.ports import (
@@ -13,6 +14,7 @@ from obs_chat_bot.application.articles.ports import (
 from obs_chat_bot.application.articles.stages import ProcessingStage
 from obs_chat_bot.application.reviews.ports import (
     ObsidianPlanningContext,
+    ObsidianProposalRepository,
     ObsidianProposalGenerator,
     ObsidianWritingContext,
     VaultArticleSearch,
@@ -25,7 +27,6 @@ from obs_chat_bot.application.vaults.ports import (
     VaultNoteRepository,
 )
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
-from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.domain.reviews.entities import (
     ObsidianProposal,
     ObsidianProposalAction,
@@ -50,10 +51,11 @@ class PrepareObsidianReviewCommand:
 
 @dataclass(frozen=True, slots=True)
 class PrepareObsidianReviewResult:
-    """Результат 10.9 до сохранения proposal на следующем подэтапе."""
+    """Возвращает сохранённый proposal, retrieval и понятный Markdown diff."""
 
     proposal: ObsidianProposal
     search_result: VaultSearchResult
+    markdown_diff: str | None = None
 
 
 class PrepareObsidianReviewError(RuntimeError):
@@ -78,6 +80,7 @@ class PrepareObsidianReviewUseCase:
         note_repository: VaultNoteRepository,
         search: VaultArticleSearch,
         generator: ObsidianProposalGenerator,
+        proposal_repository: ObsidianProposalRepository,
         query_builder: ArticleSearchQueryBuilder | None = None,
         error_recorder: ProcessingErrorRecorder | None = None,
     ) -> None:
@@ -87,6 +90,7 @@ class PrepareObsidianReviewUseCase:
         self._note_repository = note_repository
         self._search = search
         self._generator = generator
+        self._proposal_repository = proposal_repository
         self._query_builder = query_builder or ArticleSearchQueryBuilder()
         self._error_recorder = error_recorder
 
@@ -221,15 +225,11 @@ class PrepareObsidianReviewUseCase:
             base_tree_sha=vault.tree_sha,
             target_blob_sha=target_note.blob_sha if target_note is not None else None,
         )
-        updated = self._article_repository.update_status(
-            article.id,
-            ArticleStatus.NEEDS_OBSIDIAN_REVIEW,
-        )
-        if updated is None:
-            raise PrepareObsidianReviewError("Article disappeared before status update")
+        proposal = self._proposal_repository.save_pending(proposal)
         LOGGER.info(
-            "Obsidian proposal prepared: app_user_id=%s article_id=%s vault_id=%s "
-            "action=%s search_mode=%s hits=%s",
+            "Obsidian proposal prepared: proposal_id=%s app_user_id=%s "
+            "article_id=%s vault_id=%s action=%s search_mode=%s hits=%s",
+            proposal.id,
             article.app_user_id,
             article.id,
             vault.id,
@@ -240,6 +240,16 @@ class PrepareObsidianReviewUseCase:
         return PrepareObsidianReviewResult(
             proposal=proposal,
             search_result=search_result,
+            markdown_diff=(
+                _markdown_diff(
+                    target_path=proposal.target_path or "",
+                    current_markdown=target_note.markdown,
+                    proposed_markdown=proposed_markdown or "",
+                )
+                if proposal.action is ObsidianProposalAction.UPDATE
+                and target_note is not None
+                else None
+            ),
         )
 
     def _record_error(
@@ -309,3 +319,20 @@ def _neighboring_notes(
     start = max(0, insertion - NEIGHBORS_ON_EACH_SIDE)
     end = min(len(same_folder), insertion + NEIGHBORS_ON_EACH_SIDE)
     return tuple(same_folder[start:end])
+
+
+def _markdown_diff(
+    *,
+    target_path: str,
+    current_markdown: str,
+    proposed_markdown: str,
+) -> str:
+    """Строит стабильный unified diff текущей и предлагаемой заметки."""
+    return "".join(
+        unified_diff(
+            current_markdown.splitlines(keepends=True),
+            proposed_markdown.splitlines(keepends=True),
+            fromfile=f"a/{target_path}",
+            tofile=f"b/{target_path}",
+        )
+    ).rstrip()

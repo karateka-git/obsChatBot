@@ -16,6 +16,7 @@ from zipfile import ZipFile
 from obs_chat_bot.application.vaults.github_models import (
     GitHubDevicePollStatus,
     GitHubGatewayError,
+    GitHubInstallationAccessToken,
     GitHubUserAccessToken,
     GitHubVaultSnapshotStatus,
 )
@@ -66,6 +67,78 @@ class FakeBinaryResponse:
 
 
 class GitHubAppClientTest(unittest.TestCase):
+    def test_inspect_target_reads_head_vault_tree_blob_and_markdown(self) -> None:
+        """Pre-commit проверка возвращает snapshot vault и фактический target."""
+        encoded = base64.b64encode("# Current".encode()).decode()
+        responses = [
+            FakeResponse({"object": {"sha": "commit-2"}}),
+            FakeResponse({"tree": {"sha": "tree-2"}}),
+            FakeResponse({"type": "file", "sha": "blob-2"}),
+            FakeResponse({"encoding": "base64", "content": encoded}),
+        ]
+        client = _client()
+        with (
+            patch.object(
+                client,
+                "create_installation_token",
+                return_value=_installation_token(),
+            ) as token_factory,
+            patch(
+                "obs_chat_bot.data.github.github_app_client.urlopen",
+                side_effect=responses,
+            ),
+        ):
+            state = client.inspect_vault_target(
+                _vault(),
+                target_path="Tech/Current.md",
+            )
+
+        self.assertEqual(state.head_commit_sha, "commit-2")
+        self.assertEqual(state.tree_sha, "tree-2")
+        self.assertEqual(state.target_blob_sha, "blob-2")
+        self.assertEqual(state.target_markdown, "# Current")
+        token_factory.assert_called_once_with(
+            installation_id=101,
+            repository_id=501,
+        )
+
+    def test_commit_target_uses_contents_api_and_expected_blob_sha(self) -> None:
+        """Write отправляет один scoped PUT в default branch без скрытого retry."""
+        response = FakeResponse(
+            {
+                "content": {"sha": "blob-new"},
+                "commit": {"sha": "commit-new", "tree": {"sha": "tree-new"}},
+            }
+        )
+        client = _client()
+        with (
+            patch.object(
+                client,
+                "create_installation_token",
+                return_value=_installation_token(),
+            ),
+            patch(
+                "obs_chat_bot.data.github.github_app_client.urlopen",
+                return_value=response,
+            ) as opener,
+        ):
+            result = client.commit_vault_markdown(
+                _vault(),
+                target_path="Tech/Current.md",
+                markdown="# Updated",
+                expected_blob_sha="blob-old",
+            )
+
+        request = opener.call_args.args[0]
+        body = json.loads(request.data)
+        self.assertEqual(request.method, "PUT")
+        self.assertTrue(request.full_url.endswith("/contents/Tech/Current.md"))
+        self.assertEqual(body["branch"], "main")
+        self.assertEqual(body["sha"], "blob-old")
+        self.assertEqual(result.commit_sha, "commit-new")
+        self.assertEqual(result.tree_sha, "tree-new")
+        self.assertEqual(result.blob_sha, "blob-new")
+
     """Проверяет Device Flow и installation token HTTP-контракты."""
 
     def test_request_device_authorization_uses_client_id_without_secret(self) -> None:
@@ -765,6 +838,14 @@ def _client() -> HttpxGitHubAppClient:
         client_id="Iv1.client",
         app_jwt_factory=lambda: "app-jwt",
         request_opener=_test_request_opener,
+    )
+
+
+def _installation_token() -> GitHubInstallationAccessToken:
+    """Создаёт короткоживущий repository-scoped token для HTTP-тестов."""
+    return GitHubInstallationAccessToken(
+        value="installation-token",
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
     )
 
 

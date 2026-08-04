@@ -12,6 +12,8 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubInstallationAccessToken,
     GitHubRepositoryInspection,
     GitHubVaultSnapshot,
+    GitHubVaultCommitResult,
+    GitHubVaultTargetState,
     GitHubUserAccessToken,
 )
 
@@ -245,6 +247,28 @@ class GitHubVaultGateway(Protocol):
         known_instruction_blobs: Mapping[str, str],
     ) -> GitHubVaultSnapshot:
         """Возвращает manifest заметок, правил и содержимое только новых blobs."""
+
+
+class GitHubVaultWriteGateway(Protocol):
+    """Проверяет optimistic SHA и создаёт прямой Markdown commit."""
+
+    def inspect_vault_target(
+        self,
+        vault: ObsidianVault,
+        *,
+        target_path: str,
+    ) -> GitHubVaultTargetState:
+        """Возвращает HEAD/tree и текущий blob целевого пути."""
+
+    def commit_vault_markdown(
+        self,
+        vault: ObsidianVault,
+        *,
+        target_path: str,
+        markdown: str,
+        expected_blob_sha: str | None,
+    ) -> GitHubVaultCommitResult:
+        """Создаёт или обновляет `.md` repository-scoped token'ом."""
 
 
 class GitHubAccountAccessWriter(Protocol):

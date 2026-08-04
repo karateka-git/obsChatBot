@@ -16,6 +16,9 @@ from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
 from obs_chat_bot.application.reviews.proposal import PrepareObsidianReviewUseCase
+from obs_chat_bot.application.reviews.confirmation import (
+    ObsidianProposalConfirmationService,
+)
 from obs_chat_bot.application.search.full_text import VaultFullTextSearchService
 from obs_chat_bot.application.search.hybrid import (
     VaultFtsFallbackSearchService,
@@ -31,6 +34,7 @@ from obs_chat_bot.application.vaults.ports import (
     GitHubConnectionStarter,
     GitHubRepositoryGateway,
     GitHubVaultGateway,
+    GitHubVaultWriteGateway,
 )
 from obs_chat_bot.application.vaults.vault_selection import VaultSelectionManager
 from obs_chat_bot.application.vaults.vault_sync import VaultSyncManager
@@ -73,6 +77,12 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
 )
 from obs_chat_bot.data.sqlite.obsidian_vault_repository import (
     SQLiteObsidianVaultRepository,
+)
+from obs_chat_bot.data.sqlite.obsidian_proposal_repository import (
+    SQLiteObsidianProposalRepository,
+)
+from obs_chat_bot.data.sqlite.vault_sync_lease_repository import (
+    SQLiteVaultSyncLeaseRepository,
 )
 from obs_chat_bot.data.sqlite.vault_full_text_search_repository import (
     SQLiteVaultFullTextSearchRepository,
@@ -294,6 +304,22 @@ def create_prepare_obsidian_review_use_case(
             api_key=openai_api_key,
             model=openai_model,
         ),
+        proposal_repository=SQLiteObsidianProposalRepository(connection),
+        error_recorder=SQLiteProcessingErrorRecorder(connection),
+    )
+
+
+def create_obsidian_proposal_confirmation_service(
+    connection: sqlite3.Connection,
+    *,
+    github_gateway: GitHubVaultWriteGateway,
+) -> ObsidianProposalConfirmationService:
+    """Собирает подтверждение proposal, SHA preflight и GitHub write-back."""
+    return ObsidianProposalConfirmationService(
+        proposal_repository=SQLiteObsidianProposalRepository(connection),
+        vault_repository=SQLiteObsidianVaultRepository(connection),
+        lease_repository=SQLiteVaultSyncLeaseRepository(connection),
+        github_gateway=github_gateway,
         error_recorder=SQLiteProcessingErrorRecorder(connection),
     )
 
@@ -327,6 +353,7 @@ def create_process_incoming_message_use_case(
     vault_selection_manager: VaultSelectionManager | None = None,
     vault_sync_manager: VaultSyncManager | None = None,
     obsidian_review_use_case: PrepareObsidianReviewUseCase | None = None,
+    obsidian_confirmation_service: ObsidianProposalConfirmationService | None = None,
 ) -> ProcessIncomingMessageUseCase:
     """Собирает общий сценарий обработки входящего сообщения из любого канала.
 
@@ -339,6 +366,7 @@ def create_process_incoming_message_use_case(
         vault_selection_manager: Сценарий выбора GitHub vault или `None`.
         vault_sync_manager: Сценарий синхронизации GitHub vault или `None`.
         obsidian_review_use_case: Сценарий предложения 10.9 или `None`.
+        obsidian_confirmation_service: Хранилище и применение pending proposal.
 
     Returns:
         Настроенный channel-agnostic incoming use case.
@@ -352,6 +380,7 @@ def create_process_incoming_message_use_case(
         vault_selection_manager=vault_selection_manager,
         vault_sync_manager=vault_sync_manager,
         obsidian_review_use_case=obsidian_review_use_case,
+        obsidian_confirmation_service=obsidian_confirmation_service,
     )
 
 

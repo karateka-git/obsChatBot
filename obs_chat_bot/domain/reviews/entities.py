@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -12,6 +13,15 @@ class ObsidianProposalAction(StrEnum):
     ADD = "add"  # Создать новую Markdown-заметку.
     UPDATE = "update"  # Заменить содержимое существующей Markdown-заметки.
     SKIP = "skip"  # Не переносить материал статьи в vault.
+
+
+class ObsidianProposalStatus(StrEnum):
+    """Описывает жизненный цикл сохранённого предложения."""
+
+    PENDING = "pending"  # Ожидает явного ответа пользователя.
+    CANCELLED = "cancelled"  # Пользователь ответил `нет`.
+    CONFLICT = "conflict"  # Исходный GitHub snapshot изменился.
+    APPLIED = "applied"  # Изменение или подтверждённый skip завершены.
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +59,12 @@ class ObsidianProposal:
     target_path: str | None = None
     proposed_markdown: str | None = None
     target_blob_sha: str | None = None
+    id: int | None = None
+    status: ObsidianProposalStatus = ObsidianProposalStatus.PENDING
+    applied_commit_sha: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if min(
@@ -60,6 +76,10 @@ class ObsidianProposal:
             raise ValueError("proposal IDs must be positive")
         if not isinstance(self.action, ObsidianProposalAction):
             raise TypeError("action must be an ObsidianProposalAction")
+        if not isinstance(self.status, ObsidianProposalStatus):
+            raise TypeError("status must be an ObsidianProposalStatus")
+        if self.id is not None and self.id <= 0:
+            raise ValueError("id must be positive")
         if not self.reasoning.strip():
             raise ValueError("reasoning must not be empty")
         if not self.base_commit_sha.strip() or not self.base_tree_sha.strip():
@@ -74,15 +94,30 @@ class ObsidianProposal:
                 )
             ):
                 raise ValueError("skip proposal must not contain a vault change")
-            return
-        _validate_markdown_path(self.target_path)
-        if self.proposed_markdown is None or not self.proposed_markdown.strip():
-            raise ValueError("add/update proposal must contain proposed_markdown")
-        if self.action is ObsidianProposalAction.ADD:
-            if self.target_blob_sha is not None:
-                raise ValueError("add proposal must not have target_blob_sha")
-        elif self.target_blob_sha is None or not self.target_blob_sha.strip():
-            raise ValueError("update proposal must contain target_blob_sha")
+            if self.applied_commit_sha is not None:
+                raise ValueError("skip proposal must not have applied_commit_sha")
+        else:
+            _validate_markdown_path(self.target_path)
+            if self.proposed_markdown is None or not self.proposed_markdown.strip():
+                raise ValueError("add/update proposal must contain proposed_markdown")
+            if self.action is ObsidianProposalAction.ADD:
+                if self.target_blob_sha is not None:
+                    raise ValueError("add proposal must not have target_blob_sha")
+            elif self.target_blob_sha is None or not self.target_blob_sha.strip():
+                raise ValueError("update proposal must contain target_blob_sha")
+        if self.status is ObsidianProposalStatus.APPLIED:
+            if self.completed_at is None:
+                raise ValueError("applied proposal must contain completed_at")
+            if (
+                self.action is not ObsidianProposalAction.SKIP
+                and (
+                    self.applied_commit_sha is None
+                    or not self.applied_commit_sha.strip()
+                )
+            ):
+                raise ValueError("applied add/update must contain commit SHA")
+        elif self.applied_commit_sha is not None:
+            raise ValueError("only applied proposal may contain commit SHA")
 
 
 def _validate_markdown_path(path: str | None) -> None:

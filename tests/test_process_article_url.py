@@ -229,6 +229,55 @@ class ProcessArticleUrlUseCaseTest(unittest.TestCase):
         self.assertEqual(fetcher.calls, [])
         self.assertEqual(extractor.calls, [])
 
+    def test_execute_returns_reviewed_article_without_reloading_source(self) -> None:
+        """Повторная reviewed-ссылка не загружает страницу после очистки source text."""
+        existing = Article(
+            id=7,
+            app_user_id=1,
+            source_url="https://example.com/post",
+            normalized_url="https://example.com/post",
+            cleaned_text=None,
+            status=ArticleStatus.REVIEWED,
+        )
+        repository = FakeArticleRepository([existing])
+        fetcher = FakeHtmlFetcher()
+        use_case = ProcessArticleUrlUseCase(
+            article_repository=repository,
+            html_fetcher=fetcher,
+            text_extractor=FakeTextExtractor(),
+        )
+
+        result = use_case.execute(ProcessArticleUrlCommand(existing.source_url))
+
+        self.assertFalse(result.created)
+        self.assertFalse(result.extracted)
+        self.assertEqual(result.article.status, ArticleStatus.REVIEWED)
+        self.assertEqual(fetcher.calls, [])
+
+    def test_failed_reprocess_preserves_reviewed_result(self) -> None:
+        """Неудачный `/reanalyze` не уничтожает прежний reviewed-результат."""
+        existing = Article(
+            id=7,
+            app_user_id=1,
+            source_url="https://example.com/post",
+            normalized_url="https://example.com/post",
+            cleaned_text=None,
+            status=ArticleStatus.REVIEWED,
+        )
+        repository = FakeArticleRepository([existing])
+        use_case = ProcessArticleUrlUseCase(
+            article_repository=repository,
+            html_fetcher=FakeHtmlFetcher(ArticleFetchError("offline")),
+            text_extractor=FakeTextExtractor(),
+        )
+
+        with self.assertRaises(ProcessArticleUrlError):
+            use_case.reprocess_existing(article_id=7, app_user_id=1)
+
+        preserved = repository.get_by_id(7)
+        self.assertEqual(preserved.status, ArticleStatus.REVIEWED)
+        self.assertIsNone(preserved.cleaned_text)
+
     def test_execute_marks_failed_when_fetch_fails(self) -> None:
         """Ошибка загрузки переводит статью в failed и записывает диагностику."""
         repository = FakeArticleRepository()

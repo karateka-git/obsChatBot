@@ -30,6 +30,11 @@ from obs_chat_bot.application.reviews.proposal import (
     PrepareObsidianReviewResult,
     PrepareObsidianReviewUseCase,
 )
+from obs_chat_bot.application.reviews.confirmation import (
+    ObsidianConfirmationResult,
+    ObsidianConfirmationStatus,
+    ObsidianProposalConfirmationService,
+)
 from obs_chat_bot.application.users.identity import (
     CreatedLinkCode,
     IdentityAlreadyBoundError,
@@ -67,6 +72,7 @@ from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncWarningReason,
 )
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
+from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
 
 
@@ -108,6 +114,13 @@ class IncomingMessageResultType(StrEnum):
     ARTICLE_ANALYSIS_FAILED = "article_analysis_failed"
     ARTICLE_REVIEW_PREPARED = "article_review_prepared"
     ARTICLE_REVIEW_FAILED = "article_review_failed"
+    ARTICLE_REVIEW_CONFIRMATION_PENDING = "article_review_confirmation_pending"
+    ARTICLE_REVIEW_CANCELLED = "article_review_cancelled"
+    ARTICLE_REVIEW_APPLIED = "article_review_applied"
+    ARTICLE_REVIEW_CONFLICT = "article_review_conflict"
+    ARTICLE_REVIEW_IN_PROGRESS = "article_review_in_progress"
+    ARTICLE_REVIEW_APPLY_FAILED = "article_review_apply_failed"
+    ARTICLE_REVIEWED_RESULT = "article_reviewed_result"
     GITHUB_CONNECT_STARTED = "github_connect_started"
     GITHUB_CONNECT_ALREADY_PENDING = "github_connect_already_pending"
     GITHUB_CONNECT_PREPARING = "github_connect_preparing"
@@ -156,6 +169,7 @@ class ProcessIncomingMessageResult:
     article_result: ProcessArticleUrlResult | None = None
     analysis_result: AnalyzeArticleResult | None = None
     review_result: PrepareObsidianReviewResult | None = None
+    obsidian_confirmation: ObsidianConfirmationResult | None = None
     github_connection: GitHubConnectionStartResult | None = None
     github_completion: GitHubConnectionCompletion | None = None
     vault_selection: VaultSelectionResult | None = None
@@ -185,6 +199,9 @@ class ProcessIncomingMessageUseCase:
         vault_selection_manager: VaultSelectionManager | None = None,
         vault_sync_manager: VaultSyncManager | None = None,
         obsidian_review_use_case: PrepareObsidianReviewUseCase | None = None,
+        obsidian_confirmation_service: (
+            ObsidianProposalConfirmationService | None
+        ) = None,
     ) -> None:
         self._article_url_use_case = article_url_use_case
         self._article_analysis_use_case = article_analysis_use_case
@@ -194,6 +211,7 @@ class ProcessIncomingMessageUseCase:
         self._vault_selection_manager = vault_selection_manager
         self._vault_sync_manager = vault_sync_manager
         self._obsidian_review_use_case = obsidian_review_use_case
+        self._obsidian_confirmation_service = obsidian_confirmation_service
 
     def execute(
         self,
@@ -301,6 +319,43 @@ class ProcessIncomingMessageUseCase:
             article_result.extracted,
             article_result.article.status.value,
         )
+
+        if (
+            article_result.article.status is ArticleStatus.REVIEWED
+            and self._obsidian_confirmation_service is not None
+            and article_result.article.id is not None
+        ):
+            applied = self._obsidian_confirmation_service.get_latest_applied(
+                app_user_id=app_user_result.id,
+                article_id=article_result.article.id,
+            )
+            if applied is not None:
+                saved_analysis = (
+                    self._article_analysis_use_case.execute(
+                        AnalyzeArticleCommand(
+                            article_id=article_result.article.id,
+                            app_user_id=app_user_result.id,
+                            incoming_message_id=incoming_message_id,
+                        )
+                    )
+                    if self._article_analysis_use_case is not None
+                    else None
+                )
+                result = ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.ARTICLE_REVIEWED_RESULT,
+                    app_user=app_user_result,
+                    saved_message=saved_message,
+                    article_result=article_result,
+                    analysis_result=saved_analysis,
+                    obsidian_confirmation=ObsidianConfirmationResult(
+                        status=ObsidianConfirmationStatus.APPLIED,
+                        proposal=applied,
+                    ),
+                    vault_sync_result=vault_sync_result,
+                    vault_sync_warning=vault_sync_warning,
+                )
+                _log_result(result)
+                return result
 
         if self._article_analysis_use_case is None or article_result.article.id is None:
             result = ProcessIncomingMessageResult(
@@ -510,6 +565,10 @@ class ProcessIncomingMessageUseCase:
                 )
             ):
                 return self._confirm_vault_disconnect(app_user)
+            if app_user is not None and self._obsidian_confirmation_service is not None:
+                confirmation = self._obsidian_confirmation_service.confirm(app_user.id)
+                if confirmation.status is not ObsidianConfirmationStatus.NO_PENDING:
+                    return self._review_confirmation_result(app_user, confirmation)
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.CONFIRMATION_MISSING
             )
@@ -543,6 +602,10 @@ class ProcessIncomingMessageUseCase:
                         app_user=app_user,
                         vault_disconnect=disconnect_cancelled,
                     )
+            if app_user is not None and self._obsidian_confirmation_service is not None:
+                confirmation = self._obsidian_confirmation_service.cancel(app_user.id)
+                if confirmation.status is not ObsidianConfirmationStatus.NO_PENDING:
+                    return self._review_confirmation_result(app_user, confirmation)
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.CONFIRMATION_MISSING
             )
@@ -723,6 +786,23 @@ class ProcessIncomingMessageUseCase:
                     app_user=app_user,
                 )
             return self._save_registration_name(text, app_user)
+        pending_proposal = (
+            self._obsidian_confirmation_service.get_pending(app_user.id)
+            if self._obsidian_confirmation_service is not None
+            else None
+        )
+        if pending_proposal is not None and command not in {
+            ChatCommand.STATUS,
+            ChatCommand.GITHUB_STATUS,
+        }:
+            return ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_REVIEW_CONFIRMATION_PENDING,
+                app_user=app_user,
+                obsidian_confirmation=ObsidianConfirmationResult(
+                    status=ObsidianConfirmationStatus.PENDING,
+                    proposal=pending_proposal,
+                ),
+            )
         if command is ChatCommand.STATUS:
             selected_vault = (
                 self._vault_selection_manager.get_selected(app_user.id)
@@ -771,6 +851,42 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
         return app_user
+
+    def _review_confirmation_result(
+        self,
+        app_user: AppUser,
+        confirmation: ObsidianConfirmationResult,
+    ) -> ProcessIncomingMessageResult:
+        """Преобразует итог review-сервиса в channel-agnostic result type."""
+        result_types = {
+            ObsidianConfirmationStatus.PENDING: (
+                IncomingMessageResultType.ARTICLE_REVIEW_CONFIRMATION_PENDING
+            ),
+            ObsidianConfirmationStatus.CANCELLED: (
+                IncomingMessageResultType.ARTICLE_REVIEW_CANCELLED
+            ),
+            ObsidianConfirmationStatus.APPLIED: (
+                IncomingMessageResultType.ARTICLE_REVIEW_APPLIED
+            ),
+            ObsidianConfirmationStatus.CONFLICT: (
+                IncomingMessageResultType.ARTICLE_REVIEW_CONFLICT
+            ),
+            ObsidianConfirmationStatus.IN_PROGRESS: (
+                IncomingMessageResultType.ARTICLE_REVIEW_IN_PROGRESS
+            ),
+            ObsidianConfirmationStatus.FAILED: (
+                IncomingMessageResultType.ARTICLE_REVIEW_APPLY_FAILED
+            ),
+            ObsidianConfirmationStatus.NO_PENDING: (
+                IncomingMessageResultType.CONFIRMATION_MISSING
+            ),
+        }
+        return ProcessIncomingMessageResult(
+            type=result_types[confirmation.status],
+            app_user=app_user,
+            obsidian_confirmation=confirmation,
+            error=confirmation.error,
+        )
 
     def _save_registration_name(
         self,
@@ -1172,6 +1288,11 @@ class ProcessIncomingMessageUseCase:
             )
 
         try:
+            article_result = self._article_url_use_case.reprocess_existing(
+                article_id=int(arguments),
+                app_user_id=app_user.id,
+                incoming_message_id=None,
+            )
             analysis_result = self._article_analysis_use_case.execute(
                 AnalyzeArticleCommand(
                     article_id=int(arguments),
@@ -1180,7 +1301,21 @@ class ProcessIncomingMessageUseCase:
                     force=True,
                 )
             )
-        except AnalyzeArticleError as error:
+            review_result = None
+            if self._obsidian_review_use_case is not None:
+                review_result = self._obsidian_review_use_case.execute(
+                    PrepareObsidianReviewCommand(
+                        article_id=int(arguments),
+                        analysis=analysis_result.analysis,
+                        app_user_id=app_user.id,
+                        incoming_message_id=None,
+                    )
+                )
+        except (
+            ProcessArticleUrlError,
+            AnalyzeArticleError,
+            PrepareObsidianReviewError,
+        ) as error:
             return ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.ARTICLE_REANALYSIS_FAILED,
                 app_user=app_user,
@@ -1190,7 +1325,9 @@ class ProcessIncomingMessageUseCase:
         return ProcessIncomingMessageResult(
             type=IncomingMessageResultType.ARTICLE_REANALYZED,
             app_user=app_user,
+            article_result=article_result,
             analysis_result=analysis_result,
+            review_result=review_result,
         )
 
     def _save_incoming_message(

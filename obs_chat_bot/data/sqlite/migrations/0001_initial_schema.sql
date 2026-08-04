@@ -528,3 +528,53 @@ CREATE TABLE obsidian_vault_sync_leases (
 
 CREATE INDEX idx_obsidian_vault_sync_leases_expires_at
     ON obsidian_vault_sync_leases (expires_at);
+
+CREATE TABLE obsidian_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_user_id INTEGER NOT NULL,
+    article_id INTEGER NOT NULL,
+    analysis_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    reasoning TEXT NOT NULL,
+    target_path TEXT,
+    proposed_markdown TEXT,
+    base_commit_sha TEXT NOT NULL,
+    base_tree_sha TEXT NOT NULL,
+    target_blob_sha TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    applied_commit_sha TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT,
+    FOREIGN KEY (app_user_id) REFERENCES app_users (id) ON DELETE CASCADE,
+    FOREIGN KEY (article_id) REFERENCES articles (id) ON DELETE CASCADE,
+    FOREIGN KEY (analysis_id) REFERENCES analysis_results (id) ON DELETE CASCADE,
+    CHECK (action IN ('add', 'update', 'skip')),
+    CHECK (status IN ('pending', 'cancelled', 'conflict', 'applied')),
+    CHECK (length(trim(reasoning)) > 0),
+    CHECK (length(trim(base_commit_sha)) > 0),
+    CHECK (length(trim(base_tree_sha)) > 0),
+    CHECK (
+        (action = 'skip' AND target_path IS NULL AND proposed_markdown IS NULL
+            AND target_blob_sha IS NULL)
+        OR
+        (action = 'add' AND target_path IS NOT NULL
+            AND proposed_markdown IS NOT NULL AND target_blob_sha IS NULL)
+        OR
+        (action = 'update' AND target_path IS NOT NULL
+            AND proposed_markdown IS NOT NULL AND target_blob_sha IS NOT NULL)
+    ),
+    CHECK (
+        (status = 'applied' AND completed_at IS NOT NULL)
+        OR (status != 'applied' AND applied_commit_sha IS NULL)
+    )
+);
+
+CREATE UNIQUE INDEX idx_obsidian_proposals_one_pending_per_user
+    ON obsidian_proposals (app_user_id)
+    WHERE status = 'pending';
+CREATE INDEX idx_obsidian_proposals_app_user_article
+    ON obsidian_proposals (app_user_id, article_id, id DESC);
+CREATE INDEX idx_obsidian_proposals_status
+    ON obsidian_proposals (status, updated_at);

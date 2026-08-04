@@ -29,6 +29,7 @@ from obs_chat_bot.bootstrap import (
     create_github_app_client,
     create_github_connection_coordinator,
     create_incoming_message_repository,
+    create_obsidian_proposal_confirmation_service,
     create_process_incoming_message_use_case,
     create_process_article_url_use_case,
     create_prepare_obsidian_review_use_case,
@@ -740,6 +741,18 @@ def process_channel_incoming_message(
                 openai_model=openai_model,
                 embedding_config=embedding_config,
                 chunking_config=chunking_config,
+            ),
+            obsidian_confirmation_service=(
+                create_obsidian_proposal_confirmation_service(
+                    connection,
+                    github_gateway=github_repository_gateway,
+                )
+                if (
+                    github_repository_gateway is not None
+                    and hasattr(github_repository_gateway, "inspect_vault_target")
+                    and hasattr(github_repository_gateway, "commit_vault_markdown")
+                )
+                else None
             ),
         )
         return incoming_message_use_case.execute(

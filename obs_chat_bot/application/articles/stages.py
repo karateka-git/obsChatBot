@@ -18,3 +18,5 @@ class ProcessingStage(StrEnum):
     ANALYSIS = "analysis"
     # Поиск по vault и подготовка предлагаемого Obsidian-изменения.
     OBSIDIAN_REVIEW = "obsidian_review"
+    # Проверка SHA и подтверждённая запись Markdown в GitHub vault.
+    OBSIDIAN_WRITE = "obsidian_write"

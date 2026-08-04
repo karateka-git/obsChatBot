@@ -155,6 +155,42 @@ class GitHubGatewayError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubVaultTargetState:
+    """Фиксирует актуальные SHA ветки и целевого Markdown перед commit."""
+
+    head_commit_sha: str
+    tree_sha: str
+    target_blob_sha: str | None
+    target_markdown: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.head_commit_sha.strip() or not self.tree_sha.strip():
+            raise ValueError("GitHub target state requires commit and tree SHA")
+        if self.target_blob_sha is not None and not self.target_blob_sha.strip():
+            raise ValueError("target_blob_sha must not be empty")
+        if self.target_blob_sha is None and self.target_markdown is not None:
+            raise ValueError("target_markdown requires target_blob_sha")
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubVaultCommitResult:
+    """Содержит новые SHA после прямого Contents API commit."""
+
+    commit_sha: str
+    tree_sha: str
+    blob_sha: str
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.commit_sha, "commit_sha"),
+            (self.tree_sha, "tree_sha"),
+            (self.blob_sha, "blob_sha"),
+        ):
+            if not value.strip():
+                raise ValueError(f"{name} must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class GitHubRepositoryInspection:
     """Описывает доступный repository и результат проверки vault path."""
 

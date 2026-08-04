@@ -388,6 +388,8 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
         case IncomingMessageResultType.REANALYZE_COMMAND_INVALID:
             return "Пришли команду в формате `/reanalyze <ID статьи>`."
         case IncomingMessageResultType.ARTICLE_REANALYZED:
+            if result.review_result is not None:
+                return _format_obsidian_review(result)
             if result.analysis_result is None:
                 return "Анализ обновлен, но результат не удалось подготовить."
             return format_reanalysis_result(result.analysis_result)
@@ -418,6 +420,74 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
             return _with_vault_sync_warning(
                 _format_obsidian_review(result),
                 result,
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEW_CONFIRMATION_PENDING:
+            proposal = _confirmation_proposal(result)
+            target = (
+                f" для `{proposal.target_path}`"
+                if proposal is not None and proposal.target_path is not None
+                else ""
+            )
+            return (
+                f"Ожидаю подтверждения предложения{target}.\n"
+                "Ответь строго «да», чтобы применить, или «нет», чтобы отменить."
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEW_CANCELLED:
+            return (
+                "Предложение отменено. Vault не изменён, статья остаётся "
+                "доступной для нового review."
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEW_APPLIED:
+            proposal = _confirmation_proposal(result)
+            if proposal is None:
+                return "Предложение применено."
+            if proposal.action is ObsidianProposalAction.SKIP:
+                return "Review завершён без изменений Obsidian vault."
+            return (
+                f"Изменение применено к `{proposal.target_path}` прямым commit.\n"
+                f"Commit: `{proposal.applied_commit_sha}`"
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEW_CONFLICT:
+            return (
+                "Vault изменился после подготовки предложения. Ничего не "
+                "перезаписано. Отправь ссылку на статью ещё раз, чтобы "
+                "подготовить новое предложение по актуальной версии."
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEW_IN_PROGRESS:
+            return (
+                "Vault сейчас занят синхронизацией или записью из другого "
+                "связанного канала. Предложение сохранено; повтори «да» позже."
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEW_APPLY_FAILED:
+            return (
+                "Не удалось записать изменение в GitHub. Предложение и текст "
+                "статьи сохранены; можно безопасно повторить «да» позже."
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEWED_RESULT:
+            proposal = _confirmation_proposal(result)
+            if proposal is None:
+                return "Эта статья уже прошла review."
+            analysis = (
+                f"Сохранённый анализ:\n{result.analysis_result.analysis.result_text}\n\n"
+                if result.analysis_result is not None
+                else ""
+            )
+            if proposal.action is ObsidianProposalAction.SKIP:
+                return (
+                    f"{analysis}Эта статья уже прошла review: было решено "
+                    "не изменять vault.\n"
+                    f"Причина: {proposal.reasoning}"
+                )
+            action = (
+                "создана заметка"
+                if proposal.action is ObsidianProposalAction.ADD
+                else "обновлена заметка"
+            )
+            return (
+                f"{analysis}Эта статья уже прошла review: {action} "
+                f"`{proposal.target_path}`.\nCommit: "
+                f"`{proposal.applied_commit_sha}`\n"
+                "Повторная загрузка страницы и LLM-анализ не выполнялись."
             )
         case IncomingMessageResultType.ARTICLE_REVIEW_FAILED:
             return _with_vault_sync_warning(
@@ -479,23 +549,42 @@ def _format_obsidian_review(result: ProcessIncomingMessageResult) -> str:
         return (
             "Анализ готов. Предложение для Obsidian: ничего не менять.\n"
             f"Причина: {proposal.reasoning}\n\n"
-            "Vault не изменён."
+            "Vault не изменён. Ответь «да», чтобы завершить review без "
+            "изменений, или «нет», чтобы отменить предложение."
         )
     action = (
         "создать новую заметку"
         if proposal.action is ObsidianProposalAction.ADD
         else "обновить существующую заметку"
     )
-    preview = (proposal.proposed_markdown or "")[:2_000].rstrip()
-    if proposal.proposed_markdown and len(proposal.proposed_markdown) > len(preview):
+    preview_source = (
+        review.markdown_diff
+        if proposal.action is ObsidianProposalAction.UPDATE
+        and review.markdown_diff
+        else proposal.proposed_markdown or ""
+    )
+    preview = preview_source[:2_000].rstrip()
+    if len(preview_source) > len(preview):
         preview += "\n\n[Предпросмотр сокращён.]"
+    preview_label = (
+        "Предлагаемый diff"
+        if proposal.action is ObsidianProposalAction.UPDATE
+        else "Предлагаемый Markdown"
+    )
     return (
         f"Анализ готов. Предложение для Obsidian: {action}.\n"
         f"Путь: `{proposal.target_path}`\n"
         f"Причина: {proposal.reasoning}\n\n"
-        f"Предлагаемый Markdown:\n{preview}\n\n"
-        "Vault не изменён."
+        f"{preview_label}:\n{preview}\n\n"
+        "Vault не изменён. Ответь «да», чтобы применить изменение, "
+        "или «нет», чтобы отменить предложение."
     )
+
+
+def _confirmation_proposal(result: ProcessIncomingMessageResult):
+    """Возвращает proposal из результата подтверждения без раскрытия IDs."""
+    confirmation = result.obsidian_confirmation
+    return confirmation.proposal if confirmation is not None else None
 
 
 def _display_name(result: ProcessIncomingMessageResult) -> str:

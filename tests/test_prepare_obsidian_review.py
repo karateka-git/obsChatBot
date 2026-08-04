@@ -16,6 +16,7 @@ from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
 from obs_chat_bot.domain.reviews.entities import (
+    ObsidianProposal,
     ObsidianProposalAction,
     ObsidianReviewPlan,
 )
@@ -120,6 +121,9 @@ class PrepareObsidianReviewTests(unittest.TestCase):
 
         self.assertEqual(result.proposal.target_blob_sha, "target-sha")
         self.assertEqual(generator.writing_context.target_note, target)
+        self.assertIn("--- a/Tech/Docker.md", result.markdown_diff)
+        self.assertIn("+++ b/Tech/Docker.md", result.markdown_diff)
+        self.assertIn("+Обновлённый конспект", result.markdown_diff)
 
     def test_skip_does_not_call_markdown_writer(self) -> None:
         """Skip формирует предложение без фиктивного Markdown или target path."""
@@ -185,8 +189,9 @@ class PrepareObsidianReviewTests(unittest.TestCase):
         generator=None,
         error_recorder=None,
     ) -> PrepareObsidianReviewUseCase:
+        article_repository = article_repository or ArticleRepositoryFake(self.article)
         return PrepareObsidianReviewUseCase(
-            article_repository=article_repository or ArticleRepositoryFake(self.article),
+            article_repository=article_repository,
             vault_repository=VaultRepositoryFake(self.vault),
             instruction_repository=InstructionRepositoryFake(
                 self.instructions if instructions is None else instructions
@@ -200,6 +205,7 @@ class PrepareObsidianReviewTests(unittest.TestCase):
                     reasoning="Не требуется.",
                 )
             ),
+            proposal_repository=ProposalRepositoryFake(article_repository),
             error_recorder=error_recorder,
         )
 
@@ -218,6 +224,20 @@ class ArticleRepositoryFake:
             return None
         self.article = replace(self.article, status=status)
         return self.article
+
+
+class ProposalRepositoryFake:
+    """Сохраняет pending proposal и воспроизводит атомарный перевод статьи."""
+
+    def __init__(self, article_repository: ArticleRepositoryFake) -> None:
+        self.article_repository = article_repository
+
+    def save_pending(self, proposal: ObsidianProposal) -> ObsidianProposal:
+        self.article_repository.update_status(
+            proposal.article_id,
+            ArticleStatus.NEEDS_OBSIDIAN_REVIEW,
+        )
+        return replace(proposal, id=1)
 
 
 class VaultRepositoryFake:

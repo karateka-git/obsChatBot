@@ -26,6 +26,8 @@ class ProcessArticleUrlCommand:
     source_url: str
     app_user_id: int = 1
     incoming_message_id: int | None = None
+    force_reprocess: bool = False
+    preserve_existing_on_failure: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +116,14 @@ class ProcessArticleUrlUseCase:
             normalized_url,
             command.app_user_id,
         )
-        if existing is not None and existing.cleaned_text:
+        if (
+            existing is not None
+            and not command.force_reprocess
+            and (
+                existing.cleaned_text
+                or existing.status is ArticleStatus.REVIEWED
+            )
+        ):
             return ProcessArticleUrlResult(
                 article=existing,
                 created=False,
@@ -129,6 +138,7 @@ class ProcessArticleUrlUseCase:
         )
         created = existing is None
         article_id = _require_article_id(article)
+        original_status = article.status
 
         try:
             self._article_repository.update_status(article_id, ArticleStatus.FETCHING)
@@ -140,6 +150,11 @@ class ProcessArticleUrlUseCase:
                 command.app_user_id,
                 ProcessingStage.FETCHING,
                 error,
+                preserved_status=(
+                    original_status
+                    if command.preserve_existing_on_failure
+                    else None
+                ),
             )
             raise ProcessArticleUrlError(
                 f"Could not fetch article HTML: {error}",
@@ -155,6 +170,11 @@ class ProcessArticleUrlUseCase:
                 command.app_user_id,
                 ProcessingStage.EXTRACTION,
                 error,
+                preserved_status=(
+                    original_status
+                    if command.preserve_existing_on_failure
+                    else None
+                ),
             )
             raise ProcessArticleUrlError(
                 f"Could not extract article text: {error}",
@@ -162,24 +182,47 @@ class ProcessArticleUrlUseCase:
             ) from error
 
         text_hash = _build_text_hash(extracted.cleaned_text)
-        updated = self._article_repository.update_content(
-            article_id,
-            title=extracted.title,
-            cleaned_text=extracted.cleaned_text,
-            text_hash=text_hash,
-            status=ArticleStatus.EXTRACTED,
-        )
+        try:
+            updated = self._article_repository.update_content(
+                article_id,
+                title=extracted.title,
+                cleaned_text=extracted.cleaned_text,
+                text_hash=text_hash,
+                status=ArticleStatus.EXTRACTED,
+            )
+        except Exception as error:
+            self._mark_failed_and_record(
+                article_id,
+                command.incoming_message_id,
+                command.app_user_id,
+                ProcessingStage.STORAGE,
+                error,
+                preserved_status=(
+                    original_status
+                    if command.preserve_existing_on_failure
+                    else None
+                ),
+            )
+            raise ProcessArticleUrlError(
+                f"Could not store article content: {error}",
+                stage=ProcessingStage.STORAGE,
+            ) from error
         if updated is None:
             error = ProcessArticleUrlError(
                 f"Article disappeared before content update: {article_id}",
                 stage=ProcessingStage.STORAGE,
             )
-            self._record_error(
-                article_id=article_id,
-                app_user_id=command.app_user_id,
-                incoming_message_id=command.incoming_message_id,
-                stage=ProcessingStage.STORAGE,
-                error=error,
+            self._mark_failed_and_record(
+                article_id,
+                command.incoming_message_id,
+                command.app_user_id,
+                ProcessingStage.STORAGE,
+                error,
+                preserved_status=(
+                    original_status
+                    if command.preserve_existing_on_failure
+                    else None
+                ),
             )
             raise error
 
@@ -187,6 +230,43 @@ class ProcessArticleUrlUseCase:
             article=updated,
             created=created,
             extracted=True,
+        )
+
+    def reprocess_existing(
+        self,
+        *,
+        article_id: int,
+        app_user_id: int,
+        incoming_message_id: int | None = None,
+    ) -> ProcessArticleUrlResult:
+        """Повторно загружает сохранённый URL, сохраняя прежний result при сбое.
+
+        Args:
+            article_id: ID существующей статьи.
+            app_user_id: Обязательный пользовательский scope.
+            incoming_message_id: Сообщение команды для диагностики.
+
+        Returns:
+            Результат новой загрузки и extraction.
+
+        Raises:
+            ProcessArticleUrlError: Статья отсутствует, принадлежит другому
+                пользователю или повторная загрузка не завершилась.
+        """
+        article = self._article_repository.get_by_id(article_id)
+        if article is None or article.app_user_id != app_user_id:
+            raise ProcessArticleUrlError(
+                f"Article not found: {article_id}",
+                stage=ProcessingStage.STORAGE,
+            )
+        return self.execute(
+            ProcessArticleUrlCommand(
+                source_url=article.source_url,
+                app_user_id=app_user_id,
+                incoming_message_id=incoming_message_id,
+                force_reprocess=True,
+                preserve_existing_on_failure=True,
+            )
         )
 
     def _create_article(
@@ -225,9 +305,13 @@ class ProcessArticleUrlUseCase:
         app_user_id: int,
         stage: ProcessingStage,
         error: Exception,
+        preserved_status: ArticleStatus | None = None,
     ) -> None:
-        """Переводит статью в `failed` и сохраняет диагностическую ошибку."""
-        self._article_repository.update_status(article_id, ArticleStatus.FAILED)
+        """Сохраняет ошибку, восстанавливая прежний статус при safe reprocess."""
+        self._article_repository.update_status(
+            article_id,
+            preserved_status or ArticleStatus.FAILED,
+        )
         self._record_error(
             article_id=article_id,
             app_user_id=app_user_id,

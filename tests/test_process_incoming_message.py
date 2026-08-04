@@ -1,6 +1,7 @@
 """Тесты общего application-flow входящих сообщений."""
 
 from types import SimpleNamespace
+from datetime import UTC, datetime
 import unittest
 
 from obs_chat_bot.application.articles.incoming_messages import (
@@ -20,6 +21,10 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageUseCase,
 )
 from obs_chat_bot.application.reviews.proposal import PrepareObsidianReviewError
+from obs_chat_bot.application.reviews.confirmation import (
+    ObsidianConfirmationResult,
+    ObsidianConfirmationStatus,
+)
 from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionCompletion,
     GitHubConnectionCompletionStatus,
@@ -48,7 +53,11 @@ from obs_chat_bot.application.vaults.vault_sync import (
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
-from obs_chat_bot.domain.reviews.entities import ObsidianProposalAction
+from obs_chat_bot.domain.reviews.entities import (
+    ObsidianProposal,
+    ObsidianProposalAction,
+    ObsidianProposalStatus,
+)
 from obs_chat_bot.application.users.identity import IdentityAlreadyBoundError
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
@@ -75,6 +84,43 @@ class FakeArticleUrlUseCase:
             ),
             created=True,
             extracted=True,
+        )
+
+    def reprocess_existing(
+        self,
+        *,
+        article_id: int,
+        app_user_id: int,
+        incoming_message_id: int | None = None,
+    ) -> ProcessArticleUrlResult:
+        """Имитирует повторную загрузку сохранённой статьи."""
+        return self.execute(
+            ProcessArticleUrlCommand(
+                source_url="https://example.com/article",
+                app_user_id=app_user_id,
+                incoming_message_id=incoming_message_id,
+                force_reprocess=True,
+                preserve_existing_on_failure=True,
+            )
+        )
+
+
+class ReviewedArticleUrlUseCase(FakeArticleUrlUseCase):
+    """Возвращает ранее завершённую статью без повторного извлечения."""
+
+    def execute(self, command: ProcessArticleUrlCommand) -> ProcessArticleUrlResult:
+        self.commands.append(command)
+        return ProcessArticleUrlResult(
+            article=Article(
+                id=7,
+                app_user_id=command.app_user_id,
+                source_url=command.source_url,
+                normalized_url=command.source_url,
+                cleaned_text=None,
+                status=ArticleStatus.REVIEWED,
+            ),
+            created=False,
+            extracted=False,
         )
 
 
@@ -165,6 +211,39 @@ class FakeReviewUseCase:
         if self.error is not None:
             raise self.error
         return self.result
+
+
+class FakeConfirmationService:
+    """Имитирует pending и сохранённый результат Obsidian review."""
+
+    def __init__(self, proposal: ObsidianProposal) -> None:
+        self.proposal = proposal
+        self.confirm_calls = 0
+        self.cancel_calls = 0
+
+    def get_pending(self, app_user_id: int):
+        return (
+            self.proposal
+            if self.proposal.status is ObsidianProposalStatus.PENDING
+            else None
+        )
+
+    def get_latest_applied(self, *, app_user_id: int, article_id: int):
+        return self.proposal
+
+    def confirm(self, app_user_id: int) -> ObsidianConfirmationResult:
+        self.confirm_calls += 1
+        return ObsidianConfirmationResult(
+            status=ObsidianConfirmationStatus.APPLIED,
+            proposal=self.proposal,
+        )
+
+    def cancel(self, app_user_id: int) -> ObsidianConfirmationResult:
+        self.cancel_calls += 1
+        return ObsidianConfirmationResult(
+            status=ObsidianConfirmationStatus.CANCELLED,
+            proposal=self.proposal,
+        )
 
 
 class FakeUserIdentityService:
@@ -1141,6 +1220,52 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(analysis_use_case.commands[0].app_user_id, 42)
         self.assertTrue(analysis_use_case.commands[0].force)
 
+    def test_pending_review_accepts_yes_and_no_but_blocks_other_text(self) -> None:
+        """Pending proposal не принимает новое задание до явного решения."""
+        proposal = _proposal()
+        confirmation = FakeConfirmationService(proposal)
+        article_use_case = FakeArticleUrlUseCase()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            user_identity_service=FakeUserIdentityService(),
+            obsidian_confirmation_service=confirmation,
+        )
+
+        pending = use_case.execute(_telegram_message("позже"))
+        applied = use_case.execute(_telegram_message("да"))
+
+        self.assertEqual(
+            pending.type,
+            IncomingMessageResultType.ARTICLE_REVIEW_CONFIRMATION_PENDING,
+        )
+        self.assertEqual(applied.type, IncomingMessageResultType.ARTICLE_REVIEW_APPLIED)
+        self.assertEqual(confirmation.confirm_calls, 1)
+        self.assertEqual(article_use_case.commands, [])
+
+    def test_repeat_reviewed_url_returns_saved_result_without_analysis(self) -> None:
+        """Повторная reviewed-ссылка возвращает историю без нового LLM-вызова."""
+        analysis = FakeAnalysisUseCase()
+        confirmation = FakeConfirmationService(
+            _proposal(status=ObsidianProposalStatus.APPLIED)
+        )
+        article_use_case = ReviewedArticleUrlUseCase()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            article_analysis_use_case=analysis,
+            user_identity_service=FakeUserIdentityService(),
+            obsidian_confirmation_service=confirmation,
+        )
+
+        result = use_case.execute(
+            _telegram_message("https://example.com/article")
+        )
+
+        self.assertEqual(result.type, IncomingMessageResultType.ARTICLE_REVIEWED_RESULT)
+        self.assertEqual(len(article_use_case.commands), 1)
+        self.assertEqual(len(analysis.commands), 1)
+        self.assertFalse(analysis.commands[0].force)
+        self.assertIsNotNone(result.analysis_result)
+
 
 def _telegram_message(text: str) -> IncomingMessage:
     """Создаёт входящее Telegram-сообщение для команд incoming-flow."""
@@ -1150,6 +1275,30 @@ def _telegram_message(text: str) -> IncomingMessage:
         message_id="msg-1",
         external_user_id="user-1",
         text=text,
+    )
+
+
+def _proposal(
+    *,
+    status: ObsidianProposalStatus = ObsidianProposalStatus.PENDING,
+) -> ObsidianProposal:
+    """Создаёт сохранённое skip-предложение для incoming-flow."""
+    return ObsidianProposal(
+        id=1,
+        app_user_id=42,
+        article_id=7,
+        analysis_id=3,
+        vault_id=1,
+        action=ObsidianProposalAction.SKIP,
+        reasoning="Материал не добавляет новых знаний.",
+        base_commit_sha="commit",
+        base_tree_sha="tree",
+        status=status,
+        completed_at=(
+            datetime.now(UTC)
+            if status is ObsidianProposalStatus.APPLIED
+            else None
+        ),
     )
 
 
