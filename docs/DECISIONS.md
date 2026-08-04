@@ -653,3 +653,29 @@
 - Если измерения покажут недостаточную latency на крупных vault, уже записанное
   разделение ports позволяет заменить scan на FAISS или vector database из
   бэклога без изменения hybrid workflow.
+
+## 2026-08-04. Явный FTS5 fallback только для semantic failures
+
+Решение:
+
+- Возвращать единый `VaultSearchResult` с mode `hybrid` или `fts_fallback`, а не
+  выдавать FTS5-only результат под видом полноценного hybrid retrieval.
+- Различать причины `embedding_index_unavailable` и
+  `embedding_provider_failed`; сохранять их в типизированном result.
+- При fallback сохранять BM25 order и lexical diagnostics, не создавать
+  вымышленные vector candidates/ranks/scores.
+- Перехватывать только `SearchIndexUnavailableError` и
+  `EmbeddingProviderError`. Ошибки lexical branch, SQLite, tenant scope,
+  `SearchIndexCorruptedError`, аргументов и неожиданные runtime failures
+  пробрасывать.
+- Логировать переход с IDs, reason и error type, но без compact query, API key,
+  vector values или содержимого заметок.
+
+Причины и последствия:
+
+- Временная недоступность Timeweb или stale embedding generation не блокируют
+  дальнейший article/recommendation workflow, если FTS5 остаётся доступен.
+- Downstream-код сможет снизить уверенность рекомендации и честно уведомить
+  пользователя об ограниченном поиске.
+- Fallback не превращается в общий `except Exception`, поэтому повреждение БД и
+  ошибки изоляции не останутся незамеченными.

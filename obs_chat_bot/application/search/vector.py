@@ -6,6 +6,7 @@ from math import sqrt
 
 from obs_chat_bot.application.search.errors import (
     EmbeddingProviderError,
+    SearchIndexCorruptedError,
     SearchIndexUnavailableError,
 )
 from obs_chat_bot.application.search.ports import (
@@ -59,8 +60,9 @@ class VaultVectorSearchService:
 
         Raises:
             ValueError: Scope, query или limit некорректны.
-            SearchIndexUnavailableError: Поколение chunks/embeddings неполно,
-                устарело либо не соответствует текущим моделям.
+            SearchIndexUnavailableError: Поколение отсутствует, устарело либо
+                не соответствует текущим моделям.
+            SearchIndexCorruptedError: Опубликованные rows нарушают invariants.
             EmbeddingProviderError: Query vector несовместим или provider
                 вернул нулевой vector.
         """
@@ -143,17 +145,17 @@ class VaultVectorSearchService:
             or embedding.vault_id != vault_id
             for embedding in embeddings
         ):
-            raise SearchIndexUnavailableError(
+            raise SearchIndexCorruptedError(
                 "Search index contains data outside requested user or vault"
             )
         if not chunks:
             if embeddings or embedding_state.dimension is not None:
-                raise SearchIndexUnavailableError(
+                raise SearchIndexCorruptedError(
                     "Empty chunk generation has unexpected embeddings"
                 )
             return chunks, embeddings, None
         if embedding_state.dimension is None:
-            raise SearchIndexUnavailableError(
+            raise SearchIndexCorruptedError(
                 "Non-empty embedding generation has no dimension"
             )
         chunks_by_id = {chunk.id: chunk for chunk in chunks}
@@ -164,7 +166,7 @@ class VaultVectorSearchService:
             or len(embeddings_by_id) != len(embeddings)
             or set(chunks_by_id) != set(embeddings_by_id)
         ):
-            raise SearchIndexUnavailableError(
+            raise SearchIndexCorruptedError(
                 "Chunk and embedding generations do not contain the same IDs"
             )
         for embedding in embeddings:
@@ -174,11 +176,11 @@ class VaultVectorSearchService:
                 or embedding.dimension != embedding_state.dimension
                 or embedding.content_hash != chunk.content_hash
             ):
-                raise SearchIndexUnavailableError(
+                raise SearchIndexCorruptedError(
                     "Stored embedding does not match current chunk or profile"
                 )
             if not any(embedding.values):
-                raise SearchIndexUnavailableError(
+                raise SearchIndexCorruptedError(
                     "Stored embedding must not be a zero vector"
                 )
         return chunks, embeddings, embedding_state.dimension
@@ -224,14 +226,14 @@ def _normalized_cosine(
 ) -> float:
     """Возвращает cosine similarity, линейно приведённый к диапазону 0..1."""
     if len(left) != len(right) or not left:
-        raise SearchIndexUnavailableError("Vector dimensions are incompatible")
+        raise SearchIndexCorruptedError("Vector dimensions are incompatible")
     dot_product = sum(a * b for a, b in zip(left, right, strict=True))
     left_norm = sqrt(sum(value * value for value in left))
     right_norm = sqrt(sum(value * value for value in right))
     if left_norm == 0:
         raise EmbeddingProviderError("Query embedding must not be a zero vector")
     if right_norm == 0:
-        raise SearchIndexUnavailableError(
+        raise SearchIndexCorruptedError(
             "Stored embedding must not be a zero vector"
         )
     cosine = dot_product / (left_norm * right_norm)

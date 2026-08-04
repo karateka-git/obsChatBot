@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
-from obs_chat_bot.application.search.models import VaultHybridSearchResult
+from obs_chat_bot.application.search.errors import (
+    EmbeddingProviderError,
+    SearchIndexUnavailableError,
+)
+from obs_chat_bot.application.search.models import VaultSearchResult
 from obs_chat_bot.application.search.ports import VaultChunkSearch
 from obs_chat_bot.domain.search.entities import (
     ArticleSearchQuery,
@@ -13,11 +18,16 @@ from obs_chat_bot.domain.search.entities import (
     VaultHybridSearchHit,
     VaultNoteChunk,
 )
+from obs_chat_bot.domain.search.statuses import (
+    VaultSearchFallbackReason,
+    VaultSearchMode,
+)
 
 
 DEFAULT_RRF_K = 60
 DEFAULT_CANDIDATE_LIMIT = 20
 DEFAULT_RESULT_LIMIT = 10
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -55,7 +65,7 @@ class VaultHybridSearchService:
         vault_id: int,
         candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
         result_limit: int = DEFAULT_RESULT_LIMIT,
-    ) -> VaultHybridSearchResult:
+    ) -> VaultSearchResult:
         """Выполняет обе ветви и возвращает лучшие chunks после RRF.
 
         Args:
@@ -69,9 +79,8 @@ class VaultHybridSearchService:
 
         Raises:
             ValueError: Vault или limits некорректны.
-            SearchIndexUnavailableError: Vector index не готов; fallback будет
-                добавлен отдельно в Этапе 10.8.
-            EmbeddingProviderError: Semantic provider недоступен или несовместим.
+            RuntimeError: Неожиданная ошибка ветви, не относящаяся к ожидаемым
+                semantic failures.
         """
         if vault_id <= 0:
             raise ValueError("vault_id must be positive")
@@ -85,14 +94,38 @@ class VaultHybridSearchService:
             query=query.lexical_text,
             limit=candidate_limit,
         )
-        vector_hits = self._vector_search.search(
+        _validate_branch_scope(
+            lexical_hits,
             app_user_id=query.app_user_id,
             vault_id=vault_id,
-            query=query.semantic_text,
-            limit=candidate_limit,
         )
+        try:
+            vector_hits = self._vector_search.search(
+                app_user_id=query.app_user_id,
+                vault_id=vault_id,
+                query=query.semantic_text,
+                limit=candidate_limit,
+            )
+        except SearchIndexUnavailableError as error:
+            return self._build_fallback_result(
+                query=query,
+                vault_id=vault_id,
+                lexical_hits=lexical_hits,
+                result_limit=result_limit,
+                reason=VaultSearchFallbackReason.EMBEDDING_INDEX_UNAVAILABLE,
+                error=error,
+            )
+        except EmbeddingProviderError as error:
+            return self._build_fallback_result(
+                query=query,
+                vault_id=vault_id,
+                lexical_hits=lexical_hits,
+                result_limit=result_limit,
+                reason=VaultSearchFallbackReason.EMBEDDING_PROVIDER_FAILED,
+                error=error,
+            )
         _validate_branch_scope(
-            lexical_hits + vector_hits,
+            vector_hits,
             app_user_id=query.app_user_id,
             vault_id=vault_id,
         )
@@ -101,12 +134,46 @@ class VaultHybridSearchService:
             vector_hits=vector_hits,
             rrf_k=self._rrf_k,
         )
-        return VaultHybridSearchResult(
+        return VaultSearchResult(
             query=query,
             vault_id=vault_id,
             hits=fused[:result_limit],
             lexical_candidates=len(lexical_hits),
             vector_candidates=len(vector_hits),
+        )
+
+    def _build_fallback_result(
+        self,
+        *,
+        query: ArticleSearchQuery,
+        vault_id: int,
+        lexical_hits: tuple[VaultChunkSearchHit, ...],
+        result_limit: int,
+        reason: VaultSearchFallbackReason,
+        error: Exception,
+    ) -> VaultSearchResult:
+        """Сохраняет BM25 order и явно маркирует ожидаемый semantic failure."""
+        LOGGER.warning(
+            "Semantic search unavailable, using FTS fallback: "
+            "app_user_id=%s vault_id=%s reason=%s error_type=%s",
+            query.app_user_id,
+            vault_id,
+            reason.value,
+            type(error).__name__,
+        )
+        fused = _reciprocal_rank_fusion(
+            lexical_hits=lexical_hits,
+            vector_hits=(),
+            rrf_k=self._rrf_k,
+        )
+        return VaultSearchResult(
+            query=query,
+            vault_id=vault_id,
+            hits=fused[:result_limit],
+            lexical_candidates=len(lexical_hits),
+            vector_candidates=0,
+            mode=VaultSearchMode.FTS_FALLBACK,
+            fallback_reason=reason,
         )
 
 

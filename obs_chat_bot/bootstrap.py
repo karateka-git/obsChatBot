@@ -164,7 +164,7 @@ def create_vault_hybrid_search_service(
         chunking_config: Policy допустимого поколения chunks.
 
     Returns:
-        Hybrid retrieval service без fallback; он относится к Этапу 10.8.
+        Hybrid retrieval service с явным FTS5 fallback ожидаемых semantic ошибок.
     """
     chunker = create_vault_note_chunker(chunking_config)
     provider = create_embedding_provider(embedding_config)

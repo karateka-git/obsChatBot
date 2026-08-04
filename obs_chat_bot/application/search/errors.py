@@ -7,3 +7,7 @@ class EmbeddingProviderError(RuntimeError):
 
 class SearchIndexUnavailableError(RuntimeError):
     """Текущее поколение поискового индекса отсутствует или несовместимо."""
+
+
+class SearchIndexCorruptedError(RuntimeError):
+    """Опубликованный поисковый индекс нарушает внутренние invariants."""

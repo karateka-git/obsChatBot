@@ -6,6 +6,7 @@ import unittest
 
 from obs_chat_bot.application.search.errors import (
     EmbeddingProviderError,
+    SearchIndexCorruptedError,
     SearchIndexUnavailableError,
 )
 from obs_chat_bot.application.search.hybrid import VaultHybridSearchService
@@ -18,6 +19,10 @@ from obs_chat_bot.domain.search.entities import (
     VaultChunkSearchHit,
     VaultEmbeddingIndexState,
     VaultNoteChunk,
+)
+from obs_chat_bot.domain.search.statuses import (
+    VaultSearchFallbackReason,
+    VaultSearchMode,
 )
 
 
@@ -186,7 +191,7 @@ class VaultVectorSearchServiceTest(unittest.TestCase):
             provider=provider,
         )
 
-        with self.assertRaises(SearchIndexUnavailableError):
+        with self.assertRaises(SearchIndexCorruptedError):
             search.search(app_user_id=1, vault_id=10, query="query")
 
         self.assertEqual(provider.calls, [])
@@ -208,7 +213,7 @@ class VaultVectorSearchServiceTest(unittest.TestCase):
             embeddings=(_embedding(chunk, values=(0.0, 0.0)),),
             provider=zero_provider,
         )
-        with self.assertRaises(SearchIndexUnavailableError):
+        with self.assertRaises(SearchIndexCorruptedError):
             zero_document.search(app_user_id=1, vault_id=10, query="query")
         self.assertEqual(zero_provider.calls, [])
 
@@ -264,6 +269,8 @@ class VaultHybridSearchServiceTest(unittest.TestCase):
         )
         self.assertEqual(result.lexical_candidates, 2)
         self.assertEqual(result.vector_candidates, 2)
+        self.assertIs(result.mode, VaultSearchMode.HYBRID)
+        self.assertIsNone(result.fallback_reason)
         self.assertEqual(lexical.calls[0]["query"], "Docker webhook")
         self.assertIn("Кратко", vector.calls[0]["query"])
 
@@ -297,21 +304,70 @@ class VaultHybridSearchServiceTest(unittest.TestCase):
         self.assertEqual(lexical.calls[0]["limit"], 3)
         self.assertEqual(vector.calls[0]["limit"], 3)
 
-    def test_embedding_failure_is_not_hidden_before_stage_10_8(self) -> None:
-        """10.7 пробрасывает semantic error вместо неявного FTS fallback."""
+    def test_embedding_provider_failure_returns_explicit_fts_fallback(self) -> None:
+        """Provider error сохраняет BM25 order и типизированную причину."""
         error = EmbeddingProviderError("provider unavailable")
-        lexical = RecordingSearch(())
+        chunk = _chunk(1)
+        lexical = RecordingSearch((VaultChunkSearchHit(chunk=chunk, score=3.0),))
         vector = RecordingSearch(error=error)
         service = VaultHybridSearchService(
             lexical_search=lexical,
             vector_search=vector,
         )
 
-        with self.assertRaises(EmbeddingProviderError):
-            service.search(query=_query(), vault_id=10)
+        result = service.search(query=_query(), vault_id=10)
 
+        self.assertIs(result.mode, VaultSearchMode.FTS_FALLBACK)
+        self.assertIs(
+            result.fallback_reason,
+            VaultSearchFallbackReason.EMBEDDING_PROVIDER_FAILED,
+        )
+        self.assertEqual(result.vector_candidates, 0)
+        self.assertEqual([hit.chunk.id for hit in result.hits], [1])
+        self.assertEqual(result.hits[0].lexical_rank, 1)
+        self.assertIsNone(result.hits[0].vector_rank)
         self.assertEqual(len(lexical.calls), 1)
         self.assertEqual(len(vector.calls), 1)
+
+    def test_embedding_index_failure_has_separate_fallback_reason(self) -> None:
+        """Stale index отличается от сетевого или provider failure."""
+        service = VaultHybridSearchService(
+            lexical_search=RecordingSearch(()),
+            vector_search=RecordingSearch(
+                error=SearchIndexUnavailableError("stale index")
+            ),
+        )
+
+        result = service.search(query=_query(), vault_id=10)
+
+        self.assertIs(result.mode, VaultSearchMode.FTS_FALLBACK)
+        self.assertIs(
+            result.fallback_reason,
+            VaultSearchFallbackReason.EMBEDDING_INDEX_UNAVAILABLE,
+        )
+        self.assertEqual(result.hits, ())
+
+    def test_unexpected_vector_error_is_not_hidden_by_fallback(self) -> None:
+        """Ошибка программирования или storage вне контракта пробрасывается."""
+        service = VaultHybridSearchService(
+            lexical_search=RecordingSearch(()),
+            vector_search=RecordingSearch(error=RuntimeError("unexpected")),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected"):
+            service.search(query=_query(), vault_id=10)
+
+    def test_corrupted_index_is_not_hidden_by_fallback(self) -> None:
+        """Нарушение опубликованных invariants требует диагностики и ремонта."""
+        service = VaultHybridSearchService(
+            lexical_search=RecordingSearch(()),
+            vector_search=RecordingSearch(
+                error=SearchIndexCorruptedError("hash mismatch")
+            ),
+        )
+
+        with self.assertRaisesRegex(SearchIndexCorruptedError, "hash mismatch"):
+            service.search(query=_query(), vault_id=10)
 
     def test_duplicate_chunk_in_branch_is_rejected(self) -> None:
         """Некорректная ветвь не искажает RRF повтором одного chunk."""

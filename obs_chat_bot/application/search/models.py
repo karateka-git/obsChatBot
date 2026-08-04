@@ -1,4 +1,4 @@
-"""Application-модели chunks до сохранения в project storage."""
+"""Application-модели поисковой индексации и retrieval."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ from math import isfinite
 from obs_chat_bot.domain.search.entities import (
     ArticleSearchQuery,
     VaultHybridSearchHit,
+)
+from obs_chat_bot.domain.search.statuses import (
+    VaultSearchFallbackReason,
+    VaultSearchMode,
 )
 
 
@@ -123,20 +127,43 @@ class EmbeddingIndexUpdate:
 
 
 @dataclass(frozen=True, slots=True)
-class VaultHybridSearchResult:
-    """Содержит готовые для recommendation prompt лучшие chunks vault."""
+class VaultSearchResult:
+    """Содержит лучшие chunks и честный режим выполненного retrieval."""
 
     query: ArticleSearchQuery
     vault_id: int
     hits: tuple[VaultHybridSearchHit, ...]
     lexical_candidates: int
     vector_candidates: int
+    mode: VaultSearchMode = VaultSearchMode.HYBRID
+    fallback_reason: VaultSearchFallbackReason | None = None
 
     def __post_init__(self) -> None:
         if self.vault_id <= 0:
             raise ValueError("vault_id must be positive")
         if min(self.lexical_candidates, self.vector_candidates) < 0:
             raise ValueError("candidate counters must not be negative")
+        if not isinstance(self.mode, VaultSearchMode):
+            raise TypeError("mode must be a VaultSearchMode")
+        if self.fallback_reason is not None and not isinstance(
+            self.fallback_reason,
+            VaultSearchFallbackReason,
+        ):
+            raise TypeError(
+                "fallback_reason must be a VaultSearchFallbackReason when present"
+            )
+        if self.mode is VaultSearchMode.HYBRID and self.fallback_reason is not None:
+            raise ValueError("hybrid result must not have fallback_reason")
+        if self.mode is VaultSearchMode.FTS_FALLBACK:
+            if self.fallback_reason is None:
+                raise ValueError("FTS fallback result must have fallback_reason")
+            if self.vector_candidates != 0:
+                raise ValueError("FTS fallback must not contain vector candidates")
+            if any(
+                hit.vector_rank is not None or hit.vector_score is not None
+                for hit in self.hits
+            ):
+                raise ValueError("FTS fallback hits must not contain vector data")
         if any(
             hit.chunk.app_user_id != self.query.app_user_id
             or hit.chunk.vault_id != self.vault_id
