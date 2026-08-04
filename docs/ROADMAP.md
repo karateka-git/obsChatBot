@@ -677,7 +677,7 @@ Telegram и VK не могут одновременно синхронизиро
 полнотекстового и смыслового поиска, показывать пользователю конкретное
 предложение и после явного подтверждения применять его прямым commit в vault.
 
-Статус этапа: **в работе; 10.1–10.3 завершены, следующий подэтап — 10.4**.
+Статус этапа: **в работе; 10.1–10.4 завершены, следующий подэтап — 10.5**.
 
 Обязательный preflight перед формированием `add` или `update`: загрузить весь
 упорядоченный набор instruction-файлов из 9.11, определить целевой раздел и
@@ -725,13 +725,22 @@ policy и правила переиндексации зафиксированы
    - результаты ранжируются BM25 с повышенным весом title, tags и headings;
    - выдача ограничена `app_user_id`, vault и текущей `index_signature`, поэтому
      stale или частично построенное поколение не используется.
-4. **10.4 — следующий подэтап.** Добавить embeddings port и OpenAI-compatible
-   adapter для Timeweb AI Gateway:
+4. **10.4 — завершено.** Добавлены embeddings port и OpenAI-compatible adapter
+   для Timeweb AI Gateway:
    - base URL `https://api.timeweb.ai/v1`;
    - отдельный API key;
-   - модель `openai/text-embedding-3-large`.
-5. Хранить embeddings в SQLite как float32-векторы вместе с model, dimension и
-   content hash.
+   - модель `openai/text-embedding-3-large`;
+   - port отдельно векторизует corpus documents и search query, поэтому
+     provider можно заменить на модель с разными query/document режимами;
+   - adapter выполняет batch-запросы, сохраняет порядок, проверяет количество,
+     indices, конечность и общую dimension vectors;
+   - пустой набор chunks не создаёт внешний запрос, а ошибки не включают API key
+     или исходный текст;
+   - отдельная all-or-none группа `EMBEDDING_*` проверяется healthcheck без
+     платного сетевого запроса;
+   - реальный Timeweb smoke подтвердил модель и dimension `3072`.
+5. **10.5 — следующий подэтап.** Хранить embeddings в SQLite как
+   float32-векторы вместе с model, dimension и content hash.
 6. Строить запрос к поиску из заголовка и сохранённой LLM-сводки статьи.
 7. Независимо выполнять FTS5 и vector similarity search, объединять результаты
    через Reciprocal Rank Fusion и передавать лучшие chunks в recommendation
@@ -1006,5 +1015,5 @@ policy и правила переиндексации зафиксированы
 «Этап 9. Obsidian GitHub connector», где пункты соответствуют буквальной
 нумерации 9.1–9.12.
 
-Завершены 9.1–9.12 и 10.1–10.3. Следующий программный подэтап — 10.4: embeddings
-port и OpenAI-compatible adapter для Timeweb AI Gateway.
+Завершены 9.1–9.12 и 10.1–10.4. Следующий программный подэтап — 10.5: хранение
+float32 embeddings в SQLite и их инкрементальное обновление.

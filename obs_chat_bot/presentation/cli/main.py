@@ -39,6 +39,7 @@ from obs_chat_bot.data.config import (
     AppConfig,
     ChunkingConfig,
     ConfigError,
+    EmbeddingConfig,
     GitHubAppConfig,
     load_config,
 )
@@ -230,6 +231,8 @@ def run_healthcheck(config: AppConfig, logger: logging.Logger) -> int:
         return 1
     if not check_github_config(config.github_app, logger):
         return 1
+    if not check_embedding_config(config.embedding, logger):
+        return 1
 
     logger.info("Health check passed")
     return 0
@@ -301,6 +304,31 @@ def check_github_config(
         logger.error("GitHub App configuration is invalid: %s", error)
         return False
     logger.info("GitHub App configuration is ready")
+    return True
+
+
+def check_embedding_config(
+    config: EmbeddingConfig | None,
+    logger: logging.Logger,
+) -> bool:
+    """Проверяет embedding URL и наличие credentials без сетевого запроса.
+
+    Args:
+        config: Настройки provider либо `None`, если semantic search отключён.
+        logger: Logger безопасного результата проверки.
+
+    Returns:
+        `True`, если группа отключена или полностью корректна.
+    """
+    if config is None:
+        logger.info("Embedding provider configuration is disabled")
+        return True
+    try:
+        validate_public_http_url(config.base_url)
+    except (UnsafeUrlError, ValueError) as error:
+        logger.error("Embedding base URL is not safe: %s", error)
+        return False
+    logger.info("Embedding provider configuration is ready")
     return True
 
 

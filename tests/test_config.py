@@ -117,6 +117,44 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config()
 
+    def test_load_config_reads_separate_embedding_group(self) -> None:
+        """Embedding provider не переиспользует credentials LLM-агента."""
+        with patch.dict(
+            os.environ,
+            _env(
+                EMBEDDING_BASE_URL="https://api.timeweb.ai/v1/",
+                EMBEDDING_API_KEY="embedding-secret",
+                EMBEDDING_MODEL="openai/text-embedding-3-large",
+            ),
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertEqual(config.embedding.base_url, "https://api.timeweb.ai/v1")
+        self.assertEqual(
+            config.embedding.model,
+            "openai/text-embedding-3-large",
+        )
+        self.assertEqual(config.safe_summary()["embedding_api_key"], "set")
+        self.assertNotIn("embedding-secret", config.safe_summary().values())
+
+    def test_load_config_leaves_embeddings_disabled_when_group_is_empty(self) -> None:
+        """До настройки semantic search группа остаётся опциональной."""
+        with patch.dict(os.environ, _env(), clear=True):
+            config = load_config()
+
+        self.assertIsNone(config.embedding)
+
+    def test_load_config_rejects_partial_embedding_group(self) -> None:
+        """Ключ без URL и model не создаёт неоднозначный runtime."""
+        with patch.dict(
+            os.environ,
+            _env(EMBEDDING_API_KEY="embedding-secret"),
+            clear=True,
+        ):
+            with self.assertRaises(ConfigError):
+                load_config()
+
     def test_load_config_rejects_invalid_debug_flag(self) -> None:
         """Некорректное boolean-значение APP_DEBUG считается ошибкой конфига."""
         with patch.dict(os.environ, _env(APP_DEBUG="maybe"), clear=True):
@@ -142,6 +180,9 @@ def _env(**overrides: str) -> dict[str, str]:
         "GITHUB_CLIENT_ID": "",
         "GITHUB_APP_SLUG": "",
         "GITHUB_PRIVATE_KEY_PATH": "",
+        "EMBEDDING_BASE_URL": "",
+        "EMBEDDING_API_KEY": "",
+        "EMBEDDING_MODEL": "",
     }
     values.update(overrides)
     return values

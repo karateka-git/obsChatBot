@@ -9,6 +9,7 @@ from obs_chat_bot.application.search.models import (
     VaultNoteChunkDraft,
 )
 from obs_chat_bot.domain.search.entities import (
+    EmbeddingVector,
     VaultChunkIndexState,
     VaultChunkSearchHit,
     VaultNoteChunk,
@@ -130,4 +131,43 @@ class VaultFullTextSearchRepository(Protocol):
 
         Returns:
             Chunks в порядке убывания полнотекстовой релевантности.
+        """
+
+
+class EmbeddingProvider(Protocol):
+    """Описывает сменяемый источник semantic-векторов текста."""
+
+    @property
+    def model(self) -> str:
+        """Возвращает ID модели, с которым должны храниться embeddings."""
+
+    def embed_documents(
+        self,
+        texts: tuple[str, ...],
+    ) -> tuple[EmbeddingVector, ...]:
+        """Векторизует corpus chunks, сохраняя порядок входных текстов.
+
+        Args:
+            texts: Непустые тексты документов; пустой tuple разрешён.
+
+        Returns:
+            Векторы той же длины и в том же порядке, что `texts`.
+
+        Raises:
+            ValueError: Если один из переданных текстов пуст.
+            EmbeddingProviderError: Если provider недоступен или ответ неверен.
+        """
+
+    def embed_query(self, text: str) -> EmbeddingVector:
+        """Векторизует поисковый запрос в совместимое пространство.
+
+        Args:
+            text: Непустой текст поискового запроса.
+
+        Returns:
+            Вектор той же модели, что используется для документов.
+
+        Raises:
+            ValueError: Если запрос пуст.
+            EmbeddingProviderError: Если provider недоступен или ответ неверен.
         """

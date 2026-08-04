@@ -16,7 +16,7 @@ from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
 from obs_chat_bot.application.search.full_text import VaultFullTextSearchService
-from obs_chat_bot.application.search.ports import VaultNoteChunker
+from obs_chat_bot.application.search.ports import EmbeddingProvider, VaultNoteChunker
 from obs_chat_bot.application.users.identity import UserIdentityService
 from obs_chat_bot.application.vaults.github_connection import (
     GitHubConnectionCoordinator,
@@ -29,7 +29,10 @@ from obs_chat_bot.application.vaults.ports import (
 from obs_chat_bot.application.vaults.vault_selection import VaultSelectionManager
 from obs_chat_bot.application.vaults.vault_sync import VaultSyncManager
 from obs_chat_bot.data.chunking.document_note_chunker import DocumentVaultNoteChunker
-from obs_chat_bot.data.config import ChunkingConfig, GitHubAppConfig
+from obs_chat_bot.data.config import ChunkingConfig, EmbeddingConfig, GitHubAppConfig
+from obs_chat_bot.data.embeddings.openai_compatible import (
+    OpenAICompatibleEmbeddingProvider,
+)
 from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
     TrafilaturaArticleTextExtractor,
 )
@@ -119,6 +122,22 @@ def create_vault_full_text_search_service(
     return VaultFullTextSearchService(
         repository=SQLiteVaultFullTextSearchRepository(connection),
         chunker=create_vault_note_chunker(chunking_config),
+    )
+
+
+def create_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
+    """Собирает OpenAI-compatible embedding adapter.
+
+    Args:
+        config: Отдельная конфигурация semantic embedding provider.
+
+    Returns:
+        Adapter Timeweb AI Gateway за application-owned port.
+    """
+    return OpenAICompatibleEmbeddingProvider(
+        base_url=config.base_url,
+        api_key=config.api_key,
+        model=config.model,
     )
 
 

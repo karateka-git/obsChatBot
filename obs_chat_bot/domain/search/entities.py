@@ -84,3 +84,29 @@ class VaultChunkSearchHit:
     def __post_init__(self) -> None:
         if not isfinite(self.score) or self.score < 0:
             raise ValueError("score must be finite and not negative")
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingVector:
+    """Представляет числовой semantic-вектор, возвращённый одной моделью.
+
+    Attributes:
+        model: Стабильный ID embedding-модели провайдера.
+        values: Конечные float-координаты непустого вектора.
+    """
+
+    model: str
+    values: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if not self.model.strip():
+            raise ValueError("model must not be empty")
+        if not self.values:
+            raise ValueError("values must not be empty")
+        if any(not isfinite(value) for value in self.values):
+            raise ValueError("values must contain only finite numbers")
+
+    @property
+    def dimension(self) -> int:
+        """Возвращает число координат вектора."""
+        return len(self.values)

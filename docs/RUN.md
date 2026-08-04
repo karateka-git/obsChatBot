@@ -103,6 +103,23 @@ FTS станет источником candidates для общего RAG-flow с
 Проекция поддерживается автоматически вместе с chunk index и используется
 только при совпадении текущей index signature.
 
+## Настройки embeddings
+
+Подэтап 10.4 добавляет сменяемый embedding provider и первый OpenAI-compatible
+adapter для Timeweb AI Gateway. Он использует отдельный ключ, не связанный с
+`OPENAI_API_KEY` AI-агента:
+
+```dotenv
+EMBEDDING_BASE_URL=https://api.timeweb.ai/v1
+EMBEDDING_API_KEY=replace-me
+EMBEDDING_MODEL=openai/text-embedding-3-large
+```
+
+Группа опциональна, но при заполнении хотя бы одного параметра должны быть заданы
+все три. Healthcheck проверяет форму конфигурации без сетевого и платного
+embedding-запроса. Проверенный ответ выбранной модели содержит 3072 координаты.
+Сохранение vectors в SQLite относится к 10.5.
+
 ## 1. Перейти в папку проекта
 
 ```powershell

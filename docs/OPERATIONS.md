@@ -11,6 +11,9 @@
    - `OPENAI_BASE_URL` указывает на базовый URL AI-агента;
    - `OPENAI_API_KEY` содержит только токен, без `Bearer`;
    - `OPENAI_MODEL` заполнен, даже если провайдер игнорирует это поле;
+   - если включены embeddings, одновременно заданы `EMBEDDING_BASE_URL`,
+     `EMBEDDING_API_KEY` и `EMBEDDING_MODEL`; ключ AI Gateway не должен
+     совпадать или смешиваться с ключом AI-агента;
    - если включён GitHub connector, одновременно заданы `GITHUB_APP_ID`,
      `GITHUB_CLIENT_ID`, `GITHUB_APP_SLUG`, `GITHUB_PRIVATE_KEY_PATH`, а PEM
      доступен только процессу приложения;

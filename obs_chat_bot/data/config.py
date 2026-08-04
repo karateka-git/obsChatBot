@@ -74,6 +74,23 @@ class GitHubAppConfig:
 
 
 @dataclass(frozen=True)
+class EmbeddingConfig:
+    """Содержит отдельные настройки semantic embedding provider."""
+
+    base_url: str
+    api_key: str
+    model: str
+
+    def __post_init__(self) -> None:
+        if not self.base_url.strip():
+            raise ValueError("base_url must not be empty")
+        if not self.api_key.strip():
+            raise ValueError("api_key must not be empty")
+        if not self.model.strip():
+            raise ValueError("model must not be empty")
+
+
+@dataclass(frozen=True)
 class AppConfig:
     app_env: str
     database_path: Path
@@ -86,6 +103,7 @@ class AppConfig:
     vk_bot_token: str = ""
     vk_group_id: int | None = None
     github_app: GitHubAppConfig | None = None
+    embedding: EmbeddingConfig | None = None
 
     @property
     def data_dir(self) -> Path:
@@ -104,10 +122,23 @@ class AppConfig:
             "chunk_maximum_size_chars": str(self.chunking.maximum_size_chars),
             "app_debug": str(self.app_debug).lower(),
             "vk_bot_token": _presence(self.vk_bot_token),
-            "vk_group_id": str(self.vk_group_id) if self.vk_group_id is not None else "missing",
+            "vk_group_id": (
+                str(self.vk_group_id)
+                if self.vk_group_id is not None
+                else "missing"
+            ),
             "github_app": "configured" if self.github_app is not None else "missing",
             "github_private_key": (
                 "set" if self.github_app is not None else "missing"
+            ),
+            "embedding_base_url": (
+                self.embedding.base_url if self.embedding is not None else "missing"
+            ),
+            "embedding_api_key": (
+                "set" if self.embedding is not None else "missing"
+            ),
+            "embedding_model": (
+                self.embedding.model if self.embedding is not None else "missing"
             ),
         }
 
@@ -133,6 +164,7 @@ def load_config() -> AppConfig:
         vk_bot_token=os.getenv("VK_BOT_TOKEN", ""),
         vk_group_id=_get_optional_int("VK_GROUP_ID"),
         github_app=_load_github_app_config(),
+        embedding=_load_embedding_config(),
     )
 
 
@@ -226,7 +258,9 @@ def _load_github_app_config() -> GitHubAppConfig | None:
     try:
         app_id = int(values["GITHUB_APP_ID"])
     except ValueError as error:
-        raise ConfigError("Environment variable GITHUB_APP_ID must be integer") from error
+        raise ConfigError(
+            "Environment variable GITHUB_APP_ID must be integer"
+        ) from error
     if app_id <= 0:
         raise ConfigError("Environment variable GITHUB_APP_ID must be positive")
 
@@ -239,3 +273,29 @@ def _load_github_app_config() -> GitHubAppConfig | None:
         )
     except ValueError as error:
         raise ConfigError(f"Invalid GitHub App configuration: {error}") from error
+
+
+def _load_embedding_config() -> EmbeddingConfig | None:
+    """Загружает независимую all-or-none группу настроек embeddings."""
+    names = (
+        "EMBEDDING_BASE_URL",
+        "EMBEDDING_API_KEY",
+        "EMBEDDING_MODEL",
+    )
+    values = {name: os.getenv(name, "").strip() for name in names}
+    configured = [name for name, value in values.items() if value]
+    if not configured:
+        return None
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise ConfigError(
+            "Embedding configuration is incomplete; missing: " + ", ".join(missing)
+        )
+    try:
+        return EmbeddingConfig(
+            base_url=values["EMBEDDING_BASE_URL"].rstrip("/"),
+            api_key=values["EMBEDDING_API_KEY"],
+            model=values["EMBEDDING_MODEL"],
+        )
+    except ValueError as error:
+        raise ConfigError(f"Invalid embedding configuration: {error}") from error
