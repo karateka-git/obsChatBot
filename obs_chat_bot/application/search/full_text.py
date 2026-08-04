@@ -28,6 +28,7 @@ class VaultFullTextSearchService:
         vault_id: int,
         query: str,
         limit: int = 10,
+        article_id: int | None = None,
     ) -> tuple[VaultChunkSearchHit, ...]:
         """Выполняет полнотекстовый поиск в одном пользовательском vault.
 
@@ -36,6 +37,7 @@ class VaultFullTextSearchService:
             vault_id: ID активного Obsidian vault.
             query: Обычный текстовый запрос без операторов FTS5.
             limit: Максимальное число результатов от 1 до 100.
+            article_id: Неиспользуемый lexical-ветвью ID общего контракта.
 
         Returns:
             Ранжированные chunks либо пустой tuple для пустого запроса или

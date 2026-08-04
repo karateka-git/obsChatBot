@@ -1,9 +1,11 @@
 """Тесты OpenAI-compatible embedding adapter Этапа 10.4."""
 
 from types import SimpleNamespace
+from decimal import Decimal
 import unittest
 
 from obs_chat_bot.application.search.errors import EmbeddingProviderError
+from obs_chat_bot.application.search.models import EmbeddingCallContext
 from obs_chat_bot.data.embeddings.openai_compatible import (
     OpenAICompatibleEmbeddingProvider,
 )
@@ -173,6 +175,143 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
             "Embedding request failed: RuntimeError",
         )
         self.assertNotIn("private vault text", str(raised.exception))
+
+    def test_logs_scoped_usage_and_estimated_cost_without_input_text(self) -> None:
+        """Успешный SDK response даёт анализируемые usage/cost логи без содержимого."""
+        private_text = "private vault text that must not reach logs"
+        resource = _FakeEmbeddingsResource(
+            responder=lambda _values: SimpleNamespace(
+                data=[SimpleNamespace(index=0, embedding=[1.0, 2.0])],
+                usage=SimpleNamespace(prompt_tokens=100, total_tokens=100),
+                _request_id="request-42",
+            )
+        )
+        provider = OpenAICompatibleEmbeddingProvider(
+            base_url="https://embeddings.example/v1",
+            api_key="secret",
+            document_model="test/doc-model",
+            query_model="test/query-model",
+            price_per_million_tokens=Decimal("3"),
+            price_currency="RUB",
+            tariff_version="2026-08-04",
+            client=SimpleNamespace(embeddings=resource),
+        )
+        context = EmbeddingCallContext(
+            app_user_id=7,
+            vault_id=9,
+            article_id=11,
+            operation_id="operation-42",
+        )
+
+        with self.assertLogs(
+            "obs_chat_bot.data.embeddings.openai_compatible",
+            level="INFO",
+        ) as captured:
+            provider.embed_query(private_text, context=context)
+
+        logs = "\n".join(captured.output)
+        self.assertIn("event=embedding_operation_started", logs)
+        self.assertIn("event=embedding_request_completed", logs)
+        self.assertIn("event=embedding_operation_completed", logs)
+        self.assertIn("operation_id=operation-42", logs)
+        self.assertIn("app_user_id=7 vault_id=9 article_id=11", logs)
+        self.assertIn("input_tokens=100 total_tokens=100", logs)
+        self.assertIn("estimated_cost=0.0003 currency=RUB", logs)
+        self.assertIn("tariff_version=2026-08-04", logs)
+        self.assertIn("request_id=request-42", logs)
+        self.assertNotIn(private_text, logs)
+        self.assertNotIn("secret", logs)
+
+    def test_document_operation_aggregates_usage_across_batches(self) -> None:
+        """Operation completion суммирует usage всех SDK batches один раз."""
+        resource = _FakeEmbeddingsResource(
+            responder=lambda values: SimpleNamespace(
+                data=[
+                    SimpleNamespace(index=index, embedding=[1.0, 2.0])
+                    for index, _text in enumerate(values["input"])
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=10 * len(values["input"]),
+                    total_tokens=10 * len(values["input"]),
+                ),
+            )
+        )
+        provider = OpenAICompatibleEmbeddingProvider(
+            base_url="https://embeddings.example/v1",
+            api_key="secret",
+            document_model="test/doc-model",
+            query_model="test/query-model",
+            batch_size=2,
+            price_per_million_tokens=Decimal("3"),
+            price_currency="RUB",
+            tariff_version="current",
+            client=SimpleNamespace(embeddings=resource),
+        )
+
+        with self.assertLogs(
+            "obs_chat_bot.data.embeddings.openai_compatible",
+            level="INFO",
+        ) as captured:
+            provider.embed_documents(("one", "two", "three"))
+
+        completed = next(
+            line
+            for line in captured.output
+            if "event=embedding_operation_completed" in line
+        )
+        self.assertIn("batches=2 usage_batches=2", completed)
+        self.assertIn("input_tokens=30 total_tokens=30", completed)
+        self.assertIn("estimated_cost=0.00009", completed)
+
+    def test_missing_usage_keeps_cost_unknown(self) -> None:
+        """Provider без usage не ломает запрос и не создаёт вымышленную цену."""
+        provider = _provider(_FakeEmbeddingsResource())
+
+        with self.assertLogs(
+            "obs_chat_bot.data.embeddings.openai_compatible",
+            level="INFO",
+        ) as captured:
+            provider.embed_query("semantic query")
+
+        completed = next(
+            line
+            for line in captured.output
+            if "event=embedding_operation_completed" in line
+        )
+        self.assertIn("usage_batches=0", completed)
+        self.assertIn("input_tokens=none total_tokens=none", completed)
+        self.assertIn("estimated_cost=none", completed)
+
+    def test_failure_logs_types_but_not_provider_detail_or_input(self) -> None:
+        """Финальный сбой остаётся диагностируемым без утечки exception message."""
+        private_text = "private note body"
+        provider_detail = "upstream leaked key api-key-123"
+
+        def fail(_values):
+            error = RuntimeError(provider_detail)
+            error.status_code = 503
+            error.request_id = "failed-request-42"
+            raise error
+
+        provider = _provider(_FakeEmbeddingsResource(responder=fail))
+
+        with self.assertLogs(
+            "obs_chat_bot.data.embeddings.openai_compatible",
+            level="ERROR",
+        ) as captured:
+            with self.assertRaises(EmbeddingProviderError):
+                provider.embed_query(private_text)
+
+        logs = "\n".join(captured.output)
+        self.assertIn("event=embedding_request_failed", logs)
+        self.assertIn("event=embedding_operation_failed", logs)
+        self.assertIn("error_type=RuntimeError", logs)
+        self.assertIn("cause_type=RuntimeError", logs)
+        self.assertIn("sdk_max_retries=2", logs)
+        self.assertIn("http_status=503", logs)
+        self.assertIn("request_id=failed-request-42", logs)
+        self.assertNotIn(private_text, logs)
+        self.assertNotIn(provider_detail, logs)
 
 
 def _provider(

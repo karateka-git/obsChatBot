@@ -93,6 +93,7 @@ class VaultHybridSearchService:
             vault_id=vault_id,
             query=query.lexical_text,
             limit=candidate_limit,
+            article_id=query.article_id,
         )
         _validate_branch_scope(
             lexical_hits,
@@ -105,6 +106,7 @@ class VaultHybridSearchService:
                 vault_id=vault_id,
                 query=query.semantic_text,
                 limit=candidate_limit,
+                article_id=query.article_id,
             )
         except SearchIndexUnavailableError as error:
             return self._build_fallback_result(
@@ -155,9 +157,12 @@ class VaultHybridSearchService:
         """Сохраняет BM25 order и явно маркирует ожидаемый semantic failure."""
         LOGGER.warning(
             "Semantic search unavailable, using FTS fallback: "
-            "app_user_id=%s vault_id=%s reason=%s error_type=%s",
+            "event=embedding_fallback operation_id=%s app_user_id=%s "
+            "vault_id=%s article_id=%s reason=%s error_type=%s",
+            getattr(error, "operation_id", None) or "none",
             query.app_user_id,
             vault_id,
+            query.article_id,
             reason.value,
             type(error).__name__,
         )
@@ -203,6 +208,7 @@ class VaultFtsFallbackSearchService:
             vault_id=vault_id,
             query=query.lexical_text,
             limit=candidate_limit,
+            article_id=query.article_id,
         )
         _validate_branch_scope(
             lexical_hits,

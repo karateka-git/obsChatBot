@@ -104,13 +104,15 @@ class QueryEmbeddingProvider:
         self.values = values
         self.model = model
         self.calls: list[str] = []
+        self.contexts = []
 
-    def embed_query(self, text: str) -> EmbeddingVector:
+    def embed_query(self, text: str, *, context=None) -> EmbeddingVector:
         """Имитирует один оплачиваемый semantic query."""
         self.calls.append(text)
+        self.contexts.append(context)
         return EmbeddingVector(model=self.model, values=self.values)
 
-    def embed_documents(self, texts):
+    def embed_documents(self, texts, *, context=None):
         """Не используется retrieval-сервисом."""
         raise AssertionError(f"Unexpected document embedding call: {texts}")
 
@@ -164,6 +166,8 @@ class VaultVectorSearchServiceTest(unittest.TestCase):
         self.assertAlmostEqual(hits[0].score, 1.0)
         self.assertAlmostEqual(hits[1].score, 0.5)
         self.assertEqual(provider.calls, ["semantic query"])
+        self.assertEqual(provider.contexts[0].app_user_id, 1)
+        self.assertEqual(provider.contexts[0].vault_id, 10)
 
     def test_rejects_stale_profile_before_paid_query(self) -> None:
         """Несовместимый marker не вызывает embedding provider."""
@@ -309,7 +313,10 @@ class VaultHybridSearchServiceTest(unittest.TestCase):
 
     def test_embedding_provider_failure_returns_explicit_fts_fallback(self) -> None:
         """Provider error сохраняет BM25 order и типизированную причину."""
-        error = EmbeddingProviderError("provider unavailable")
+        error = EmbeddingProviderError(
+            "provider unavailable",
+            operation_id="operation-42",
+        )
         chunk = _chunk(1)
         lexical = RecordingSearch((VaultChunkSearchHit(chunk=chunk, score=3.0),))
         vector = RecordingSearch(error=error)
@@ -318,7 +325,11 @@ class VaultHybridSearchServiceTest(unittest.TestCase):
             vector_search=vector,
         )
 
-        result = service.search(query=_query(), vault_id=10)
+        with self.assertLogs(
+            "obs_chat_bot.application.search.hybrid",
+            level="WARNING",
+        ) as captured:
+            result = service.search(query=_query(), vault_id=10)
 
         self.assertIs(result.mode, VaultSearchMode.FTS_FALLBACK)
         self.assertIs(
@@ -331,6 +342,9 @@ class VaultHybridSearchServiceTest(unittest.TestCase):
         self.assertIsNone(result.hits[0].vector_rank)
         self.assertEqual(len(lexical.calls), 1)
         self.assertEqual(len(vector.calls), 1)
+        self.assertIn("event=embedding_fallback", captured.output[0])
+        self.assertIn("operation_id=operation-42", captured.output[0])
+        self.assertIn("article_id=50", captured.output[0])
 
     def test_embedding_index_failure_has_separate_fallback_reason(self) -> None:
         """Stale index отличается от сетевого или provider failure."""

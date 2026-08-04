@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import time
+from dataclasses import dataclass
+from decimal import Decimal
 from numbers import Real
 from typing import Any
+from uuid import uuid4
 
 from obs_chat_bot.application.search.errors import EmbeddingProviderError
+from obs_chat_bot.application.search.models import EmbeddingCallContext
 from obs_chat_bot.application.search.ports import EmbeddingProvider
 from obs_chat_bot.data.embeddings.dtos import EmbeddingResponseItemDto
 from obs_chat_bot.data.embeddings.mappers import embedding_vector_from_dto
@@ -14,6 +20,29 @@ from obs_chat_bot.domain.search.entities import EmbeddingVector
 
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
 DEFAULT_EMBEDDING_TIMEOUT_SECONDS = 30.0
+DEFAULT_EMBEDDING_MAX_RETRIES = 2
+TOKENS_PER_MILLION = Decimal(1_000_000)
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _ResponseTelemetry:
+    """Содержит безопасные provider metadata одного успешного response."""
+
+    input_tokens: int | None
+    total_tokens: int | None
+    request_id: str | None
+
+
+@dataclass(slots=True)
+class _OperationTotals:
+    """Накапливает usage и latency batches одной embedding-операции."""
+
+    batches: int = 0
+    input_tokens: int = 0
+    total_tokens: int = 0
+    usage_batches: int = 0
+    latency_seconds: float = 0.0
 
 
 class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
@@ -26,6 +55,10 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         query_model: ID совместимой модели для поисковых запросов.
         batch_size: Максимальное число текстов в одном HTTP-запросе.
         timeout_seconds: Timeout одного запроса в секундах.
+        max_retries: Число встроенных повторов SDK после первой попытки.
+        price_per_million_tokens: Optional цена миллиона входных токенов.
+        price_currency: Валюта оценочной цены либо `None` без тарифа.
+        tariff_version: Версия тарифа либо `None` без тарифа.
         client: Необязательный готовый SDK-клиент для тестов.
 
     Raises:
@@ -41,6 +74,10 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         query_model: str,
         batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
         timeout_seconds: float = DEFAULT_EMBEDDING_TIMEOUT_SECONDS,
+        max_retries: int = DEFAULT_EMBEDDING_MAX_RETRIES,
+        price_per_million_tokens: Decimal | None = None,
+        price_currency: str | None = None,
+        tariff_version: str | None = None,
         client: Any | None = None,
     ) -> None:
         if not base_url.strip():
@@ -55,12 +92,23 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             raise ValueError("batch_size must be positive")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if max_retries < 0:
+            raise ValueError("max_retries must not be negative")
+        _validate_pricing(
+            price_per_million_tokens=price_per_million_tokens,
+            price_currency=price_currency,
+            tariff_version=tariff_version,
+        )
         self._base_url = base_url.strip().rstrip("/")
         self._api_key = api_key
         self._document_model = document_model.strip()
         self._query_model = query_model.strip()
         self._batch_size = batch_size
         self._timeout_seconds = timeout_seconds
+        self._max_retries = max_retries
+        self._price_per_million_tokens = price_per_million_tokens
+        self._price_currency = price_currency
+        self._tariff_version = tariff_version
         self._client = client
         self._known_dimension: int | None = None
 
@@ -77,6 +125,8 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
     def embed_documents(
         self,
         texts: tuple[str, ...],
+        *,
+        context: EmbeddingCallContext | None = None,
     ) -> tuple[EmbeddingVector, ...]:
         """Векторизует corpus chunks пакетами, сохраняя исходный порядок.
 
@@ -95,20 +145,75 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             return ()
         vectors: list[EmbeddingVector] = []
         expected_dimension: int | None = None
-        for start in range(0, len(texts), self._batch_size):
-            batch = texts[start : start + self._batch_size]
-            batch_vectors = self._request(batch, model=self._document_model)
-            for vector in batch_vectors:
-                if expected_dimension is None:
-                    expected_dimension = vector.dimension
-                elif vector.dimension != expected_dimension:
-                    raise EmbeddingProviderError(
-                        "Embedding response contains inconsistent dimensions"
-                    )
-            vectors.extend(batch_vectors)
+        operation_id = _operation_id(context)
+        batch_count = (len(texts) + self._batch_size - 1) // self._batch_size
+        totals = _OperationTotals()
+        operation_started_at = time.monotonic()
+        self._log_operation_started(
+            operation_id=operation_id,
+            operation="documents",
+            context=context,
+            model=self._document_model,
+            text_count=len(texts),
+            batch_count=batch_count,
+            input_chars=sum(len(text) for text in texts),
+        )
+        try:
+            for batch_index, start in enumerate(
+                range(0, len(texts), self._batch_size),
+                start=1,
+            ):
+                batch = texts[start : start + self._batch_size]
+                batch_vectors, telemetry, latency = self._request(
+                    batch,
+                    model=self._document_model,
+                    operation="documents",
+                    operation_id=operation_id,
+                    context=context,
+                    batch_index=batch_index,
+                    batch_count=batch_count,
+                )
+                _add_telemetry(totals, telemetry=telemetry, latency=latency)
+                for vector in batch_vectors:
+                    if expected_dimension is None:
+                        expected_dimension = vector.dimension
+                    elif vector.dimension != expected_dimension:
+                        raise EmbeddingProviderError(
+                            "Embedding response contains inconsistent dimensions"
+                        )
+                vectors.extend(batch_vectors)
+        except Exception as error:
+            if isinstance(error, EmbeddingProviderError):
+                error.operation_id = operation_id
+            self._log_operation_failed(
+                operation_id=operation_id,
+                operation="documents",
+                context=context,
+                model=self._document_model,
+                text_count=len(texts),
+                totals=totals,
+                duration=time.monotonic() - operation_started_at,
+                error=error,
+            )
+            raise
+        self._log_operation_completed(
+            operation_id=operation_id,
+            operation="documents",
+            context=context,
+            model=self._document_model,
+            text_count=len(texts),
+            totals=totals,
+            dimension=expected_dimension,
+            duration=time.monotonic() - operation_started_at,
+        )
         return tuple(vectors)
 
-    def embed_query(self, text: str) -> EmbeddingVector:
+    def embed_query(
+        self,
+        text: str,
+        *,
+        context: EmbeddingCallContext | None = None,
+    ) -> EmbeddingVector:
         """Векторизует один поисковый запрос совместимой моделью.
 
         Args:
@@ -122,27 +227,95 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             EmbeddingProviderError: Если provider недоступен или ответ неверен.
         """
         _validate_texts((text,))
-        return self._request((text,), model=self._query_model)[0]
+        operation_id = _operation_id(context)
+        started_at = time.monotonic()
+        totals = _OperationTotals()
+        self._log_operation_started(
+            operation_id=operation_id,
+            operation="query",
+            context=context,
+            model=self._query_model,
+            text_count=1,
+            batch_count=1,
+            input_chars=len(text),
+        )
+        try:
+            vectors, telemetry, latency = self._request(
+                (text,),
+                model=self._query_model,
+                operation="query",
+                operation_id=operation_id,
+                context=context,
+                batch_index=1,
+                batch_count=1,
+            )
+            _add_telemetry(totals, telemetry=telemetry, latency=latency)
+        except Exception as error:
+            if isinstance(error, EmbeddingProviderError):
+                error.operation_id = operation_id
+            self._log_operation_failed(
+                operation_id=operation_id,
+                operation="query",
+                context=context,
+                model=self._query_model,
+                text_count=1,
+                totals=totals,
+                duration=time.monotonic() - started_at,
+                error=error,
+            )
+            raise
+        vector = vectors[0]
+        self._log_operation_completed(
+            operation_id=operation_id,
+            operation="query",
+            context=context,
+            model=self._query_model,
+            text_count=1,
+            totals=totals,
+            dimension=vector.dimension,
+            duration=time.monotonic() - started_at,
+        )
+        return vector
 
     def _request(
         self,
         texts: tuple[str, ...],
         *,
         model: str,
-    ) -> tuple[EmbeddingVector, ...]:
+        operation: str,
+        operation_id: str,
+        context: EmbeddingCallContext | None,
+        batch_index: int,
+        batch_count: int,
+    ) -> tuple[tuple[EmbeddingVector, ...], _ResponseTelemetry, float]:
         """Выполняет один HTTP-запрос и проверяет порядок response items."""
+        started_at = time.monotonic()
         try:
             response = self._get_client().embeddings.create(
                 model=model,
                 input=list(texts),
                 encoding_format="float",
             )
-        except EmbeddingProviderError:
-            raise
         except Exception as error:
+            latency = time.monotonic() - started_at
+            self._log_request_failed(
+                operation_id=operation_id,
+                operation=operation,
+                context=context,
+                model=model,
+                batch_index=batch_index,
+                batch_count=batch_count,
+                batch_size=len(texts),
+                input_chars=sum(len(text) for text in texts),
+                latency=latency,
+                error=error,
+            )
             raise EmbeddingProviderError(
-                f"Embedding request failed: {type(error).__name__}"
+                f"Embedding request failed: {type(error).__name__}",
+                operation_id=operation_id,
             ) from error
+        latency = time.monotonic() - started_at
+        telemetry = _response_telemetry(response)
         try:
             items = _response_items(response)
             if len(items) != len(texts):
@@ -154,11 +327,219 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
                 embedding_vector_from_dto(item, model=model) for item in ordered
             )
             self._validate_compatible_dimension(vectors)
-            return vectors
-        except (AttributeError, TypeError, ValueError) as error:
+            self._log_request_completed(
+                operation_id=operation_id,
+                operation=operation,
+                context=context,
+                model=model,
+                batch_index=batch_index,
+                batch_count=batch_count,
+                batch_size=len(texts),
+                input_chars=sum(len(text) for text in texts),
+                vectors=vectors,
+                telemetry=telemetry,
+                latency=latency,
+            )
+            return vectors, telemetry, latency
+        except (
+            AttributeError,
+            TypeError,
+            ValueError,
+            EmbeddingProviderError,
+        ) as error:
+            self._log_request_failed(
+                operation_id=operation_id,
+                operation=operation,
+                context=context,
+                model=model,
+                batch_index=batch_index,
+                batch_count=batch_count,
+                batch_size=len(texts),
+                input_chars=sum(len(text) for text in texts),
+                latency=latency,
+                error=error,
+                status="invalid_response",
+                telemetry=telemetry,
+            )
+            if isinstance(error, EmbeddingProviderError):
+                error.operation_id = operation_id
+                raise
             raise EmbeddingProviderError(
-                "Embedding response has unexpected format"
+                "Embedding response has unexpected format",
+                operation_id=operation_id,
             ) from error
+
+    def _log_operation_started(self, **values: Any) -> None:
+        """Логирует безопасное начало логической embedding-операции."""
+        batch_count = values.pop("batch_count")
+        input_chars = values.pop("input_chars")
+        LOGGER.info(
+            "Embedding operation started: event=embedding_operation_started %s "
+            "batch_count=%s input_chars=%s status=started",
+            self._operation_fields(**values),
+            batch_count,
+            input_chars,
+        )
+
+    def _log_operation_completed(
+        self,
+        *,
+        totals: _OperationTotals,
+        dimension: int | None,
+        duration: float,
+        **values: Any,
+    ) -> None:
+        """Логирует итоговые usage, latency и оценочную стоимость операции."""
+        LOGGER.info(
+            "Embedding operation completed: event=embedding_operation_completed "
+            "%s batches=%s usage_batches=%s input_tokens=%s total_tokens=%s "
+            "dimension=%s duration_seconds=%.3f estimated_cost=%s currency=%s "
+            "tariff_version=%s sdk_latency_seconds=%.3f errors=0 status=success",
+            self._operation_fields(**values),
+            totals.batches,
+            totals.usage_batches,
+            totals.input_tokens if totals.usage_batches else "none",
+            totals.total_tokens if totals.usage_batches else "none",
+            dimension if dimension is not None else "none",
+            duration,
+            self._estimated_cost(totals.input_tokens, totals.usage_batches),
+            self._price_currency or "none",
+            self._tariff_version or "none",
+            totals.latency_seconds,
+        )
+
+    def _log_operation_failed(
+        self,
+        *,
+        totals: _OperationTotals,
+        duration: float,
+        error: Exception,
+        **values: Any,
+    ) -> None:
+        """Логирует окончательный тип ошибки без текста запроса и exception."""
+        LOGGER.error(
+            "Embedding operation failed: event=embedding_operation_failed %s "
+            "completed_batches=%s duration_seconds=%.3f status=failed "
+            "sdk_latency_seconds=%.3f usage_batches=%s input_tokens=%s "
+            "total_tokens=%s estimated_cost=%s currency=%s tariff_version=%s "
+            "errors=1 error_type=%s cause_type=%s",
+            self._operation_fields(**values),
+            totals.batches,
+            duration,
+            totals.latency_seconds,
+            totals.usage_batches,
+            totals.input_tokens if totals.usage_batches else "none",
+            totals.total_tokens if totals.usage_batches else "none",
+            self._estimated_cost(totals.input_tokens, totals.usage_batches),
+            self._price_currency or "none",
+            self._tariff_version or "none",
+            type(error).__name__,
+            _root_cause_type(error),
+        )
+
+    def _log_request_completed(
+        self,
+        *,
+        vectors: tuple[EmbeddingVector, ...],
+        telemetry: _ResponseTelemetry,
+        latency: float,
+        **values: Any,
+    ) -> None:
+        """Логирует один успешный SDK batch без исходных данных."""
+        LOGGER.info(
+            "Embedding request completed: event=embedding_request_completed %s "
+            "dimension=%s input_tokens=%s total_tokens=%s request_id=%s "
+            "latency_seconds=%.3f estimated_cost=%s currency=%s "
+            "tariff_version=%s status=success",
+            self._request_fields(**values),
+            vectors[0].dimension,
+            telemetry.input_tokens if telemetry.input_tokens is not None else "none",
+            telemetry.total_tokens if telemetry.total_tokens is not None else "none",
+            telemetry.request_id or "none",
+            latency,
+            self._estimated_cost(telemetry.input_tokens, 1),
+            self._price_currency or "none",
+            self._tariff_version or "none",
+        )
+
+    def _log_request_failed(
+        self,
+        *,
+        latency: float,
+        error: Exception,
+        status: str = "failed",
+        telemetry: _ResponseTelemetry | None = None,
+        **values: Any,
+    ) -> None:
+        """Логирует финальный batch failure после внутренних retries SDK."""
+        LOGGER.error(
+            "Embedding request failed: event=embedding_request_failed %s "
+            "latency_seconds=%.3f status=%s http_status=%s request_id=%s "
+            "error_type=%s cause_type=%s sdk_max_retries=%s",
+            self._request_fields(**values),
+            latency,
+            status,
+            getattr(error, "status_code", None) or "none",
+            (
+                telemetry.request_id
+                if telemetry is not None and telemetry.request_id is not None
+                else getattr(error, "request_id", None) or "none"
+            ),
+            type(error).__name__,
+            _root_cause_type(error),
+            self._max_retries,
+        )
+
+    def _operation_fields(
+        self,
+        *,
+        operation_id: str,
+        operation: str,
+        context: EmbeddingCallContext | None,
+        model: str,
+        text_count: int,
+        **values: Any,
+    ) -> str:
+        """Формирует общие стабильные поля одной операции."""
+        return (
+            f"operation_id={operation_id} operation={operation} "
+            f"app_user_id={_context_value(context, 'app_user_id')} "
+            f"vault_id={_context_value(context, 'vault_id')} "
+            f"article_id={_context_value(context, 'article_id')} "
+            f"provider=openai_compatible model={model} text_count={text_count} "
+            f"sdk_max_retries={self._max_retries}"
+        )
+
+    def _request_fields(self, **values: Any) -> str:
+        """Добавляет к operation scope безопасные batch counters."""
+        batch_index = values.pop("batch_index")
+        batch_count = values.pop("batch_count")
+        batch_size = values.pop("batch_size")
+        input_chars = values.pop("input_chars")
+        return (
+            f"{self._operation_fields(text_count=batch_size, **values)} "
+            f"batch_index={batch_index} batch_count={batch_count} "
+            f"batch_size={batch_size} input_chars={input_chars}"
+        )
+
+    def _estimated_cost(
+        self,
+        input_tokens: int | None,
+        usage_batches: int,
+    ) -> str:
+        """Возвращает оценку по входным токенам либо `none` без usage/тарифа."""
+        if (
+            input_tokens is None
+            or usage_batches <= 0
+            or self._price_per_million_tokens is None
+        ):
+            return "none"
+        cost = (
+            Decimal(input_tokens)
+            * self._price_per_million_tokens
+            / TOKENS_PER_MILLION
+        )
+        return format(cost.normalize(), "f")
 
     def _validate_compatible_dimension(
         self,
@@ -191,7 +572,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
                 base_url=self._base_url,
                 api_key=self._api_key,
                 timeout=self._timeout_seconds,
-                max_retries=2,
+                max_retries=self._max_retries,
             )
         return self._client
 
@@ -200,6 +581,111 @@ def _validate_texts(texts: tuple[str, ...]) -> None:
     """Не допускает запросов с пустыми или нестроковыми элементами."""
     if any(not isinstance(text, str) or not text.strip() for text in texts):
         raise ValueError("embedding texts must contain only non-empty strings")
+
+
+def _validate_pricing(
+    *,
+    price_per_million_tokens: Decimal | None,
+    price_currency: str | None,
+    tariff_version: str | None,
+) -> None:
+    """Проверяет optional all-or-none тариф без привязки adapter к валюте."""
+    values = (price_per_million_tokens, price_currency, tariff_version)
+    if all(value is None for value in values):
+        return
+    if any(value is None for value in values):
+        raise ValueError("embedding pricing must be configured as one complete group")
+    if (
+        price_per_million_tokens is None
+        or not price_per_million_tokens.is_finite()
+        or price_per_million_tokens < 0
+    ):
+        raise ValueError("price_per_million_tokens must be finite and not negative")
+    if (
+        price_currency is None
+        or len(price_currency) != 3
+        or not price_currency.isalpha()
+        or price_currency != price_currency.upper()
+    ):
+        raise ValueError("price_currency must contain three uppercase letters")
+    if tariff_version is None or not tariff_version.strip():
+        raise ValueError("tariff_version must not be empty")
+
+
+def _operation_id(context: EmbeddingCallContext | None) -> str:
+    """Возвращает correlation ID caller либо создаёт локальный ID adapter."""
+    return context.operation_id if context is not None else uuid4().hex
+
+
+def _add_telemetry(
+    totals: _OperationTotals,
+    *,
+    telemetry: _ResponseTelemetry,
+    latency: float,
+) -> None:
+    """Добавляет метрики завершённого SDK batch в итог логической операции."""
+    totals.batches += 1
+    totals.latency_seconds += latency
+    if telemetry.input_tokens is None and telemetry.total_tokens is None:
+        return
+    totals.usage_batches += 1
+    totals.input_tokens += telemetry.input_tokens or 0
+    totals.total_tokens += telemetry.total_tokens or 0
+
+
+def _response_telemetry(response: Any) -> _ResponseTelemetry:
+    """Безопасно извлекает usage и request ID из разных SDK-подобных ответов."""
+    usage = getattr(response, "usage", None)
+    input_tokens = _non_negative_int(
+        getattr(usage, "prompt_tokens", None)
+        if usage is not None
+        else None
+    )
+    if input_tokens is None and usage is not None:
+        input_tokens = _non_negative_int(getattr(usage, "input_tokens", None))
+    total_tokens = _non_negative_int(
+        getattr(usage, "total_tokens", None)
+        if usage is not None
+        else None
+    )
+    request_id = getattr(response, "_request_id", None)
+    if not isinstance(request_id, str) or not request_id.strip():
+        request_id = getattr(response, "request_id", None)
+    if not isinstance(request_id, str) or not request_id.strip():
+        request_id = None
+    return _ResponseTelemetry(
+        input_tokens=input_tokens,
+        total_tokens=total_tokens,
+        request_id=request_id,
+    )
+
+
+def _non_negative_int(value: Any) -> int | None:
+    """Принимает только целочисленное неотрицательное usage-значение."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _context_value(
+    context: EmbeddingCallContext | None,
+    attribute: str,
+) -> int | str:
+    """Возвращает безопасный scope field либо `none` без контекста caller."""
+    if context is None:
+        return "none"
+    value = getattr(context, attribute)
+    return value if value is not None else "none"
+
+
+def _root_cause_type(error: BaseException) -> str:
+    """Возвращает только тип глубинной причины, не раскрывая её сообщение."""
+    current = error
+    visited: set[int] = set()
+    while current.__cause__ is not None and id(current) not in visited:
+        visited.add(id(current))
+        current = current.__cause__
+    return type(current).__name__
 
 
 def _response_items(response: Any) -> tuple[EmbeddingResponseItemDto, ...]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from uuid import uuid4
 
 from obs_chat_bot.domain.search.entities import (
     ArticleSearchQuery,
@@ -13,6 +14,31 @@ from obs_chat_bot.domain.search.statuses import (
     VaultSearchFallbackReason,
     VaultSearchMode,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingCallContext:
+    """Связывает технические логи embedding-вызова с application scope.
+
+    Контекст не содержит исходный текст, query, API key или vector values и не
+    является частью domain-модели embedding. Один `operation_id` объединяет все
+    batches одного вызова `embed_documents` либо один `embed_query`.
+    """
+
+    app_user_id: int
+    vault_id: int
+    article_id: int | None = None
+    operation_id: str = ""
+
+    def __post_init__(self) -> None:
+        if min(self.app_user_id, self.vault_id) <= 0:
+            raise ValueError("embedding context IDs must be positive")
+        if self.article_id is not None and self.article_id <= 0:
+            raise ValueError("article_id must be positive when present")
+        if not self.operation_id:
+            object.__setattr__(self, "operation_id", uuid4().hex)
+        elif not self.operation_id.strip():
+            raise ValueError("operation_id must not be blank")
 
 
 @dataclass(frozen=True, slots=True)

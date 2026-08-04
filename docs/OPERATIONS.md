@@ -111,6 +111,36 @@ APP_DEBUG=true
 APP_DEBUG=false
 ```
 
+## Диагностика embeddings
+
+Embedding-события используют тот же стандартный Python `logging`, что и весь
+проект, и попадают в stdout/stderr контейнеров. Docker собирает этот поток;
+отдельной telemetry-БД или специального embedding logger нет.
+
+Посмотреть события обоих каналов:
+
+```powershell
+docker compose logs tg_catcher vk_catcher | Select-String "event=embedding_"
+```
+
+Только окончательные сбои и переходы на FTS fallback:
+
+```powershell
+docker compose logs tg_catcher vk_catcher |
+  Select-String "event=embedding_operation_failed|event=embedding_fallback"
+```
+
+`operation_id` связывает начало, SDK batches, итог операции и последующий
+fallback. Поля `app_user_id`, `vault_id` и `article_id` позволяют найти
+конкретный workflow. Для массовой индексации итоговое событие содержит число
+batches/texts, usage, latency, errors и оценочную стоимость.
+
+OpenAI SDK сохраняет штатный `max_retries=2`: один логический SDK-вызов может
+сделать до трёх HTTP-попыток. Adapter видит и логирует их общую длительность и
+окончательный результат, но не выдумывает недоступные ему детали каждой
+внутренней попытки. `response.usage` и provider request ID выводятся только при
+наличии. API keys, тексты chunks, compact query и vector values не логируются.
+
 Если бот отвечает ошибкой, посмотреть последние диагностические записи:
 
 ```powershell

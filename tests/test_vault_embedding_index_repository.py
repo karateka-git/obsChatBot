@@ -61,14 +61,18 @@ class RecordingEmbeddingProvider:
         self.query_model = query_model
         self.fail = fail
         self.document_calls: list[tuple[str, ...]] = []
+        self.document_contexts = []
         self.query_calls: list[str] = []
 
     def embed_documents(
         self,
         texts: tuple[str, ...],
+        *,
+        context=None,
     ) -> tuple[EmbeddingVector, ...]:
         """Возвращает трёхмерные vectors с координатой по длине текста."""
         self.document_calls.append(texts)
+        self.document_contexts.append(context)
         if self.fail:
             raise EmbeddingProviderError("provider unavailable")
         return tuple(
@@ -79,7 +83,7 @@ class RecordingEmbeddingProvider:
             for text in texts
         )
 
-    def embed_query(self, text: str) -> EmbeddingVector:
+    def embed_query(self, text: str, *, context=None) -> EmbeddingVector:
         """Возвращает совместимый тестовый query vector."""
         self.query_calls.append(text)
         return EmbeddingVector(model=self.query_model, values=(1.0, 0.25, -0.5))
@@ -112,6 +116,8 @@ class VaultEmbeddingIndexRepositoryTest(unittest.TestCase):
             ).fetchone()
             self.assertEqual(update.embedded, len(saved))
             self.assertEqual(len(provider.document_calls), 1)
+            self.assertEqual(provider.document_contexts[0].app_user_id, 1)
+            self.assertEqual(provider.document_contexts[0].vault_id, vault.id)
             self.assertEqual(state.document_model, "doc-model")
             self.assertEqual(state.query_model, "query-model")
             self.assertEqual(state.dimension, 3)

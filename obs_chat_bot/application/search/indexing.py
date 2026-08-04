@@ -5,6 +5,7 @@ from __future__ import annotations
 from obs_chat_bot.application.search.errors import EmbeddingProviderError
 from obs_chat_bot.application.search.models import (
     ChunkIndexUpdate,
+    EmbeddingCallContext,
     EmbeddingIndexUpdate,
     VaultChunkEmbeddingDraft,
 )
@@ -258,7 +259,11 @@ class VaultEmbeddingIndexer:
         if not chunks:
             return (), None
         vectors = self._provider.embed_documents(
-            tuple(chunk.text for chunk in chunks)
+            tuple(chunk.text for chunk in chunks),
+            context=EmbeddingCallContext(
+                app_user_id=chunks[0].app_user_id,
+                vault_id=chunks[0].vault_id,
+            ),
         )
         if len(vectors) != len(chunks):
             raise EmbeddingProviderError(

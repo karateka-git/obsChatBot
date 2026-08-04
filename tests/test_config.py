@@ -153,6 +153,47 @@ class ConfigTest(unittest.TestCase):
 
         self.assertIsNone(config.embedding)
 
+    def test_load_config_reads_complete_embedding_pricing_group(self) -> None:
+        """Тариф загружается только целиком и безопасно виден в summary."""
+        with patch.dict(
+            os.environ,
+            _env(
+                EMBEDDING_BASE_URL="https://api.timeweb.ai/v1",
+                EMBEDDING_API_KEY="embedding-secret",
+                EMBEDDING_DOCUMENT_MODEL="openai/text-embedding-3-large",
+                EMBEDDING_QUERY_MODEL="openai/text-embedding-3-large",
+                EMBEDDING_PRICE_PER_MILLION_TOKENS="3.25",
+                EMBEDDING_PRICE_CURRENCY="RUB",
+                EMBEDDING_TARIFF_VERSION="2026-08-04",
+            ),
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertEqual(str(config.embedding.price_per_million_tokens), "3.25")
+        self.assertEqual(config.embedding.price_currency, "RUB")
+        self.assertEqual(config.embedding.tariff_version, "2026-08-04")
+        self.assertEqual(
+            config.safe_summary()["embedding_price_per_million_tokens"],
+            "3.25",
+        )
+
+    def test_load_config_rejects_partial_embedding_pricing_group(self) -> None:
+        """Одна цена без валюты и версии тарифа не создаёт ложную оценку cost."""
+        with patch.dict(
+            os.environ,
+            _env(
+                EMBEDDING_BASE_URL="https://api.timeweb.ai/v1",
+                EMBEDDING_API_KEY="embedding-secret",
+                EMBEDDING_DOCUMENT_MODEL="openai/text-embedding-3-large",
+                EMBEDDING_QUERY_MODEL="openai/text-embedding-3-large",
+                EMBEDDING_PRICE_PER_MILLION_TOKENS="3.25",
+            ),
+            clear=True,
+        ):
+            with self.assertRaises(ConfigError):
+                load_config()
+
     def test_load_config_rejects_partial_embedding_group(self) -> None:
         """Ключ без URL и model не создаёт неоднозначный runtime."""
         with patch.dict(
@@ -192,6 +233,9 @@ def _env(**overrides: str) -> dict[str, str]:
         "EMBEDDING_API_KEY": "",
         "EMBEDDING_DOCUMENT_MODEL": "",
         "EMBEDDING_QUERY_MODEL": "",
+        "EMBEDDING_PRICE_PER_MILLION_TOKENS": "",
+        "EMBEDDING_PRICE_CURRENCY": "",
+        "EMBEDDING_TARIFF_VERSION": "",
     }
     values.update(overrides)
     return values

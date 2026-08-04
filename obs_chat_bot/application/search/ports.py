@@ -6,6 +6,7 @@ from typing import Protocol
 
 from obs_chat_bot.application.search.models import (
     ChunkIndexUpdate,
+    EmbeddingCallContext,
     VaultChunkEmbeddingDraft,
     VaultNoteChunkDraft,
 )
@@ -148,6 +149,7 @@ class VaultChunkSearch(Protocol):
         vault_id: int,
         query: str,
         limit: int = 10,
+        article_id: int | None = None,
     ) -> tuple[VaultChunkSearchHit, ...]:
         """Возвращает chunks в порядке убывания релевантности ветви."""
 
@@ -166,11 +168,14 @@ class EmbeddingProvider(Protocol):
     def embed_documents(
         self,
         texts: tuple[str, ...],
+        *,
+        context: EmbeddingCallContext | None = None,
     ) -> tuple[EmbeddingVector, ...]:
         """Векторизует corpus chunks, сохраняя порядок входных текстов.
 
         Args:
             texts: Непустые тексты документов; пустой tuple разрешён.
+            context: Безопасный application scope для корреляции логов.
 
         Returns:
             Векторы той же длины и в том же порядке, что `texts`.
@@ -180,11 +185,17 @@ class EmbeddingProvider(Protocol):
             EmbeddingProviderError: Если provider недоступен или ответ неверен.
         """
 
-    def embed_query(self, text: str) -> EmbeddingVector:
+    def embed_query(
+        self,
+        text: str,
+        *,
+        context: EmbeddingCallContext | None = None,
+    ) -> EmbeddingVector:
         """Векторизует поисковый запрос в совместимое пространство.
 
         Args:
             text: Непустой текст поискового запроса.
+            context: Безопасный application scope для корреляции логов.
 
         Returns:
             Вектор той же модели, что используется для документов.

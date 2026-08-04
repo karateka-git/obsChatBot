@@ -9,6 +9,7 @@ from obs_chat_bot.application.search.errors import (
     SearchIndexCorruptedError,
     SearchIndexUnavailableError,
 )
+from obs_chat_bot.application.search.models import EmbeddingCallContext
 from obs_chat_bot.application.search.ports import (
     EmbeddingProvider,
     VaultChunkIndexRepository,
@@ -46,6 +47,7 @@ class VaultVectorSearchService:
         vault_id: int,
         query: str,
         limit: int = 10,
+        article_id: int | None = None,
     ) -> tuple[VaultChunkSearchHit, ...]:
         """Векторизует query и возвращает ближайшие chunks.
 
@@ -54,6 +56,7 @@ class VaultVectorSearchService:
             vault_id: ID активного vault пользователя.
             query: Непустой compact semantic query Этапа 10.6.
             limit: Максимальное число результатов от 1 до 100.
+            article_id: ID статьи для безопасной корреляции embedding-логов.
 
         Returns:
             Chunks с нормализованным cosine score от нуля до единицы.
@@ -78,7 +81,14 @@ class VaultVectorSearchService:
         )
         if not chunks:
             return ()
-        query_vector = self._embedding_provider.embed_query(query)
+        query_vector = self._embedding_provider.embed_query(
+            query,
+            context=EmbeddingCallContext(
+                app_user_id=app_user_id,
+                vault_id=vault_id,
+                article_id=article_id,
+            ),
+        )
         self._validate_query_vector(query_vector, dimension=dimension)
         chunk_by_id = {chunk.id: chunk for chunk in chunks}
         hits = [

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 try:
@@ -81,6 +82,9 @@ class EmbeddingConfig:
     api_key: str
     document_model: str
     query_model: str
+    price_per_million_tokens: Decimal | None = None
+    price_currency: str | None = None
+    tariff_version: str | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url.strip():
@@ -91,6 +95,31 @@ class EmbeddingConfig:
             raise ValueError("document_model must not be empty")
         if not self.query_model.strip():
             raise ValueError("query_model must not be empty")
+        pricing = (
+            self.price_per_million_tokens,
+            self.price_currency,
+            self.tariff_version,
+        )
+        if all(value is None for value in pricing):
+            return
+        if any(value is None for value in pricing):
+            raise ValueError(
+                "embedding pricing must be configured as one complete group"
+            )
+        if (
+            self.price_per_million_tokens is None
+            or not self.price_per_million_tokens.is_finite()
+            or self.price_per_million_tokens < 0
+        ):
+            raise ValueError(
+                "price_per_million_tokens must be finite and not negative"
+            )
+        if self.price_currency is None or re.fullmatch(
+            r"[A-Z]{3}", self.price_currency
+        ) is None:
+            raise ValueError("price_currency must contain three uppercase letters")
+        if self.tariff_version is None or not self.tariff_version.strip():
+            raise ValueError("tariff_version must not be empty")
 
 
 @dataclass(frozen=True)
@@ -148,6 +177,24 @@ class AppConfig:
             "embedding_query_model": (
                 self.embedding.query_model
                 if self.embedding is not None
+                else "missing"
+            ),
+            "embedding_price_per_million_tokens": (
+                str(self.embedding.price_per_million_tokens)
+                if self.embedding is not None
+                and self.embedding.price_per_million_tokens is not None
+                else "missing"
+            ),
+            "embedding_price_currency": (
+                self.embedding.price_currency
+                if self.embedding is not None
+                and self.embedding.price_currency is not None
+                else "missing"
+            ),
+            "embedding_tariff_version": (
+                self.embedding.tariff_version
+                if self.embedding is not None
+                and self.embedding.tariff_version is not None
                 else "missing"
             ),
         }
@@ -287,27 +334,57 @@ def _load_github_app_config() -> GitHubAppConfig | None:
 
 def _load_embedding_config() -> EmbeddingConfig | None:
     """Загружает независимую all-or-none группу настроек embeddings."""
-    names = (
+    provider_names = (
         "EMBEDDING_BASE_URL",
         "EMBEDDING_API_KEY",
         "EMBEDDING_DOCUMENT_MODEL",
         "EMBEDDING_QUERY_MODEL",
     )
+    pricing_names = (
+        "EMBEDDING_PRICE_PER_MILLION_TOKENS",
+        "EMBEDDING_PRICE_CURRENCY",
+        "EMBEDDING_TARIFF_VERSION",
+    )
+    names = provider_names + pricing_names
     values = {name: os.getenv(name, "").strip() for name in names}
     configured = [name for name, value in values.items() if value]
     if not configured:
         return None
-    missing = [name for name, value in values.items() if not value]
-    if missing:
+    provider_missing = [name for name in provider_names if not values[name]]
+    if provider_missing:
         raise ConfigError(
-            "Embedding configuration is incomplete; missing: " + ", ".join(missing)
+            "Embedding configuration is incomplete; missing: "
+            + ", ".join(provider_missing)
         )
+    configured_pricing = [name for name in pricing_names if values[name]]
+    if configured_pricing and len(configured_pricing) != len(pricing_names):
+        pricing_missing = [name for name in pricing_names if not values[name]]
+        raise ConfigError(
+            "Embedding pricing configuration is incomplete; missing: "
+            + ", ".join(pricing_missing)
+        )
+    price: Decimal | None = None
+    if configured_pricing:
+        try:
+            price = Decimal(values["EMBEDDING_PRICE_PER_MILLION_TOKENS"])
+        except InvalidOperation as error:
+            raise ConfigError(
+                "Environment variable EMBEDDING_PRICE_PER_MILLION_TOKENS "
+                "must be decimal"
+            ) from error
     try:
         return EmbeddingConfig(
             base_url=values["EMBEDDING_BASE_URL"].rstrip("/"),
             api_key=values["EMBEDDING_API_KEY"],
             document_model=values["EMBEDDING_DOCUMENT_MODEL"],
             query_model=values["EMBEDDING_QUERY_MODEL"],
+            price_per_million_tokens=price,
+            price_currency=(
+                values["EMBEDDING_PRICE_CURRENCY"] if configured_pricing else None
+            ),
+            tariff_version=(
+                values["EMBEDDING_TARIFF_VERSION"] if configured_pricing else None
+            ),
         )
     except ValueError as error:
         raise ConfigError(f"Invalid embedding configuration: {error}") from error

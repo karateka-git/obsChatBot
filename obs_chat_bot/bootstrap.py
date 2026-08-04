@@ -161,6 +161,9 @@ def create_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
         api_key=config.api_key,
         document_model=config.document_model,
         query_model=config.query_model,
+        price_per_million_tokens=config.price_per_million_tokens,
+        price_currency=config.price_currency,
+        tariff_version=config.tariff_version,
     )
 
 

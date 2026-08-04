@@ -714,3 +714,32 @@
   безопасность пути и optimistic concurrency.
 - Любой канал получает одинаковое безопасное поведение ошибки, но stack trace и
   исходный error type остаются доступными в логах и SQLite-диагностике.
+
+## 2026-08-04. Единый logging-контур usage и стоимости embeddings
+
+Решение:
+
+- Использовать существующий стандартный Python `logging` и console stream
+  контейнеров, не вводить отдельные `EmbeddingTelemetryObserver` или
+  `StructuredLoggingEmbeddingObserver`.
+- Передавать через application port только безопасный `EmbeddingCallContext` с
+  `operation_id`, `app_user_id`, vault ID и необязательным article ID. Usage,
+  billing и logging metadata не входят в domain `EmbeddingVector`.
+- Писать стабильные `event=embedding_*` и `key=value` поля для начала операции,
+  каждого окончательного SDK batch, итоговой сводки и FTS fallback. Не писать
+  API keys, исходные тексты, compact query и vector values.
+- Сохранять штатные retries OpenAI SDK с `max_retries=2`. Adapter измеряет весь
+  логический SDK-вызов и окончательный исход, но не подменяет SDK собственным
+  retry loop и не обещает per-attempt telemetry, которой SDK не предоставляет.
+- Оценивать стоимость только из фактического `response.usage` и полного
+  optional тарифного блока: цена миллиона входных токенов, валюта и версия
+  тарифа. Кабинет provider остаётся источником истины фактического списания.
+
+Причины и последствия:
+
+- Все operational-события фильтруются и агрегируются одним способом в Docker и
+  будущей централизованной системе логов.
+- Correlation scope позволяет анализировать сбой индексации или query и связанный
+  fallback без синхронной telemetry-записи в рабочую SQLite.
+- Изменение цены не требует правки кода; без тарифа embeddings и usage-логи
+  продолжают работать, а оценочная стоимость честно остаётся неизвестной.
