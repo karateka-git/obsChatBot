@@ -822,36 +822,41 @@ policy и правила переиндексации зафиксированы
      текущей обработки — постоянное хранение и подтверждение добавляет 10.11.
 10. **10.10 — следующий подэтап.** Добавить структурированную observability
     usage, стоимости и сбоев embeddings:
-    - писать отдельные machine-readable события для каждой HTTP-попытки и
-      итоговую сводку логической операции `documents` или `query`;
+    - использовать единую систему Python `logging` и существующую конфигурацию
+      проекта; не добавлять отдельные embedding-specific observer/logger;
+    - писать события каждого логического SDK-запроса/batch и итоговую сводку
+      операции `documents` или `query` со стабильными event names и `key=value`
+      полями, совместимыми с текущими логами;
     - связывать события через `operation_id` и безопасный scope:
       `app_user_id`, vault ID, article ID при наличии, без API key, исходных
       текстов, compact query и vector values;
     - учитывать provider, model, batch index/size, число входных символов,
-      `response.usage` tokens, dimension, latency, номер и максимум попыток,
-      HTTP status, provider request ID при наличии, retryable, итоговый status,
-      error/cause type и fallback reason;
-    - заменить непрозрачные retries OpenAI SDK на собственный ограниченный цикл,
-      сохранив максимум три попытки и прежнюю retry-политику для временных сбоев;
-    - успешный запрос без retry логировать на `INFO`, временный сбой попытки и
-      восстановление — на `WARNING`, окончательный сбой — на `ERROR` с настоящей
-      вложенной причиной, но без чувствительных данных;
+      `response.usage` tokens, dimension, общую latency SDK-вызова, настроенный
+      `max_retries`, HTTP status, provider request ID при наличии, итоговый
+      status, error/cause type и fallback reason;
+    - оставить встроенные retries OpenAI SDK (`max_retries=2`, то есть не более
+      трёх HTTP-попыток): логировать общую latency и окончательный результат, не
+      обещая недоступные adapter'у число, длительность и причину каждой внутренней
+      попытки;
+    - успешный SDK-запрос логировать на `INFO`, окончательный сбой — на `ERROR`
+      с доступной вложенной причиной, semantic fallback — на `WARNING`, но без
+      чувствительных данных;
     - считать стоимость только при наличии provider usage и настроенного тарифа;
       хранить `estimated_cost`, валюту и `tariff_version`, а кабинет Timeweb
       оставить источником истины фактического списания;
     - тариф задавать конфигурацией, не зашивать цену провайдера в код; отсутствие
       тарифа не блокирует embeddings и оставляет `estimated_cost` пустым;
     - добавить итоговые counters операции, чтобы массовая индексация показывала
-      общее число batches, texts, tokens, retries, ошибок, latency и оценочную
+      общее число batches, texts, tokens, ошибок, latency и оценочную
       стоимость, а query можно было связать с fallback в review-flow;
-    - выводить события как JSON в stdout Docker: одинаковые поля позволяют
-      фильтровать и агрегировать их по пользователю, vault, article, модели,
-      статусу и периоду без синхронных telemetry-записей в рабочую SQLite;
-      observer работает best effort и никогда не ломает embedding-запрос;
-    - application-слой передаёт технический `EmbeddingCallContext`, а adapter
-      публикует telemetry через отдельный observer-port; billing и logging поля
-      не добавляются в domain-модели `EmbeddingVector`;
-    - покрыть success, recovered retry, final timeout/HTTP error, malformed
+    - выводить события в тот же console stream, который Docker уже собирает для
+      остальных модулей; одинаковые поля позволяют фильтровать и агрегировать
+      их по пользователю, vault, article, модели, статусу и периоду без
+      синхронных telemetry-записей в рабочую SQLite;
+    - application-слой передаёт adapter'у только технический контекст логирования
+      операции; usage, billing и logging поля не добавляются в domain-модели
+      `EmbeddingVector`;
+    - покрыть success, final timeout/HTTP error после SDK retries, malformed
       response, отсутствующий `usage`, batching и безопасное отсутствие текстов
       и ключей в логах.
 11. **10.11.** Сохранять предложение с `app_user_id`,
