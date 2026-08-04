@@ -15,8 +15,12 @@ from obs_chat_bot.application.articles.analysis import AnalyzeArticleUseCase
 from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
+from obs_chat_bot.application.reviews.proposal import PrepareObsidianReviewUseCase
 from obs_chat_bot.application.search.full_text import VaultFullTextSearchService
-from obs_chat_bot.application.search.hybrid import VaultHybridSearchService
+from obs_chat_bot.application.search.hybrid import (
+    VaultFtsFallbackSearchService,
+    VaultHybridSearchService,
+)
 from obs_chat_bot.application.search.ports import EmbeddingProvider, VaultNoteChunker
 from obs_chat_bot.application.search.vector import VaultVectorSearchService
 from obs_chat_bot.application.users.identity import UserIdentityService
@@ -40,6 +44,9 @@ from obs_chat_bot.data.extraction.trafilatura_article_extractor import (
 )
 from obs_chat_bot.data.http.article_html_fetcher import UrllibArticleHtmlFetcher
 from obs_chat_bot.data.llm.openai_article_analyzer import OpenAIArticleAnalyzer
+from obs_chat_bot.data.llm.openai_obsidian_proposal_generator import (
+    OpenAIObsidianProposalGenerator,
+)
 from obs_chat_bot.data.github.github_app_client import HttpxGitHubAppClient
 from obs_chat_bot.data.github.jwt_signer import PyJwtGitHubAppSigner
 from obs_chat_bot.data.sqlite.analysis_result_repository import (
@@ -64,6 +71,9 @@ from obs_chat_bot.data.sqlite.github_vault_sync_manager import (
 from obs_chat_bot.data.sqlite.processing_error_repository import (
     SQLiteProcessingErrorRecorder,
 )
+from obs_chat_bot.data.sqlite.obsidian_vault_repository import (
+    SQLiteObsidianVaultRepository,
+)
 from obs_chat_bot.data.sqlite.vault_full_text_search_repository import (
     SQLiteVaultFullTextSearchRepository,
 )
@@ -73,6 +83,10 @@ from obs_chat_bot.data.sqlite.vault_chunk_index_repository import (
 from obs_chat_bot.data.sqlite.vault_embedding_index_repository import (
     SQLiteVaultEmbeddingIndexRepository,
 )
+from obs_chat_bot.data.sqlite.vault_instruction_repository import (
+    SQLiteVaultInstructionRepository,
+)
+from obs_chat_bot.data.sqlite.vault_note_repository import SQLiteVaultNoteRepository
 from obs_chat_bot.data.sqlite.user_identity_repository import (
     SQLiteAppUserRepository,
     SQLiteExternalIdentityRepository,
@@ -231,6 +245,56 @@ def create_analyze_article_use_case(
     )
 
 
+def create_prepare_obsidian_review_use_case(
+    connection: sqlite3.Connection,
+    *,
+    openai_base_url: str,
+    openai_api_key: str,
+    openai_model: str,
+    embedding_config: EmbeddingConfig | None,
+    chunking_config: ChunkingConfig = ChunkingConfig(),
+) -> PrepareObsidianReviewUseCase:
+    """Собирает retrieval, preflight и двухфазную LLM-генерацию 10.9.
+
+    Args:
+        connection: Открытое SQLite-соединение одного incoming worker.
+        openai_base_url: Базовый URL Chat Completions API.
+        openai_api_key: API key LLM-провайдера.
+        openai_model: Модель планирования и написания Markdown.
+        embedding_config: Semantic provider либо `None` для явного FTS fallback.
+        chunking_config: Ожидаемая signature локального chunk index.
+
+    Returns:
+        Полностью собранный use case подготовки Obsidian review.
+    """
+    lexical_search = create_vault_full_text_search_service(
+        connection,
+        chunking_config=chunking_config,
+    )
+    search = (
+        create_vault_hybrid_search_service(
+            connection,
+            embedding_config=embedding_config,
+            chunking_config=chunking_config,
+        )
+        if embedding_config is not None
+        else VaultFtsFallbackSearchService(lexical_search=lexical_search)
+    )
+    return PrepareObsidianReviewUseCase(
+        article_repository=SQLiteArticleRepository(connection),
+        vault_repository=SQLiteObsidianVaultRepository(connection),
+        instruction_repository=SQLiteVaultInstructionRepository(connection),
+        note_repository=SQLiteVaultNoteRepository(connection),
+        search=search,
+        generator=OpenAIObsidianProposalGenerator(
+            base_url=openai_base_url,
+            api_key=openai_api_key,
+            model=openai_model,
+        ),
+        error_recorder=SQLiteProcessingErrorRecorder(connection),
+    )
+
+
 def create_incoming_message_repository(
     connection: sqlite3.Connection,
 ) -> IncomingMessageRepository:
@@ -259,6 +323,7 @@ def create_process_incoming_message_use_case(
     github_connection_starter: GitHubConnectionStarter | None = None,
     vault_selection_manager: VaultSelectionManager | None = None,
     vault_sync_manager: VaultSyncManager | None = None,
+    obsidian_review_use_case: PrepareObsidianReviewUseCase | None = None,
 ) -> ProcessIncomingMessageUseCase:
     """Собирает общий сценарий обработки входящего сообщения из любого канала.
 
@@ -270,6 +335,7 @@ def create_process_incoming_message_use_case(
         github_connection_starter: Coordinator GitHub Device Flow или `None`.
         vault_selection_manager: Сценарий выбора GitHub vault или `None`.
         vault_sync_manager: Сценарий синхронизации GitHub vault или `None`.
+        obsidian_review_use_case: Сценарий предложения 10.9 или `None`.
 
     Returns:
         Настроенный channel-agnostic incoming use case.
@@ -282,6 +348,7 @@ def create_process_incoming_message_use_case(
         github_connection_starter=github_connection_starter,
         vault_selection_manager=vault_selection_manager,
         vault_sync_manager=vault_sync_manager,
+        obsidian_review_use_case=obsidian_review_use_case,
     )
 
 

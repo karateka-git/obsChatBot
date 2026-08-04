@@ -1,5 +1,6 @@
 """Тесты общего application-flow входящих сообщений."""
 
+from types import SimpleNamespace
 import unittest
 
 from obs_chat_bot.application.articles.incoming_messages import (
@@ -18,6 +19,7 @@ from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageUseCase,
 )
+from obs_chat_bot.application.reviews.proposal import PrepareObsidianReviewError
 from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionCompletion,
     GitHubConnectionCompletionStatus,
@@ -46,6 +48,7 @@ from obs_chat_bot.application.vaults.vault_sync import (
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
+from obs_chat_bot.domain.reviews.entities import ObsidianProposalAction
 from obs_chat_bot.application.users.identity import IdentityAlreadyBoundError
 from obs_chat_bot.domain.users.entities import AppUser, IncomingIdentity
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
@@ -144,6 +147,24 @@ class FakeAnalysisUseCase:
             ),
             created=True,
         )
+
+
+class FakeReviewUseCase:
+    """Fake подготовки proposal после сохранённого анализа."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.commands = []
+        self.result = SimpleNamespace(
+            proposal=SimpleNamespace(action=ObsidianProposalAction.ADD)
+        )
+
+    def execute(self, command):
+        """Запоминает review-команду или воспроизводит ожидаемую ошибку."""
+        self.commands.append(command)
+        if self.error is not None:
+            raise self.error
+        return self.result
 
 
 class FakeUserIdentityService:
@@ -486,6 +507,57 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
         self.assertEqual(article_use_case.commands[0].incoming_message_id, 1)
         self.assertEqual(message_repository.messages[0].app_user_id, 5)
         self.assertEqual(message_repository.links, [(1, 7)])
+
+    def test_execute_prepares_obsidian_review_after_analysis(self) -> None:
+        """Обычный URL-flow подключает 10.9 сразу после LLM-анализа."""
+        review_use_case = FakeReviewUseCase()
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            article_analysis_use_case=FakeAnalysisUseCase(),
+            obsidian_review_use_case=review_use_case,
+        )
+
+        result = use_case.execute(
+            IncomingMessage(
+                app_user_id=5,
+                channel="vk",
+                chat_id="chat-1",
+                message_id="msg-1",
+                text="https://example.com/article",
+            )
+        )
+
+        self.assertEqual(
+            result.type,
+            IncomingMessageResultType.ARTICLE_REVIEW_PREPARED,
+        )
+        self.assertIs(result.review_result, review_use_case.result)
+        self.assertEqual(review_use_case.commands[0].article_id, 7)
+        self.assertEqual(review_use_case.commands[0].analysis.id, 3)
+
+    def test_execute_isolates_review_failure_from_channel_worker(self) -> None:
+        """Ошибка 10.9 возвращается структурированно и не выходит из execute."""
+        review_use_case = FakeReviewUseCase(
+            error=PrepareObsidianReviewError("search failed")
+        )
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=FakeArticleUrlUseCase(),
+            article_analysis_use_case=FakeAnalysisUseCase(),
+            obsidian_review_use_case=review_use_case,
+        )
+
+        result = use_case.execute(
+            IncomingMessage(
+                app_user_id=5,
+                channel="telegram",
+                chat_id="chat-1",
+                message_id="msg-1",
+                text="https://example.com/article",
+            )
+        )
+
+        self.assertEqual(result.type, IncomingMessageResultType.ARTICLE_REVIEW_FAILED)
+        self.assertIsInstance(result.error, PrepareObsidianReviewError)
 
     def test_execute_checks_stale_vault_before_article_in_common_flow(self) -> None:
         """Telegram/VK-независимый flow проверяет vault до article use case."""

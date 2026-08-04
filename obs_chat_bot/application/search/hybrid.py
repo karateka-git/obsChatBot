@@ -177,6 +177,54 @@ class VaultHybridSearchService:
         )
 
 
+class VaultFtsFallbackSearchService:
+    """Выполняет честный FTS-only поиск при отключённом embedding provider."""
+
+    def __init__(self, *, lexical_search: VaultChunkSearch) -> None:
+        self._lexical_search = lexical_search
+
+    def search(
+        self,
+        *,
+        query: ArticleSearchQuery,
+        vault_id: int,
+        candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
+        result_limit: int = DEFAULT_RESULT_LIMIT,
+    ) -> VaultSearchResult:
+        """Возвращает BM25-выдачу с явной причиной отсутствия semantic ветви."""
+        if vault_id <= 0:
+            raise ValueError("vault_id must be positive")
+        if not 1 <= candidate_limit <= 100:
+            raise ValueError("candidate_limit must be between 1 and 100")
+        if not 1 <= result_limit <= candidate_limit:
+            raise ValueError("result_limit must be between 1 and candidate_limit")
+        lexical_hits = self._lexical_search.search(
+            app_user_id=query.app_user_id,
+            vault_id=vault_id,
+            query=query.lexical_text,
+            limit=candidate_limit,
+        )
+        _validate_branch_scope(
+            lexical_hits,
+            app_user_id=query.app_user_id,
+            vault_id=vault_id,
+        )
+        fused = _reciprocal_rank_fusion(
+            lexical_hits=lexical_hits,
+            vector_hits=(),
+            rrf_k=DEFAULT_RRF_K,
+        )
+        return VaultSearchResult(
+            query=query,
+            vault_id=vault_id,
+            hits=fused[:result_limit],
+            lexical_candidates=len(lexical_hits),
+            vector_candidates=0,
+            mode=VaultSearchMode.FTS_FALLBACK,
+            fallback_reason=VaultSearchFallbackReason.EMBEDDING_NOT_CONFIGURED,
+        )
+
+
 def _validate_branch_scope(
     hits: tuple[VaultChunkSearchHit, ...],
     *,

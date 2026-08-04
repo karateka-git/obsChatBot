@@ -24,6 +24,12 @@ from obs_chat_bot.application.articles.processing import (
 )
 from obs_chat_bot.application.articles.url_extraction import extract_first_supported_url
 from obs_chat_bot.application.incoming.commands import ChatCommand, ParsedChatCommand
+from obs_chat_bot.application.reviews.proposal import (
+    PrepareObsidianReviewCommand,
+    PrepareObsidianReviewError,
+    PrepareObsidianReviewResult,
+    PrepareObsidianReviewUseCase,
+)
 from obs_chat_bot.application.users.identity import (
     CreatedLinkCode,
     IdentityAlreadyBoundError,
@@ -100,6 +106,8 @@ class IncomingMessageResultType(StrEnum):
     ARTICLE_ANALYZED = "article_analyzed"
     ARTICLE_PROCESSING_FAILED = "article_processing_failed"
     ARTICLE_ANALYSIS_FAILED = "article_analysis_failed"
+    ARTICLE_REVIEW_PREPARED = "article_review_prepared"
+    ARTICLE_REVIEW_FAILED = "article_review_failed"
     GITHUB_CONNECT_STARTED = "github_connect_started"
     GITHUB_CONNECT_ALREADY_PENDING = "github_connect_already_pending"
     GITHUB_CONNECT_PREPARING = "github_connect_preparing"
@@ -147,6 +155,7 @@ class ProcessIncomingMessageResult:
     link_code: CreatedLinkCode | None = None
     article_result: ProcessArticleUrlResult | None = None
     analysis_result: AnalyzeArticleResult | None = None
+    review_result: PrepareObsidianReviewResult | None = None
     github_connection: GitHubConnectionStartResult | None = None
     github_completion: GitHubConnectionCompletion | None = None
     vault_selection: VaultSelectionResult | None = None
@@ -175,6 +184,7 @@ class ProcessIncomingMessageUseCase:
         github_connection_starter: GitHubConnectionStarter | None = None,
         vault_selection_manager: VaultSelectionManager | None = None,
         vault_sync_manager: VaultSyncManager | None = None,
+        obsidian_review_use_case: PrepareObsidianReviewUseCase | None = None,
     ) -> None:
         self._article_url_use_case = article_url_use_case
         self._article_analysis_use_case = article_analysis_use_case
@@ -183,6 +193,7 @@ class ProcessIncomingMessageUseCase:
         self._github_connection_starter = github_connection_starter
         self._vault_selection_manager = vault_selection_manager
         self._vault_sync_manager = vault_sync_manager
+        self._obsidian_review_use_case = obsidian_review_use_case
 
     def execute(
         self,
@@ -332,6 +343,42 @@ class ProcessIncomingMessageUseCase:
             analysis_result.created,
             analysis_result.analysis.llm_model,
         )
+        if self._obsidian_review_use_case is not None:
+            try:
+                review_result = self._obsidian_review_use_case.execute(
+                    PrepareObsidianReviewCommand(
+                        article_id=article_result.article.id,
+                        analysis=analysis_result.analysis,
+                        app_user_id=incoming_message.app_user_id,
+                        incoming_message_id=incoming_message_id,
+                    )
+                )
+            except PrepareObsidianReviewError as error:
+                result = ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.ARTICLE_REVIEW_FAILED,
+                    app_user=app_user_result,
+                    saved_message=saved_message,
+                    article_result=article_result,
+                    analysis_result=analysis_result,
+                    vault_sync_result=vault_sync_result,
+                    vault_sync_warning=vault_sync_warning,
+                    error=error,
+                )
+                _log_result(result)
+                return result
+            result = ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_REVIEW_PREPARED,
+                app_user=app_user_result,
+                saved_message=saved_message,
+                article_result=article_result,
+                analysis_result=analysis_result,
+                review_result=review_result,
+                vault_sync_result=vault_sync_result,
+                vault_sync_warning=vault_sync_warning,
+            )
+            _log_result(result)
+            return result
+
         result = ProcessIncomingMessageResult(
             type=IncomingMessageResultType.ARTICLE_ANALYZED,
             app_user=app_user_result,
@@ -1236,7 +1283,7 @@ def _log_result(result: ProcessIncomingMessageResult) -> None:
     LOGGER.debug(
         "Incoming message processed: result=%s app_user_id=%s "
         "incoming_message_id=%s article_id=%s analysis_id=%s "
-        "vault_warning=%s error_type=%s",
+        "proposal_action=%s vault_warning=%s error_type=%s",
         result.type.value,
         result.app_user.id if result.app_user is not None else None,
         result.saved_message.id if result.saved_message is not None else None,
@@ -1248,6 +1295,11 @@ def _log_result(result: ProcessIncomingMessageResult) -> None:
         (
             result.analysis_result.analysis.id
             if result.analysis_result is not None
+            else None
+        ),
+        (
+            result.review_result.proposal.action.value
+            if result.review_result is not None
             else None
         ),
         (

@@ -16,3 +16,5 @@ class ProcessingStage(StrEnum):
     EXTRACTION = "extraction"
     # LLM-анализ очищенного текста статьи.
     ANALYSIS = "analysis"
+    # Поиск по vault и подготовка предлагаемого Obsidian-изменения.
+    OBSIDIAN_REVIEW = "obsidian_review"

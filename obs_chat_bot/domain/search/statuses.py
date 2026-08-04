@@ -15,3 +15,4 @@ class VaultSearchFallbackReason(StrEnum):
 
     EMBEDDING_INDEX_UNAVAILABLE = "embedding_index_unavailable"  # Stale index.
     EMBEDDING_PROVIDER_FAILED = "embedding_provider_failed"  # API/response error.
+    EMBEDDING_NOT_CONFIGURED = "embedding_not_configured"  # FTS-only deployment.

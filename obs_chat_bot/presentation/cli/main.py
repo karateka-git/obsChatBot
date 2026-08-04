@@ -31,6 +31,7 @@ from obs_chat_bot.bootstrap import (
     create_incoming_message_repository,
     create_process_incoming_message_use_case,
     create_process_article_url_use_case,
+    create_prepare_obsidian_review_use_case,
     create_user_identity_service,
     create_vault_selection_manager,
     create_vault_sync_manager,
@@ -731,6 +732,14 @@ def process_channel_incoming_message(
                     and hasattr(github_repository_gateway, "fetch_vault_snapshot")
                 )
                 else None
+            ),
+            obsidian_review_use_case=create_prepare_obsidian_review_use_case(
+                connection,
+                openai_base_url=openai_base_url,
+                openai_api_key=openai_api_key,
+                openai_model=openai_model,
+                embedding_config=embedding_config,
+                chunking_config=chunking_config,
             ),
         )
         return incoming_message_use_case.execute(

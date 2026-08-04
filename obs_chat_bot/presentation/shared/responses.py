@@ -22,6 +22,7 @@ from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncWarningReason,
 )
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
+from obs_chat_bot.domain.reviews.entities import ObsidianProposalAction
 
 
 _ARTICLE_STATUS_LABELS: dict[ArticleStatus, str] = {
@@ -413,6 +414,19 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 ),
                 result,
             )
+        case IncomingMessageResultType.ARTICLE_REVIEW_PREPARED:
+            return _with_vault_sync_warning(
+                _format_obsidian_review(result),
+                result,
+            )
+        case IncomingMessageResultType.ARTICLE_REVIEW_FAILED:
+            return _with_vault_sync_warning(
+                (
+                    "Анализ статьи сохранён, но предложение для Obsidian "
+                    "подготовить не удалось. Vault не изменён. Попробуй позже."
+                ),
+                result,
+            )
         case IncomingMessageResultType.ARTICLE_PROCESSING_FAILED:
             return _format_processing_error(result.error)
         case IncomingMessageResultType.ARTICLE_ANALYSIS_FAILED:
@@ -453,6 +467,35 @@ def _with_vault_sync_warning(
             f"{checked_at:%Y-%m-%d %H:%M} UTC."
         )
     return f"{reply}\n\n⚠️ {reason}\n{' '.join(details)}"
+
+
+def _format_obsidian_review(result: ProcessIncomingMessageResult) -> str:
+    """Показывает безопасную сводку предложения без изменения GitHub."""
+    review = result.review_result
+    if review is None:
+        return "Предложение для Obsidian подготовлено, но сводка недоступна."
+    proposal = review.proposal
+    if proposal.action is ObsidianProposalAction.SKIP:
+        return (
+            "Анализ готов. Предложение для Obsidian: ничего не менять.\n"
+            f"Причина: {proposal.reasoning}\n\n"
+            "Vault не изменён."
+        )
+    action = (
+        "создать новую заметку"
+        if proposal.action is ObsidianProposalAction.ADD
+        else "обновить существующую заметку"
+    )
+    preview = (proposal.proposed_markdown or "")[:2_000].rstrip()
+    if proposal.proposed_markdown and len(proposal.proposed_markdown) > len(preview):
+        preview += "\n\n[Предпросмотр сокращён.]"
+    return (
+        f"Анализ готов. Предложение для Obsidian: {action}.\n"
+        f"Путь: `{proposal.target_path}`\n"
+        f"Причина: {proposal.reasoning}\n\n"
+        f"Предлагаемый Markdown:\n{preview}\n\n"
+        "Vault не изменён."
+    )
 
 
 def _display_name(result: ProcessIncomingMessageResult) -> str:

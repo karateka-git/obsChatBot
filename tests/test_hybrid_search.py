@@ -9,7 +9,10 @@ from obs_chat_bot.application.search.errors import (
     SearchIndexCorruptedError,
     SearchIndexUnavailableError,
 )
-from obs_chat_bot.application.search.hybrid import VaultHybridSearchService
+from obs_chat_bot.application.search.hybrid import (
+    VaultFtsFallbackSearchService,
+    VaultHybridSearchService,
+)
 from obs_chat_bot.application.search.vector import VaultVectorSearchService
 from obs_chat_bot.domain.search.entities import (
     ArticleSearchQuery,
@@ -346,6 +349,23 @@ class VaultHybridSearchServiceTest(unittest.TestCase):
             VaultSearchFallbackReason.EMBEDDING_INDEX_UNAVAILABLE,
         )
         self.assertEqual(result.hits, ())
+
+    def test_missing_embedding_config_has_explicit_fts_only_reason(self) -> None:
+        """Отключённый semantic provider не изображает hybrid retrieval."""
+        chunk = _chunk(1)
+        result = VaultFtsFallbackSearchService(
+            lexical_search=RecordingSearch(
+                (VaultChunkSearchHit(chunk=chunk, score=2.0),)
+            )
+        ).search(query=_query(), vault_id=10)
+
+        self.assertIs(result.mode, VaultSearchMode.FTS_FALLBACK)
+        self.assertIs(
+            result.fallback_reason,
+            VaultSearchFallbackReason.EMBEDDING_NOT_CONFIGURED,
+        )
+        self.assertEqual(result.vector_candidates, 0)
+        self.assertEqual(result.hits[0].lexical_rank, 1)
 
     def test_unexpected_vector_error_is_not_hidden_by_fallback(self) -> None:
         """Ошибка программирования или storage вне контракта пробрасывается."""
