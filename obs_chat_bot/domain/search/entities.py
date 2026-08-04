@@ -110,3 +110,85 @@ class EmbeddingVector:
     def dimension(self) -> int:
         """Возвращает число координат вектора."""
         return len(self.values)
+
+
+@dataclass(frozen=True, slots=True)
+class VaultChunkEmbedding:
+    """Представляет сохранённый semantic-вектор одного chunk.
+
+    Attributes:
+        app_user_id: Внутренний ID владельца данных.
+        vault_id: ID активного vault пользователя.
+        chunk_id: ID исходного структурного chunk.
+        document_model: Модель, которой получен вектор документа.
+        dimension: Число float32-координат.
+        content_hash: Hash текста chunk на момент векторизации.
+        values: Декодированные координаты вектора.
+        updated_at: Время последней записи в SQLite.
+    """
+
+    app_user_id: int
+    vault_id: int
+    chunk_id: int
+    document_model: str
+    dimension: int
+    content_hash: str
+    values: tuple[float, ...]
+    updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if min(self.app_user_id, self.vault_id, self.chunk_id) <= 0:
+            raise ValueError("embedding IDs must be positive")
+        if not self.document_model.strip():
+            raise ValueError("document_model must not be empty")
+        if self.dimension <= 0 or self.dimension != len(self.values):
+            raise ValueError("dimension must match non-empty values")
+        if any(not isfinite(value) for value in self.values):
+            raise ValueError("values must contain only finite numbers")
+        if not self.content_hash.strip():
+            raise ValueError("content_hash must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class VaultChunkEmbeddingMetadata:
+    """Описывает совместимость vector без загрузки тяжёлого BLOB из SQLite."""
+
+    app_user_id: int
+    vault_id: int
+    chunk_id: int
+    document_model: str
+    dimension: int
+    content_hash: str
+
+    def __post_init__(self) -> None:
+        if min(self.app_user_id, self.vault_id, self.chunk_id) <= 0:
+            raise ValueError("embedding metadata IDs must be positive")
+        if not self.document_model.strip():
+            raise ValueError("document_model must not be empty")
+        if self.dimension <= 0:
+            raise ValueError("dimension must be positive")
+        if not self.content_hash.strip():
+            raise ValueError("content_hash must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class VaultEmbeddingIndexState:
+    """Фиксирует полностью согласованный профиль embedding-индекса vault."""
+
+    app_user_id: int
+    vault_id: int
+    chunk_index_signature: str
+    document_model: str
+    query_model: str
+    dimension: int | None
+    indexed_at: datetime
+
+    def __post_init__(self) -> None:
+        if min(self.app_user_id, self.vault_id) <= 0:
+            raise ValueError("embedding state IDs must be positive")
+        if not self.chunk_index_signature.strip():
+            raise ValueError("chunk_index_signature must not be empty")
+        if not self.document_model.strip() or not self.query_model.strip():
+            raise ValueError("embedding models must not be empty")
+        if self.dimension is not None and self.dimension <= 0:
+            raise ValueError("dimension must be positive when present")

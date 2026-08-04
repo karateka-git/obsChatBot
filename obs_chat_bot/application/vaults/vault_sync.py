@@ -9,8 +9,14 @@ import time
 from typing import Protocol
 from uuid import uuid4
 
-from obs_chat_bot.application.search.indexing import VaultChunkIndexer
-from obs_chat_bot.application.search.models import ChunkIndexUpdate
+from obs_chat_bot.application.search.indexing import (
+    VaultChunkIndexer,
+    VaultEmbeddingIndexer,
+)
+from obs_chat_bot.application.search.models import (
+    ChunkIndexUpdate,
+    EmbeddingIndexUpdate,
+)
 from obs_chat_bot.application.vaults.github_models import (
     GitHubVaultSnapshotStatus,
 )
@@ -67,6 +73,10 @@ class VaultSyncResult:
     deleted_chunks: int = 0
     unchanged_chunks: int = 0
     index_rebuilt: bool = False
+    embedded_chunks: int = 0
+    deleted_embeddings: int = 0
+    unchanged_embeddings: int = 0
+    embedding_dimension: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +128,7 @@ class VaultSyncService:
         lease_repository: VaultSyncLeaseRepository,
         github_gateway: GitHubVaultGateway,
         chunk_indexer: VaultChunkIndexer,
+        embedding_indexer: VaultEmbeddingIndexer | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         lease_duration: timedelta = timedelta(minutes=5),
     ) -> None:
@@ -127,6 +138,7 @@ class VaultSyncService:
         self._lease_repository = lease_repository
         self._github_gateway = github_gateway
         self._chunk_indexer = chunk_indexer
+        self._embedding_indexer = embedding_indexer
         self._clock = clock
         self._lease_duration = lease_duration
 
@@ -169,7 +181,7 @@ class VaultSyncService:
             vault.last_checked_at is not None
             and now - vault.last_checked_at < max_age
         ):
-            if not self._chunk_indexer.is_current(
+            if not self._indexes_current(
                 app_user_id=app_user_id,
                 vault_id=vault.id,
             ):
@@ -328,12 +340,14 @@ class VaultSyncService:
                 index_current=index_current,
             )
             updated = self._update_state(vault, snapshot, now=now, synced=False)
+            embedding_update = self._update_embedding_index(vault)
             return VaultSyncResult(
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
                 total_notes=len(local_notes),
                 instruction_files=len(local_instructions),
                 **_chunk_result_fields(chunk_update, rebuilt=not index_current),
+                **_embedding_result_fields(embedding_update),
             )
         if snapshot.status is GitHubVaultSnapshotStatus.TREE_UNCHANGED:
             chunk_update = self._ensure_current_index(
@@ -342,12 +356,14 @@ class VaultSyncService:
                 index_current=index_current,
             )
             updated = self._update_state(vault, snapshot, now=now, synced=False)
+            embedding_update = self._update_embedding_index(vault)
             return VaultSyncResult(
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
                 total_notes=len(local_notes),
                 instruction_files=len(local_instructions),
                 **_chunk_result_fields(chunk_update, rebuilt=not index_current),
+                **_embedding_result_fields(embedding_update),
             )
 
         pending_instructions: list[VaultInstruction] = []
@@ -422,6 +438,11 @@ class VaultSyncService:
                     app_user_id=vault.app_user_id,
                     vault_id=vault.id,
                 )
+                if self._embedding_indexer is not None:
+                    self._embedding_indexer.invalidate(
+                        app_user_id=vault.app_user_id,
+                        vault_id=vault.id,
+                    )
             self._instruction_repository.replace_for_vault(
                 app_user_id=vault.app_user_id,
                 vault_id=vault.id,
@@ -463,6 +484,7 @@ class VaultSyncService:
                     app_user_id=vault.app_user_id,
                     vault_id=vault.id,
                 )
+            embedding_update = self._update_embedding_index(vault)
             # Source SHA фиксируется только после успешной записи всех данных.
             updated_vault = self._update_state(vault, snapshot, now=now, synced=True)
         except Exception:
@@ -491,6 +513,7 @@ class VaultSyncService:
             deleted_notes=deleted,
             instruction_files=len(pending_instructions),
             **_chunk_result_fields(chunk_update, rebuilt=not index_current),
+            **_embedding_result_fields(embedding_update),
         )
 
     def _ensure_current_index(
@@ -518,7 +541,16 @@ class VaultSyncService:
             app_user_id=vault.app_user_id,
             vault_id=vault.id,
         )
-        update = self._rebuild_index(vault, notes=tuple(notes))
+        chunk_current = self._chunk_indexer.is_current(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+        )
+        update = (
+            ChunkIndexUpdate()
+            if chunk_current
+            else self._rebuild_index(vault, notes=tuple(notes))
+        )
+        embedding_update = self._update_embedding_index(vault)
         instructions = self._instruction_repository.list_for_vault(
             app_user_id=vault.app_user_id,
             vault_id=vault.id,
@@ -528,8 +560,58 @@ class VaultSyncService:
             vault=vault,
             total_notes=len(notes),
             instruction_files=len(instructions),
-            **_chunk_result_fields(update, rebuilt=True),
+            **_chunk_result_fields(update, rebuilt=not chunk_current),
+            **_embedding_result_fields(embedding_update),
         )
+
+    def _indexes_current(self, *, app_user_id: int, vault_id: int) -> bool:
+        """Проверяет chunk index и включённый embedding profile как единое целое."""
+        if not self._chunk_indexer.is_current(
+            app_user_id=app_user_id,
+            vault_id=vault_id,
+        ):
+            return False
+        return self._embedding_indexer is None or self._embedding_indexer.is_current(
+            app_user_id=app_user_id,
+            vault_id=vault_id,
+            chunk_index_signature=self._chunk_indexer.index_signature,
+        )
+
+    def _update_embedding_index(
+        self,
+        vault: ObsidianVault,
+    ) -> EmbeddingIndexUpdate:
+        """Обновляет только embeddings изменившихся chunks, если provider включён."""
+        if self._embedding_indexer is None:
+            return EmbeddingIndexUpdate()
+        if vault.id is None:
+            raise ValueError("vault must be saved before embedding")
+        started_at = time.monotonic()
+        LOGGER.info(
+            "Vault embedding index update started: app_user_id=%s vault_id=%s "
+            "chunk_index_signature=%s",
+            vault.app_user_id,
+            vault.id,
+            self._chunk_indexer.index_signature,
+        )
+        update = self._embedding_indexer.update(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
+            chunk_index_signature=self._chunk_indexer.index_signature,
+        )
+        LOGGER.info(
+            "Vault embedding index update completed: app_user_id=%s vault_id=%s "
+            "embedded=%s unchanged=%s deleted=%s dimension=%s "
+            "duration_seconds=%.3f",
+            vault.app_user_id,
+            vault.id,
+            update.embedded,
+            update.unchanged,
+            update.deleted,
+            update.dimension,
+            time.monotonic() - started_at,
+        )
+        return update
 
     def _rebuild_index(
         self,
@@ -553,6 +635,11 @@ class VaultSyncService:
             app_user_id=vault.app_user_id,
             vault_id=vault.id,
         )
+        if self._embedding_indexer is not None:
+            self._embedding_indexer.invalidate(
+                app_user_id=vault.app_user_id,
+                vault_id=vault.id,
+            )
         update = self._chunk_indexer.rebuild(
             app_user_id=vault.app_user_id,
             vault_id=vault.id,
@@ -595,4 +682,16 @@ def _chunk_result_fields(
         "deleted_chunks": update.deleted,
         "unchanged_chunks": update.unchanged,
         "index_rebuilt": rebuilt,
+    }
+
+
+def _embedding_result_fields(
+    update: EmbeddingIndexUpdate,
+) -> dict[str, int | None]:
+    """Преобразует счётчики embeddings в поля результата sync."""
+    return {
+        "embedded_chunks": update.embedded,
+        "deleted_embeddings": update.deleted,
+        "unchanged_embeddings": update.unchanged,
+        "embedding_dimension": update.dimension,
     }

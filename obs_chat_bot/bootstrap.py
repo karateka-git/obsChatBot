@@ -289,6 +289,7 @@ def create_vault_sync_manager(
     database_path: Path,
     github_gateway: GitHubVaultGateway,
     chunking_config: ChunkingConfig = ChunkingConfig(),
+    embedding_config: EmbeddingConfig | None = None,
 ) -> VaultSyncManager:
     """Собирает GitHub/SQLite-сценарий синхронизации vault.
 
@@ -296,6 +297,7 @@ def create_vault_sync_manager(
         database_path: Путь к общей SQLite-базе adapters.
         github_gateway: GitHub App gateway чтения Git trees и blobs.
         chunking_config: Policy разбиения Markdown-заметок на chunks.
+        embedding_config: Настройки semantic index либо `None` для FTS-only.
 
     Returns:
         Менеджер с отдельным соединением для каждой операции.
@@ -304,6 +306,11 @@ def create_vault_sync_manager(
         database_path=database_path,
         github_gateway=github_gateway,
         note_chunker=create_vault_note_chunker(chunking_config),
+        embedding_provider=(
+            create_embedding_provider(embedding_config)
+            if embedding_config is not None
+            else None
+        ),
     )
 
 

@@ -330,6 +330,7 @@ CREATE TABLE obsidian_note_chunks (
     UNIQUE (note_id, chunk_key),
     UNIQUE (note_id, position),
     UNIQUE (app_user_id, id),
+    UNIQUE (app_user_id, vault_id, id),
     CHECK (position >= 0),
     CHECK (part_index >= 0),
     CHECK (length(trim(note_path)) > 0),
@@ -354,6 +355,52 @@ CREATE TABLE obsidian_chunk_index_states (
     FOREIGN KEY (app_user_id, vault_id)
         REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE,
     CHECK (length(trim(index_signature)) > 0)
+);
+
+CREATE TABLE obsidian_chunk_embeddings (
+    chunk_id INTEGER PRIMARY KEY,
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    document_model TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (app_user_id, vault_id, chunk_id)
+        REFERENCES obsidian_note_chunks (app_user_id, vault_id, id)
+        ON DELETE CASCADE,
+    CHECK (length(trim(document_model)) > 0),
+    CHECK (dimension > 0),
+    CHECK (length(trim(content_hash)) > 0),
+    CHECK (typeof(vector) = 'blob'),
+    CHECK (length(vector) = dimension * 4)
+);
+
+CREATE INDEX idx_obsidian_chunk_embeddings_app_user_vault
+    ON obsidian_chunk_embeddings (app_user_id, vault_id);
+CREATE INDEX idx_obsidian_chunk_embeddings_vault_profile
+    ON obsidian_chunk_embeddings (
+        vault_id,
+        document_model,
+        dimension,
+        content_hash
+    );
+
+CREATE TABLE obsidian_embedding_index_states (
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    chunk_index_signature TEXT NOT NULL,
+    document_model TEXT NOT NULL,
+    query_model TEXT NOT NULL,
+    dimension INTEGER,
+    indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (app_user_id, vault_id),
+    FOREIGN KEY (app_user_id, vault_id)
+        REFERENCES obsidian_vaults (app_user_id, id) ON DELETE CASCADE,
+    CHECK (length(trim(chunk_index_signature)) > 0),
+    CHECK (length(trim(document_model)) > 0),
+    CHECK (length(trim(query_model)) > 0),
+    CHECK (dimension IS NULL OR dimension > 0)
 );
 
 CREATE VIRTUAL TABLE obsidian_note_chunks_fts USING fts5 (

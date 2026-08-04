@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,3 +70,48 @@ class ChunkIndexUpdate:
             deleted=self.deleted + other.deleted,
             unchanged=self.unchanged + other.unchanged,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class VaultChunkEmbeddingDraft:
+    """Содержит новый float-вектор chunk до записи в project storage."""
+
+    app_user_id: int
+    vault_id: int
+    chunk_id: int
+    document_model: str
+    content_hash: str
+    values: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if min(self.app_user_id, self.vault_id, self.chunk_id) <= 0:
+            raise ValueError("embedding IDs must be positive")
+        if not self.document_model.strip():
+            raise ValueError("document_model must not be empty")
+        if not self.content_hash.strip():
+            raise ValueError("content_hash must not be empty")
+        if not self.values:
+            raise ValueError("values must not be empty")
+        if any(not isfinite(value) for value in self.values):
+            raise ValueError("values must contain only finite numbers")
+
+    @property
+    def dimension(self) -> int:
+        """Возвращает размерность сохраняемого вектора."""
+        return len(self.values)
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingIndexUpdate:
+    """Содержит счётчики обновления embedding-индекса vault."""
+
+    embedded: int = 0
+    deleted: int = 0
+    unchanged: int = 0
+    dimension: int | None = None
+
+    def __post_init__(self) -> None:
+        if min(self.embedded, self.deleted, self.unchanged) < 0:
+            raise ValueError("embedding index counters must not be negative")
+        if self.dimension is not None and self.dimension <= 0:
+            raise ValueError("dimension must be positive when present")

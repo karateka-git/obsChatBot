@@ -6,12 +6,16 @@ from typing import Protocol
 
 from obs_chat_bot.application.search.models import (
     ChunkIndexUpdate,
+    VaultChunkEmbeddingDraft,
     VaultNoteChunkDraft,
 )
 from obs_chat_bot.domain.search.entities import (
     EmbeddingVector,
+    VaultChunkEmbedding,
+    VaultChunkEmbeddingMetadata,
     VaultChunkIndexState,
     VaultChunkSearchHit,
+    VaultEmbeddingIndexState,
     VaultNoteChunk,
 )
 from obs_chat_bot.domain.vaults.entities import VaultNote
@@ -138,8 +142,12 @@ class EmbeddingProvider(Protocol):
     """Описывает сменяемый источник semantic-векторов текста."""
 
     @property
-    def model(self) -> str:
-        """Возвращает ID модели, с которым должны храниться embeddings."""
+    def document_model(self) -> str:
+        """Возвращает ID модели corpus documents."""
+
+    @property
+    def query_model(self) -> str:
+        """Возвращает ID совместимой модели поисковых запросов."""
 
     def embed_documents(
         self,
@@ -170,4 +178,53 @@ class EmbeddingProvider(Protocol):
         Raises:
             ValueError: Если запрос пуст.
             EmbeddingProviderError: Если provider недоступен или ответ неверен.
+        """
+
+
+class VaultEmbeddingIndexRepository(Protocol):
+    """Описывает SQLite-независимое хранение embedding-поколения vault."""
+
+    def get_state(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+    ) -> VaultEmbeddingIndexState | None:
+        """Возвращает marker согласованного поколения либо `None`."""
+
+    def list_for_vault(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+    ) -> list[VaultChunkEmbedding]:
+        """Возвращает сохранённые embeddings vault в порядке chunk ID."""
+
+    def list_metadata_for_vault(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+    ) -> list[VaultChunkEmbeddingMetadata]:
+        """Возвращает metadata без чтения и декодирования vector BLOB."""
+
+    def invalidate(self, *, app_user_id: int, vault_id: int) -> None:
+        """Удаляет marker до внешних запросов и потенциально частичной записи."""
+
+    def save_generation(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        current_chunk_ids: set[int],
+        embeddings: tuple[VaultChunkEmbeddingDraft, ...],
+        chunk_index_signature: str,
+        document_model: str,
+        query_model: str,
+        dimension: int | None,
+    ) -> int:
+        """Атомарно upsert-ит изменения, удаляет лишнее и ставит marker.
+
+        Returns:
+            Число удалённых embeddings отсутствующих chunks.
         """

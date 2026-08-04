@@ -564,5 +564,35 @@
   индексации vault отсутствие batch считается значительным минусом. Возможное
   A/B-сравнение качества и цены сохранено в бэклоге с этим ограничением.
 - Этап 10.5 хранит document model и dimension рядом с float32 vector, а query
-  model включает в профиль индекса. Смена любой модели или dimension потребует
-  пересчёта embeddings, но не chunks и не FTS5.
+  model включает в профиль индекса. Смена document model или dimension требует
+  пересчёта несовместимых document vectors, но не chunks и не FTS5. Смена
+  только query model инвалидирует профиль, но позволяет переиспользовать corpus
+  при совпадении document model, dimension и content hashes.
+
+## 2026-08-04. Отдельное поколение float32 embeddings в SQLite
+
+Решение:
+
+- Хранить один embedding на SQLite `chunk_id` как little-endian float32 BLOB;
+  рядом фиксировать `app_user_id`, vault, document model, dimension и
+  `content_hash`.
+- Хранить отдельный generation marker с chunk index signature, document model,
+  query model, dimension и временем успешной индексации.
+- Удалять marker до изменения chunks и до внешнего embedding-запроса. После
+  сбоя сохранённые vectors разрешено оставить для следующего безопасного reuse,
+  но поиск не должен считать такое поколение актуальным.
+- При обновлении отправлять provider только chunks без совместимого vector;
+  неизменившиеся строки переиспользовать, удалённые chunks очищать каскадно.
+- Включать embedding indexer в vault sync только при полной конфигурации
+  `EMBEDDING_*`; без неё сохраняется прежний FTS-only сценарий.
+
+Причины и последствия:
+
+- Float32 уменьшает размер SQLite примерно вдвое относительно float64 и
+  сохраняет достаточную точность для cosine similarity.
+- Связь с `chunk_id` и составные внешние ключи не позволяют смешивать vectors
+  разных пользователей или vault.
+- Профиль не публикуется частично: после ошибки Timeweb следующий sync повторит
+  только недостающую работу, а будущий semantic search сможет перейти на FTS5.
+- Изменение начальной схемы требует пересоздания development-базы согласно
+  принятой политике без накопительных миграций до MVP.

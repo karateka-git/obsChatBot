@@ -165,6 +165,7 @@ def main() -> int:
             openai_model=config.openai_model,
             github_app_config=config.github_app,
             chunking_config=config.chunking,
+            embedding_config=config.embedding,
             logger=logger,
         )
 
@@ -178,6 +179,7 @@ def main() -> int:
             openai_model=config.openai_model,
             github_app_config=config.github_app,
             chunking_config=config.chunking,
+            embedding_config=config.embedding,
             logger=logger,
         )
 
@@ -492,6 +494,7 @@ def run_telegram_bot_command(
     openai_model: str = "",
     github_app_config: GitHubAppConfig | None = None,
     chunking_config: ChunkingConfig = ChunkingConfig(),
+    embedding_config: EmbeddingConfig | None = None,
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
@@ -507,6 +510,7 @@ def run_telegram_bot_command(
         openai_model: Имя модели для анализа статей.
         github_app_config: Настройки GitHub App или `None`.
         chunking_config: Policy разбиения заметок на chunks.
+        embedding_config: Настройки semantic index либо `None`.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case, полезная для тестов без polling.
         analysis_use_case_factory: Factory use case анализа, полезная для тестов.
@@ -544,6 +548,7 @@ def run_telegram_bot_command(
                     github_connection_starter=connection_starter,
                     github_repository_gateway=github_gateway,
                     chunking_config=chunking_config,
+                    embedding_config=embedding_config,
                     completion_handler=completion_handler,
                 )
             ),
@@ -572,6 +577,7 @@ def run_vk_bot_command(
     openai_model: str = "",
     github_app_config: GitHubAppConfig | None = None,
     chunking_config: ChunkingConfig = ChunkingConfig(),
+    embedding_config: EmbeddingConfig | None = None,
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
@@ -588,6 +594,7 @@ def run_vk_bot_command(
         openai_model: Имя модели для анализа статей.
         github_app_config: Настройки GitHub App или `None`.
         chunking_config: Policy разбиения заметок на chunks.
+        embedding_config: Настройки semantic index либо `None`.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case для тестов.
         analysis_use_case_factory: Factory analysis use case для тестов.
@@ -629,6 +636,7 @@ def run_vk_bot_command(
                     github_connection_starter=connection_starter,
                     github_repository_gateway=github_gateway,
                     chunking_config=chunking_config,
+                    embedding_config=embedding_config,
                     completion_handler=completion_handler,
                 )
             ),
@@ -659,6 +667,7 @@ def process_channel_incoming_message(
     github_connection_starter: GitHubConnectionStarter | None = None,
     github_repository_gateway: GitHubRepositoryGateway | None = None,
     chunking_config: ChunkingConfig = ChunkingConfig(),
+    embedding_config: EmbeddingConfig | None = None,
     completion_handler: IncomingCompletionHandler | None = None,
 ) -> ProcessIncomingMessageResult:
     """Обрабатывает одно сообщение внешнего канала внутри worker thread.
@@ -674,6 +683,7 @@ def process_channel_incoming_message(
         github_connection_starter: Процессный coordinator GitHub Device Flow.
         github_repository_gateway: GitHub App gateway чтения repository.
         chunking_config: Policy разбиения заметок на chunks.
+        embedding_config: Настройки semantic index либо `None`.
         completion_handler: Callback итогового ответа в исходный чат.
 
     Returns:
@@ -714,6 +724,7 @@ def process_channel_incoming_message(
                     database_path=database_path,
                     github_gateway=github_repository_gateway,
                     chunking_config=chunking_config,
+                    embedding_config=embedding_config,
                 )
                 if (
                     github_repository_gateway is not None

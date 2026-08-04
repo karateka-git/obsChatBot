@@ -210,7 +210,11 @@ document_chunker
 ```
 
 FTS5 и embedding storage всегда ограничиваются `app_user_id` и `vault_id`.
-Embedding связывается с SQLite `chunk_id`, model, dimension и `content_hash`.
+Embedding связывается с SQLite `chunk_id`, document model, dimension и
+`content_hash`, а generation marker дополнительно учитывает query model и
+signature текущего chunk index. Vector кодируется как little-endian float32
+BLOB. Неизменившийся `chunk_id/content_hash` переиспользуется без внешнего
+запроса; marker удаляется до потенциально частичного обновления.
 
 ## Проверки готовности
 
