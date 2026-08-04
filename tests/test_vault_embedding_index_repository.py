@@ -16,6 +16,9 @@ from obs_chat_bot.application.search.indexing import (
     VaultChunkIndexer,
     VaultEmbeddingIndexer,
 )
+from obs_chat_bot.application.search.full_text import VaultFullTextSearchService
+from obs_chat_bot.application.search.hybrid import VaultHybridSearchService
+from obs_chat_bot.application.search.vector import VaultVectorSearchService
 from obs_chat_bot.data.chunking.document_note_chunker import DocumentVaultNoteChunker
 from obs_chat_bot.data.sqlite.connection import connect_database
 from obs_chat_bot.data.sqlite.embedding_mappers import (
@@ -35,8 +38,11 @@ from obs_chat_bot.data.sqlite.vault_chunk_index_repository import (
 from obs_chat_bot.data.sqlite.vault_embedding_index_repository import (
     SQLiteVaultEmbeddingIndexRepository,
 )
+from obs_chat_bot.data.sqlite.vault_full_text_search_repository import (
+    SQLiteVaultFullTextSearchRepository,
+)
 from obs_chat_bot.data.sqlite.vault_note_repository import SQLiteVaultNoteRepository
-from obs_chat_bot.domain.search.entities import EmbeddingVector
+from obs_chat_bot.domain.search.entities import ArticleSearchQuery, EmbeddingVector
 from obs_chat_bot.domain.vaults.entities import ObsidianVault, VaultNote
 from tests.sqlite_helpers import ensure_app_user
 
@@ -55,6 +61,7 @@ class RecordingEmbeddingProvider:
         self.query_model = query_model
         self.fail = fail
         self.document_calls: list[tuple[str, ...]] = []
+        self.query_calls: list[str] = []
 
     def embed_documents(
         self,
@@ -74,6 +81,7 @@ class RecordingEmbeddingProvider:
 
     def embed_query(self, text: str) -> EmbeddingVector:
         """Возвращает совместимый тестовый query vector."""
+        self.query_calls.append(text)
         return EmbeddingVector(model=self.query_model, values=(1.0, 0.25, -0.5))
 
 
@@ -237,6 +245,55 @@ class VaultEmbeddingIndexRepositoryTest(unittest.TestCase):
         self.assertEqual(decode_float32_vector(blob, dimension=2), (1.5, -2.25))
         with self.assertRaises(ValueError):
             decode_float32_vector(blob[:-1], dimension=2)
+
+    def test_sqlite_embeddings_participate_in_hybrid_retrieval(self) -> None:
+        """RRF читает реальные float32 BLOB и FTS rows одного поколения."""
+        with self._database() as connection:
+            vault, chunks, embeddings = _prepare_indexes(
+                connection,
+                markdown="# Docker\nКонтейнеры и развёртывание приложения.",
+            )
+            provider = RecordingEmbeddingProvider()
+            chunker = _chunker()
+            VaultEmbeddingIndexer(
+                chunk_repository=chunks,
+                embedding_repository=embeddings,
+                provider=provider,
+            ).update(
+                app_user_id=1,
+                vault_id=vault.id,
+                chunk_index_signature=chunker.index_signature,
+            )
+            service = VaultHybridSearchService(
+                lexical_search=VaultFullTextSearchService(
+                    repository=SQLiteVaultFullTextSearchRepository(connection),
+                    chunker=chunker,
+                ),
+                vector_search=VaultVectorSearchService(
+                    chunk_repository=chunks,
+                    embedding_repository=embeddings,
+                    embedding_provider=provider,
+                    chunker=chunker,
+                ),
+            )
+
+            result = service.search(
+                query=ArticleSearchQuery(
+                    app_user_id=1,
+                    article_id=50,
+                    analysis_id=60,
+                    semantic_text="Название: Docker\nКратко: Развёртывание контейнеров",
+                    lexical_text="Docker контейнеры",
+                ),
+                vault_id=vault.id,
+            )
+
+            self.assertTrue(result.hits)
+            self.assertEqual({hit.chunk.app_user_id for hit in result.hits}, {1})
+            self.assertEqual({hit.chunk.vault_id for hit in result.hits}, {vault.id})
+            self.assertEqual(len(provider.query_calls), 1)
+            self.assertEqual(result.hits[0].lexical_rank, 1)
+            self.assertEqual(result.hits[0].vector_rank, 1)
 
     @contextmanager
     def _database(self):

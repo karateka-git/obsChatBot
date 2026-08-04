@@ -70,7 +70,7 @@ class VaultChunkIndexState:
 
 @dataclass(frozen=True, slots=True)
 class VaultChunkSearchHit:
-    """Представляет chunk, найденный полнотекстовым поиском.
+    """Представляет chunk, найденный одной ранжированной ветвью поиска.
 
     Attributes:
         chunk: Сохранённый chunk, доступный текущему пользователю и vault.
@@ -221,3 +221,40 @@ class ArticleSearchQuery:
             raise ValueError("semantic_text must not be empty")
         if not self.lexical_text.strip():
             raise ValueError("lexical_text must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class VaultHybridSearchHit:
+    """Представляет chunk после объединения lexical и semantic рангов.
+
+    Attributes:
+        chunk: Сохранённый chunk текущего пользователя и vault.
+        score: Суммарный Reciprocal Rank Fusion score.
+        lexical_rank: Позиция BM25-ветви, начиная с единицы.
+        vector_rank: Позиция vector-ветви, начиная с единицы.
+        lexical_score: Исходный BM25 score для диагностики.
+        vector_score: Нормализованный cosine score от нуля до единицы.
+    """
+
+    chunk: VaultNoteChunk
+    score: float
+    lexical_rank: int | None = None
+    vector_rank: int | None = None
+    lexical_score: float | None = None
+    vector_score: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.score) or self.score <= 0:
+            raise ValueError("hybrid score must be finite and positive")
+        for rank in (self.lexical_rank, self.vector_rank):
+            if rank is not None and rank <= 0:
+                raise ValueError("search ranks must be positive when present")
+        for branch_score in (self.lexical_score, self.vector_score):
+            if branch_score is not None and (
+                not isfinite(branch_score) or branch_score < 0
+            ):
+                raise ValueError("branch scores must be finite and not negative")
+        if self.vector_score is not None and self.vector_score > 1:
+            raise ValueError("vector_score must not be greater than one")
+        if self.lexical_rank is None and self.vector_rank is None:
+            raise ValueError("hybrid hit must belong to at least one branch")

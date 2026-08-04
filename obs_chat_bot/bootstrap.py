@@ -16,7 +16,9 @@ from obs_chat_bot.application.articles.ports import IncomingMessageRepository
 from obs_chat_bot.application.articles.processing import ProcessArticleUrlUseCase
 from obs_chat_bot.application.incoming.processing import ProcessIncomingMessageUseCase
 from obs_chat_bot.application.search.full_text import VaultFullTextSearchService
+from obs_chat_bot.application.search.hybrid import VaultHybridSearchService
 from obs_chat_bot.application.search.ports import EmbeddingProvider, VaultNoteChunker
+from obs_chat_bot.application.search.vector import VaultVectorSearchService
 from obs_chat_bot.application.users.identity import UserIdentityService
 from obs_chat_bot.application.vaults.github_connection import (
     GitHubConnectionCoordinator,
@@ -64,6 +66,12 @@ from obs_chat_bot.data.sqlite.processing_error_repository import (
 )
 from obs_chat_bot.data.sqlite.vault_full_text_search_repository import (
     SQLiteVaultFullTextSearchRepository,
+)
+from obs_chat_bot.data.sqlite.vault_chunk_index_repository import (
+    SQLiteVaultChunkIndexRepository,
+)
+from obs_chat_bot.data.sqlite.vault_embedding_index_repository import (
+    SQLiteVaultEmbeddingIndexRepository,
 )
 from obs_chat_bot.data.sqlite.user_identity_repository import (
     SQLiteAppUserRepository,
@@ -139,6 +147,38 @@ def create_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
         api_key=config.api_key,
         document_model=config.document_model,
         query_model=config.query_model,
+    )
+
+
+def create_vault_hybrid_search_service(
+    connection: sqlite3.Connection,
+    *,
+    embedding_config: EmbeddingConfig,
+    chunking_config: ChunkingConfig = ChunkingConfig(),
+) -> VaultHybridSearchService:
+    """Собирает BM25, cosine search и RRF поверх одного SQLite connection.
+
+    Args:
+        connection: Открытое SQLite-соединение приложения.
+        embedding_config: Обязательный provider semantic query.
+        chunking_config: Policy допустимого поколения chunks.
+
+    Returns:
+        Hybrid retrieval service без fallback; он относится к Этапу 10.8.
+    """
+    chunker = create_vault_note_chunker(chunking_config)
+    provider = create_embedding_provider(embedding_config)
+    return VaultHybridSearchService(
+        lexical_search=VaultFullTextSearchService(
+            repository=SQLiteVaultFullTextSearchRepository(connection),
+            chunker=chunker,
+        ),
+        vector_search=VaultVectorSearchService(
+            chunk_repository=SQLiteVaultChunkIndexRepository(connection),
+            embedding_repository=SQLiteVaultEmbeddingIndexRepository(connection),
+            embedding_provider=provider,
+            chunker=chunker,
+        ),
     )
 
 

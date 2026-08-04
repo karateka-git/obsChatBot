@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 
+from obs_chat_bot.domain.search.entities import (
+    ArticleSearchQuery,
+    VaultHybridSearchHit,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class VaultNoteChunkDraft:
@@ -115,3 +120,26 @@ class EmbeddingIndexUpdate:
             raise ValueError("embedding index counters must not be negative")
         if self.dimension is not None and self.dimension <= 0:
             raise ValueError("dimension must be positive when present")
+
+
+@dataclass(frozen=True, slots=True)
+class VaultHybridSearchResult:
+    """Содержит готовые для recommendation prompt лучшие chunks vault."""
+
+    query: ArticleSearchQuery
+    vault_id: int
+    hits: tuple[VaultHybridSearchHit, ...]
+    lexical_candidates: int
+    vector_candidates: int
+
+    def __post_init__(self) -> None:
+        if self.vault_id <= 0:
+            raise ValueError("vault_id must be positive")
+        if min(self.lexical_candidates, self.vector_candidates) < 0:
+            raise ValueError("candidate counters must not be negative")
+        if any(
+            hit.chunk.app_user_id != self.query.app_user_id
+            or hit.chunk.vault_id != self.vault_id
+            for hit in self.hits
+        ):
+            raise ValueError("hybrid hits must belong to requested user and vault")

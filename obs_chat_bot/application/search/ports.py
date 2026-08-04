@@ -138,6 +138,20 @@ class VaultFullTextSearchRepository(Protocol):
         """
 
 
+class VaultChunkSearch(Protocol):
+    """Описывает одну независимо ранжированную ветвь поиска по chunks."""
+
+    def search(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        query: str,
+        limit: int = 10,
+    ) -> tuple[VaultChunkSearchHit, ...]:
+        """Возвращает chunks в порядке убывания релевантности ветви."""
+
+
 class EmbeddingProvider(Protocol):
     """Описывает сменяемый источник semantic-векторов текста."""
 

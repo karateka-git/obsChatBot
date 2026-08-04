@@ -624,3 +624,32 @@
   частыми нерелевантными словами.
 - Semantic и lexical ветви Этапа 10.7 смогут выполняться независимо, используя
   одно типизированное `ArticleSearchQuery` и сохраняя изоляцию `app_user_id`.
+
+## 2026-08-04. Linear cosine search и Reciprocal Rank Fusion для MVP
+
+Решение:
+
+- Выполнять FTS5/BM25 и vector similarity как две независимые ранжированные
+  ветви по разным compact query Этапа 10.6.
+- Для MVP читать float32 vectors текущего vault из SQLite и вычислять cosine
+  similarity линейно в application-сервисе. До `embed_query()` проверять
+  согласованность chunk/embedding markers, моделей, dimension, IDs и hashes.
+- Нормализовать cosine из `[-1, 1]` в `[0, 1]` для диагностики, но не смешивать
+  это значение напрямую с BM25 score.
+- Объединять до 20 кандидатов каждой ветви через стандартный Reciprocal Rank
+  Fusion: `score = sum(1 / (60 + rank))`; возвращать до 10 лучших chunks.
+- Сохранять в каждом hybrid hit итоговый score, ranks и исходные scores обеих
+  ветвей, чтобы recommendation и диагностика видели происхождение результата.
+- Пробрасывать отсутствие/stale embedding index и provider errors из 10.7;
+  явный FTS-only режим с признаком fallback реализовать отдельно в 10.8.
+
+Причины и последствия:
+
+- BM25 и cosine имеют разные шкалы, поэтому сложение исходных scores было бы
+  нестабильным и зависело бы от конкретной модели и размера corpus.
+- RRF устойчив к шкалам и поднимает chunks, подтверждённые обеими ветвями.
+- Linear scan имеет сложность `O(chunks × dimension)`, но для текущего личного
+  vault остаётся простым и проверяемым решением без нового runtime-компонента.
+- Если измерения покажут недостаточную latency на крупных vault, уже записанное
+  разделение ports позволяет заменить scan на FAISS или vector database из
+  бэклога без изменения hybrid workflow.
