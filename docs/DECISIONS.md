@@ -539,28 +539,29 @@
 - FTS5 пока не является отдельной chat-командой: следующие подэтапы используют
   его как один из независимых источников hybrid retrieval.
 
-## 2026-08-04. Сменяемый embedding provider и Timeweb adapter
+## 2026-08-04. Парные embedding-модели через Timeweb adapter
 
 Решение:
 
 - Application-owned `EmbeddingProvider` различает `embed_documents` и
-  `embed_query`, хотя первая модель Timeweb использует для них один endpoint.
-- Первым adapter является OpenAI-compatible `/v1/embeddings` с моделью
-  `openai/text-embedding-3-large`; LLM-агент и embedding provider имеют разные
-  URL, API keys и model IDs.
+  `embed_query`.
+- OpenAI-compatible `/v1/embeddings` adapter использует через Timeweb пару
+  `yandex/text-embeddings-v2-doc` и `yandex/text-embeddings-v2-query`;
+  LLM-агент и embedding provider имеют разные URL, API keys и model IDs.
 - Corpus отправляется ограниченными batches. Порядок response items, число
   vectors, indices, конечность координат и единая dimension проверяются до
   возврата domain-моделей.
 - ID модели хранится в каждом `EmbeddingVector`; фактическая dimension берётся
   из проверенного ответа, а не фиксируется предположением в application-слое.
+  Adapter отклоняет несовместимую dimension document/query vectors.
 - Пустой corpus не обращается к provider. Ошибка верхнего уровня сообщает только
   тип сбоя и не содержит ключ или исходный текст.
 
 Причины и последствия:
 
-- Раздельные document/query методы позволят подключить Yandex, Cohere или другой
-  provider с различными режимами без изменения indexing/search use cases.
-- Реальный Timeweb smoke для `openai/text-embedding-3-large` подтвердил vectors
-  dimension 3072 и более высокую cosine similarity тематически близкой фразы.
-- Этап 10.5 хранит model и dimension рядом с float32 vector; смена модели или
-  dimension потребует пересчёта embeddings, но не chunks и не FTS5.
+- Парная модель соответствует асимметричному поиску и стоит дешевле ранее
+  проверенной `openai/text-embedding-3-large`. Объективное A/B-сравнение на
+  реальном vault вынесено в бэклог.
+- Этап 10.5 хранит document model и dimension рядом с float32 vector, а query
+  model включает в профиль индекса. Смена любой модели или dimension потребует
+  пересчёта embeddings, но не chunks и не FTS5.

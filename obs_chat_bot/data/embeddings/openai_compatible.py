@@ -22,7 +22,8 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
     Args:
         base_url: Базовый URL API без завершающего `/`.
         api_key: Отдельный ключ embedding provider.
-        model: ID модели, общий для документов и поисковых запросов.
+        document_model: ID модели для corpus documents.
+        query_model: ID совместимой модели для поисковых запросов.
         batch_size: Максимальное число текстов в одном HTTP-запросе.
         timeout_seconds: Timeout одного запроса в секундах.
         client: Необязательный готовый SDK-клиент для тестов.
@@ -36,7 +37,8 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         *,
         base_url: str,
         api_key: str,
-        model: str,
+        document_model: str,
+        query_model: str,
         batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
         timeout_seconds: float = DEFAULT_EMBEDDING_TIMEOUT_SECONDS,
         client: Any | None = None,
@@ -45,23 +47,32 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             raise ValueError("base_url must not be empty")
         if not api_key.strip():
             raise ValueError("api_key must not be empty")
-        if not model.strip():
-            raise ValueError("model must not be empty")
+        if not document_model.strip():
+            raise ValueError("document_model must not be empty")
+        if not query_model.strip():
+            raise ValueError("query_model must not be empty")
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self._base_url = base_url.strip().rstrip("/")
         self._api_key = api_key
-        self._model = model.strip()
+        self._document_model = document_model.strip()
+        self._query_model = query_model.strip()
         self._batch_size = batch_size
         self._timeout_seconds = timeout_seconds
         self._client = client
+        self._known_dimension: int | None = None
 
     @property
-    def model(self) -> str:
-        """Возвращает настроенный ID модели Timeweb AI Gateway."""
-        return self._model
+    def document_model(self) -> str:
+        """Возвращает ID модели, которой векторизуется corpus."""
+        return self._document_model
+
+    @property
+    def query_model(self) -> str:
+        """Возвращает ID модели, которой векторизуется поисковый запрос."""
+        return self._query_model
 
     def embed_documents(
         self,
@@ -86,7 +97,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         expected_dimension: int | None = None
         for start in range(0, len(texts), self._batch_size):
             batch = texts[start : start + self._batch_size]
-            batch_vectors = self._request(batch)
+            batch_vectors = self._request(batch, model=self._document_model)
             for vector in batch_vectors:
                 if expected_dimension is None:
                     expected_dimension = vector.dimension
@@ -111,13 +122,18 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             EmbeddingProviderError: Если provider недоступен или ответ неверен.
         """
         _validate_texts((text,))
-        return self._request((text,))[0]
+        return self._request((text,), model=self._query_model)[0]
 
-    def _request(self, texts: tuple[str, ...]) -> tuple[EmbeddingVector, ...]:
+    def _request(
+        self,
+        texts: tuple[str, ...],
+        *,
+        model: str,
+    ) -> tuple[EmbeddingVector, ...]:
         """Выполняет один HTTP-запрос и проверяет порядок response items."""
         try:
             response = self._get_client().embeddings.create(
-                model=self._model,
+                model=model,
                 input=list(texts),
             )
         except EmbeddingProviderError:
@@ -133,14 +149,33 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             ordered = sorted(items, key=lambda item: item.index)
             if [item.index for item in ordered] != list(range(len(texts))):
                 raise ValueError("response indices do not match input order")
-            return tuple(
-                embedding_vector_from_dto(item, model=self._model)
-                for item in ordered
+            vectors = tuple(
+                embedding_vector_from_dto(item, model=model) for item in ordered
             )
+            self._validate_compatible_dimension(vectors)
+            return vectors
         except (AttributeError, TypeError, ValueError) as error:
             raise EmbeddingProviderError(
                 "Embedding response has unexpected format"
             ) from error
+
+    def _validate_compatible_dimension(
+        self,
+        vectors: tuple[EmbeddingVector, ...],
+    ) -> None:
+        """Проверяет, что document/query модели создают совместимые векторы."""
+        dimensions = {vector.dimension for vector in vectors}
+        if len(dimensions) != 1:
+            raise EmbeddingProviderError(
+                "Embedding response contains inconsistent dimensions"
+            )
+        for vector in vectors:
+            if self._known_dimension is None:
+                self._known_dimension = vector.dimension
+            elif vector.dimension != self._known_dimension:
+                raise EmbeddingProviderError(
+                    "Document and query embedding dimensions are incompatible"
+                )
 
     def _get_client(self) -> Any:
         """Лениво создаёт SDK-клиент с ограниченным timeout и retry."""

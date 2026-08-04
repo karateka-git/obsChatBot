@@ -56,20 +56,43 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
 
         self.assertEqual(len(resource.calls), 2)
         self.assertEqual([vector.values[0] for vector in vectors], [3.0, 4.0, 4.0])
-        self.assertEqual({vector.model for vector in vectors}, {"test/model"})
+        self.assertEqual({vector.model for vector in vectors}, {"test/doc-model"})
         self.assertEqual({vector.dimension for vector in vectors}, {2})
 
-    def test_embed_query_uses_same_model_and_validates_vector(self) -> None:
-        """Query попадает в то же vector space, что corpus documents."""
+    def test_embed_query_uses_query_model_and_validates_vector(self) -> None:
+        """Query векторизуется отдельной моделью парного vector space."""
         resource = _FakeEmbeddingsResource()
         provider = _provider(resource)
 
         vector = provider.embed_query("semantic query")
 
-        self.assertEqual(vector.model, "test/model")
+        self.assertEqual(vector.model, "test/query-model")
         self.assertEqual(vector.dimension, 3)
-        self.assertEqual(resource.calls[0]["model"], "test/model")
+        self.assertEqual(resource.calls[0]["model"], "test/query-model")
         self.assertEqual(resource.calls[0]["input"], ["semantic query"])
+
+    def test_document_and_query_dimensions_must_be_compatible(self) -> None:
+        """Парные модели не могут возвращать vectors разной dimension."""
+        resource = _FakeEmbeddingsResource(
+            responder=lambda values: SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        index=0,
+                        embedding=(
+                            [1.0, 2.0]
+                            if values["model"] == "test/doc-model"
+                            else [1.0, 2.0, 3.0]
+                        ),
+                    )
+                ]
+            )
+        )
+        provider = _provider(resource)
+
+        provider.embed_documents(("document",))
+
+        with self.assertRaisesRegex(EmbeddingProviderError, "incompatible"):
+            provider.embed_query("query")
 
     def test_empty_document_tuple_does_not_call_provider(self) -> None:
         """Отсутствие новых chunks не создаёт платный внешний запрос."""
@@ -142,7 +165,8 @@ def _provider(
     return OpenAICompatibleEmbeddingProvider(
         base_url="https://embeddings.example/v1",
         api_key="secret",
-        model="test/model",
+        document_model="test/doc-model",
+        query_model="test/query-model",
         batch_size=batch_size,
         client=SimpleNamespace(embeddings=resource),
     )

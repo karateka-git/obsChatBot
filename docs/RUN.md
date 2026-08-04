@@ -112,12 +112,14 @@ adapter для Timeweb AI Gateway. Он использует отдельный 
 ```dotenv
 EMBEDDING_BASE_URL=https://api.timeweb.ai/v1
 EMBEDDING_API_KEY=replace-me
-EMBEDDING_MODEL=openai/text-embedding-3-large
+EMBEDDING_DOCUMENT_MODEL=yandex/text-embeddings-v2-doc
+EMBEDDING_QUERY_MODEL=yandex/text-embeddings-v2-query
 ```
 
 Группа опциональна, но при заполнении хотя бы одного параметра должны быть заданы
-все три. Healthcheck проверяет форму конфигурации без сетевого и платного
-embedding-запроса. Проверенный ответ выбранной модели содержит 3072 координаты.
+все четыре. Documents и query должны обрабатываться совместимой парой моделей:
+adapter дополнительно проверяет совпадение dimension их ответов. Healthcheck
+проверяет форму конфигурации без сетевого и платного embedding-запроса.
 Сохранение vectors в SQLite относится к 10.5.
 
 ## 1. Перейти в папку проекта

@@ -137,7 +137,8 @@ def create_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
     return OpenAICompatibleEmbeddingProvider(
         base_url=config.base_url,
         api_key=config.api_key,
-        model=config.model,
+        document_model=config.document_model,
+        query_model=config.query_model,
     )
 
 

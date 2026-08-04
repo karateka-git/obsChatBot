@@ -79,15 +79,18 @@ class EmbeddingConfig:
 
     base_url: str
     api_key: str
-    model: str
+    document_model: str
+    query_model: str
 
     def __post_init__(self) -> None:
         if not self.base_url.strip():
             raise ValueError("base_url must not be empty")
         if not self.api_key.strip():
             raise ValueError("api_key must not be empty")
-        if not self.model.strip():
-            raise ValueError("model must not be empty")
+        if not self.document_model.strip():
+            raise ValueError("document_model must not be empty")
+        if not self.query_model.strip():
+            raise ValueError("query_model must not be empty")
 
 
 @dataclass(frozen=True)
@@ -137,8 +140,15 @@ class AppConfig:
             "embedding_api_key": (
                 "set" if self.embedding is not None else "missing"
             ),
-            "embedding_model": (
-                self.embedding.model if self.embedding is not None else "missing"
+            "embedding_document_model": (
+                self.embedding.document_model
+                if self.embedding is not None
+                else "missing"
+            ),
+            "embedding_query_model": (
+                self.embedding.query_model
+                if self.embedding is not None
+                else "missing"
             ),
         }
 
@@ -280,7 +290,8 @@ def _load_embedding_config() -> EmbeddingConfig | None:
     names = (
         "EMBEDDING_BASE_URL",
         "EMBEDDING_API_KEY",
-        "EMBEDDING_MODEL",
+        "EMBEDDING_DOCUMENT_MODEL",
+        "EMBEDDING_QUERY_MODEL",
     )
     values = {name: os.getenv(name, "").strip() for name in names}
     configured = [name for name, value in values.items() if value]
@@ -295,7 +306,8 @@ def _load_embedding_config() -> EmbeddingConfig | None:
         return EmbeddingConfig(
             base_url=values["EMBEDDING_BASE_URL"].rstrip("/"),
             api_key=values["EMBEDDING_API_KEY"],
-            model=values["EMBEDDING_MODEL"],
+            document_model=values["EMBEDDING_DOCUMENT_MODEL"],
+            query_model=values["EMBEDDING_QUERY_MODEL"],
         )
     except ValueError as error:
         raise ConfigError(f"Invalid embedding configuration: {error}") from error

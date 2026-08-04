@@ -729,18 +729,18 @@ policy и правила переиндексации зафиксированы
    для Timeweb AI Gateway:
    - base URL `https://api.timeweb.ai/v1`;
    - отдельный API key;
-   - модель `openai/text-embedding-3-large`;
-   - port отдельно векторизует corpus documents и search query, поэтому
-     provider можно заменить на модель с разными query/document режимами;
+   - парные модели `yandex/text-embeddings-v2-doc` для corpus и
+     `yandex/text-embeddings-v2-query` для search query;
+   - port и конфигурация отдельно задают document/query режимы;
    - adapter выполняет batch-запросы, сохраняет порядок, проверяет количество,
-     indices, конечность и общую dimension vectors;
+     indices, конечность и совместимую dimension document/query vectors;
    - пустой набор chunks не создаёт внешний запрос, а ошибки не включают API key
      или исходный текст;
    - отдельная all-or-none группа `EMBEDDING_*` проверяется healthcheck без
-     платного сетевого запроса;
-   - реальный Timeweb smoke подтвердил модель и dimension `3072`.
+     платного сетевого запроса.
 5. **10.5 — следующий подэтап.** Хранить embeddings в SQLite как
-   float32-векторы вместе с model, dimension и content hash.
+   float32-векторы вместе с document model, dimension и content hash; профиль
+   индекса также должен учитывать query model.
 6. Строить запрос к поиску из заголовка и сохранённой LLM-сводки статьи.
 7. Независимо выполнять FTS5 и vector similarity search, объединять результаты
    через Reciprocal Rank Fusion и передавать лучшие chunks в recommendation
@@ -889,6 +889,17 @@ policy и правила переиндексации зафиксированы
 пути, показать полный будущий YAML и выполнить прямой commit только после `да`.
 Этот UX не должен заменять ручной файл как source of truth и не входит в MVP
 Этапа 9.
+
+### A/B-сравнение embedding-моделей на реальном vault
+
+Сравнить парные `yandex/text-embeddings-v2-doc` и
+`yandex/text-embeddings-v2-query` с `openai/text-embedding-3-large` на одном
+поколении chunks и наборе из 20–30 реальных вопросов к пользовательскому vault.
+До теста вручную зафиксировать ожидаемые заметки, затем измерить Recall@3,
+Recall@5 и MRR, отдельно разобрать русские запросы, смешанные русский/английский
+технические термины и близкие по теме заметки. Учитывать качество, latency,
+стоимость переиндексации и размер vectors. Менять production-пару только с
+полным пересчётом embeddings; chunks и FTS5 при этом не перестраивать.
 
 ### Оценить необходимость хеша URL
 

@@ -124,7 +124,8 @@ class ConfigTest(unittest.TestCase):
             _env(
                 EMBEDDING_BASE_URL="https://api.timeweb.ai/v1/",
                 EMBEDDING_API_KEY="embedding-secret",
-                EMBEDDING_MODEL="openai/text-embedding-3-large",
+                EMBEDDING_DOCUMENT_MODEL="yandex/text-embeddings-v2-doc",
+                EMBEDDING_QUERY_MODEL="yandex/text-embeddings-v2-query",
             ),
             clear=True,
         ):
@@ -132,8 +133,12 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(config.embedding.base_url, "https://api.timeweb.ai/v1")
         self.assertEqual(
-            config.embedding.model,
-            "openai/text-embedding-3-large",
+            config.embedding.document_model,
+            "yandex/text-embeddings-v2-doc",
+        )
+        self.assertEqual(
+            config.embedding.query_model,
+            "yandex/text-embeddings-v2-query",
         )
         self.assertEqual(config.safe_summary()["embedding_api_key"], "set")
         self.assertNotIn("embedding-secret", config.safe_summary().values())
@@ -182,7 +187,8 @@ def _env(**overrides: str) -> dict[str, str]:
         "GITHUB_PRIVATE_KEY_PATH": "",
         "EMBEDDING_BASE_URL": "",
         "EMBEDDING_API_KEY": "",
-        "EMBEDDING_MODEL": "",
+        "EMBEDDING_DOCUMENT_MODEL": "",
+        "EMBEDDING_QUERY_MODEL": "",
     }
     values.update(overrides)
     return values
