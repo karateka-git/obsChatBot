@@ -33,6 +33,24 @@ class _FakeEmbeddingsResource:
 class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
     """Проверяет batching, порядок, размерность и ошибки provider."""
 
+    def test_default_sends_one_text_per_yandex_request(self) -> None:
+        """Default соблюдает ограничение прямого Yandex API на один input."""
+        resource = _FakeEmbeddingsResource()
+        provider = OpenAICompatibleEmbeddingProvider(
+            base_url="https://embeddings.example/v1",
+            api_key="secret",
+            document_model="test/doc-model",
+            query_model="test/query-model",
+            client=SimpleNamespace(embeddings=resource),
+        )
+
+        provider.embed_documents(("one", "two"))
+
+        self.assertEqual(
+            [call["input"] for call in resource.calls],
+            [["one"], ["two"]],
+        )
+
     def test_embed_documents_batches_and_preserves_input_order(self) -> None:
         """Большой corpus делится на запросы без перестановки vectors."""
         resource = _FakeEmbeddingsResource(
@@ -70,6 +88,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
         self.assertEqual(vector.dimension, 3)
         self.assertEqual(resource.calls[0]["model"], "test/query-model")
         self.assertEqual(resource.calls[0]["input"], ["semantic query"])
+        self.assertEqual(resource.calls[0]["encoding_format"], "float")
 
     def test_document_and_query_dimensions_must_be_compatible(self) -> None:
         """Парные модели не могут возвращать vectors разной dimension."""

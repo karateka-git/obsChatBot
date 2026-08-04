@@ -132,7 +132,7 @@ def create_embedding_provider(config: EmbeddingConfig) -> EmbeddingProvider:
         config: Отдельная конфигурация semantic embedding provider.
 
     Returns:
-        Adapter Timeweb AI Gateway за application-owned port.
+        Adapter embedding API за application-owned port.
     """
     return OpenAICompatibleEmbeddingProvider(
         base_url=config.base_url,

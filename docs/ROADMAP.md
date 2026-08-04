@@ -726,21 +726,25 @@ policy и правила переиндексации зафиксированы
    - выдача ограничена `app_user_id`, vault и текущей `index_signature`, поэтому
      stale или частично построенное поколение не используется.
 4. **10.4 — завершено.** Добавлены embeddings port и OpenAI-compatible adapter
-   для Timeweb AI Gateway:
-   - base URL `https://api.timeweb.ai/v1`;
+   для прямого Yandex AI Studio API:
+   - base URL `https://ai.api.cloud.yandex.net/v1`;
    - отдельный API key;
-   - парные модели `yandex/text-embeddings-v2-doc` для corpus и
-     `yandex/text-embeddings-v2-query` для search query;
+   - парные model URI `text-embeddings-v2-doc` для corpus и
+     `text-embeddings-v2-query` для search query, привязанные к Yandex Folder;
    - port и конфигурация отдельно задают document/query режимы;
-   - adapter выполняет batch-запросы, сохраняет порядок, проверяет количество,
-     indices, конечность и совместимую dimension document/query vectors;
+   - adapter учитывает ограничение Yandex: один текст на HTTP-запрос, сохраняет
+     порядок, проверяет indices, конечность и совместимую dimension
+     document/query vectors;
    - пустой набор chunks не создаёт внешний запрос, а ошибки не включают API key
      или исходный текст;
    - отдельная all-or-none группа `EMBEDDING_*` проверяется healthcheck без
      платного сетевого запроса.
 5. **10.5 — следующий подэтап.** Хранить embeddings в SQLite как
    float32-векторы вместе с document model, dimension и content hash; профиль
-   индекса также должен учитывать query model.
+   индекса также должен учитывать query model. Массовую индексацию выполнять
+   ограниченно параллельными одиночными запросами с сохранением порядка и
+   безопасным retry, поскольку прямой OpenAI-compatible API Yandex не принимает
+   несколько текстов в одном запросе.
 6. Строить запрос к поиску из заголовка и сохранённой LLM-сводки статьи.
 7. Независимо выполнять FTS5 и vector similarity search, объединять результаты
    через Reciprocal Rank Fusion и передавать лучшие chunks в recommendation
@@ -892,8 +896,8 @@ policy и правила переиндексации зафиксированы
 
 ### A/B-сравнение embedding-моделей на реальном vault
 
-Сравнить парные `yandex/text-embeddings-v2-doc` и
-`yandex/text-embeddings-v2-query` с `openai/text-embedding-3-large` на одном
+Сравнить парные Yandex `text-embeddings-v2-doc` и
+`text-embeddings-v2-query` с `openai/text-embedding-3-large` на одном
 поколении chunks и наборе из 20–30 реальных вопросов к пользовательскому vault.
 До теста вручную зафиксировать ожидаемые заметки, затем измерить Recall@3,
 Recall@5 и MRR, отдельно разобрать русские запросы, смешанные русский/английский

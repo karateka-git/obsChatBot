@@ -1,4 +1,4 @@
-"""OpenAI-compatible adapter embeddings для Timeweb AI Gateway."""
+"""OpenAI-compatible adapter для внешнего embedding API."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from obs_chat_bot.data.embeddings.mappers import embedding_vector_from_dto
 from obs_chat_bot.domain.search.entities import EmbeddingVector
 
 
-DEFAULT_EMBEDDING_BATCH_SIZE = 64
+# OpenAI-compatible endpoint Yandex AI Studio принимает один текст за запрос.
+DEFAULT_EMBEDDING_BATCH_SIZE = 1
 DEFAULT_EMBEDDING_TIMEOUT_SECONDS = 30.0
 
 
@@ -66,12 +67,12 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
 
     @property
     def document_model(self) -> str:
-        """Возвращает ID модели, которой векторизуется corpus."""
+        """Возвращает URI модели, которой векторизуется corpus."""
         return self._document_model
 
     @property
     def query_model(self) -> str:
-        """Возвращает ID модели, которой векторизуется поисковый запрос."""
+        """Возвращает URI модели, которой векторизуется поисковый запрос."""
         return self._query_model
 
     def embed_documents(
@@ -135,6 +136,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             response = self._get_client().embeddings.create(
                 model=model,
                 input=list(texts),
+                encoding_format="float",
             )
         except EmbeddingProviderError:
             raise
