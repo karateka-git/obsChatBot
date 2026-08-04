@@ -12,8 +12,7 @@ from obs_chat_bot.data.embeddings.mappers import embedding_vector_from_dto
 from obs_chat_bot.domain.search.entities import EmbeddingVector
 
 
-# OpenAI-compatible endpoint Yandex AI Studio принимает один текст за запрос.
-DEFAULT_EMBEDDING_BATCH_SIZE = 1
+DEFAULT_EMBEDDING_BATCH_SIZE = 64
 DEFAULT_EMBEDDING_TIMEOUT_SECONDS = 30.0
 
 

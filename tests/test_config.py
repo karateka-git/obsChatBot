@@ -122,14 +122,10 @@ class ConfigTest(unittest.TestCase):
         with patch.dict(
             os.environ,
             _env(
-                EMBEDDING_BASE_URL="https://ai.api.cloud.yandex.net/v1/",
+                EMBEDDING_BASE_URL="https://api.timeweb.ai/v1/",
                 EMBEDDING_API_KEY="embedding-secret",
-                EMBEDDING_DOCUMENT_MODEL=(
-                    "emb://folder-id/text-embeddings-v2-doc/latest"
-                ),
-                EMBEDDING_QUERY_MODEL=(
-                    "emb://folder-id/text-embeddings-v2-query/latest"
-                ),
+                EMBEDDING_DOCUMENT_MODEL="openai/text-embedding-3-large",
+                EMBEDDING_QUERY_MODEL="openai/text-embedding-3-large",
             ),
             clear=True,
         ):
@@ -137,15 +133,15 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(
             config.embedding.base_url,
-            "https://ai.api.cloud.yandex.net/v1",
+            "https://api.timeweb.ai/v1",
         )
         self.assertEqual(
             config.embedding.document_model,
-            "emb://folder-id/text-embeddings-v2-doc/latest",
+            "openai/text-embedding-3-large",
         )
         self.assertEqual(
             config.embedding.query_model,
-            "emb://folder-id/text-embeddings-v2-query/latest",
+            "openai/text-embedding-3-large",
         )
         self.assertEqual(config.safe_summary()["embedding_api_key"], "set")
         self.assertNotIn("embedding-secret", config.safe_summary().values())

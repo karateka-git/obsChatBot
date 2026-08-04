@@ -106,24 +106,21 @@ FTS станет источником candidates для общего RAG-flow с
 ## Настройки embeddings
 
 Подэтап 10.4 добавляет сменяемый embedding provider и OpenAI-compatible adapter
-для прямого Yandex AI Studio API. Он использует отдельный ключ, не связанный с
-`OPENAI_API_KEY` AI-агента. Вместо `replace-with-folder-id` указывается ID
-каталога Yandex Cloud:
+для Timeweb AI Gateway. Он использует отдельный ключ, не связанный с
+`OPENAI_API_KEY` AI-агента:
 
 ```dotenv
-EMBEDDING_BASE_URL=https://ai.api.cloud.yandex.net/v1
+EMBEDDING_BASE_URL=https://api.timeweb.ai/v1
 EMBEDDING_API_KEY=replace-me
-EMBEDDING_DOCUMENT_MODEL=emb://replace-with-folder-id/text-embeddings-v2-doc/latest
-EMBEDDING_QUERY_MODEL=emb://replace-with-folder-id/text-embeddings-v2-query/latest
+EMBEDDING_DOCUMENT_MODEL=openai/text-embedding-3-large
+EMBEDDING_QUERY_MODEL=openai/text-embedding-3-large
 ```
 
 Группа опциональна, но при заполнении хотя бы одного параметра должны быть заданы
 все четыре. Documents и query должны обрабатываться совместимой парой моделей:
 adapter дополнительно проверяет совпадение dimension их ответов. Healthcheck
 проверяет форму конфигурации без сетевого и платного embedding-запроса.
-OpenAI-compatible API Yandex принимает один текст за запрос; ограниченная
-параллельность массовой индексации и сохранение vectors в SQLite относятся к
-10.5.
+Сохранение vectors в SQLite относится к 10.5.
 
 ## 1. Перейти в папку проекта
 

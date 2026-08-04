@@ -33,8 +33,8 @@ class _FakeEmbeddingsResource:
 class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
     """Проверяет batching, порядок, размерность и ошибки provider."""
 
-    def test_default_sends_one_text_per_yandex_request(self) -> None:
-        """Default соблюдает ограничение прямого Yandex API на один input."""
+    def test_default_batches_multiple_inputs_in_one_request(self) -> None:
+        """Default отправляет небольшой corpus одним пакетным запросом."""
         resource = _FakeEmbeddingsResource()
         provider = OpenAICompatibleEmbeddingProvider(
             base_url="https://embeddings.example/v1",
@@ -48,7 +48,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
 
         self.assertEqual(
             [call["input"] for call in resource.calls],
-            [["one"], ["two"]],
+            [["one", "two"]],
         )
 
     def test_embed_documents_batches_and_preserves_input_order(self) -> None:

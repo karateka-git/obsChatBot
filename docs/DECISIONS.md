@@ -539,21 +539,18 @@
 - FTS5 пока не является отдельной chat-командой: следующие подэтапы используют
   его как один из независимых источников hybrid retrieval.
 
-## 2026-08-04. Парные embedding-модели напрямую через Yandex AI Studio
+## 2026-08-04. Timeweb adapter и пакетная OpenAI embedding-модель
 
 Решение:
 
 - Application-owned `EmbeddingProvider` различает `embed_documents` и
   `embed_query`.
-- OpenAI-compatible `/v1/embeddings` adapter обращается напрямую к Yandex AI
-  Studio и использует пару `text-embeddings-v2-doc` и
-  `text-embeddings-v2-query`; LLM-агент и embedding provider имеют разные URL,
-  API keys и model URI.
-- OpenAI-compatible endpoint Yandex принимает один текст на HTTP-запрос.
-  Adapter разбивает corpus на одиночные запросы; порядок response items,
-  indices, конечность координат и единая dimension проверяются до возврата
-  domain-моделей. Ограниченная параллельность массовой индексации относится к
-  Этапу 10.5.
+- OpenAI-compatible `/v1/embeddings` adapter обращается к Timeweb AI Gateway и
+  использует `openai/text-embedding-3-large` для documents и query; LLM-агент и
+  embedding provider имеют разные URL, API keys и model IDs.
+- Corpus отправляется ограниченными batches. Порядок response items, число
+  vectors, indices, конечность координат и единая dimension проверяются до
+  возврата domain-моделей.
 - ID модели хранится в каждом `EmbeddingVector`; фактическая dimension берётся
   из проверенного ответа, а не фиксируется предположением в application-слое.
   Adapter отклоняет несовместимую dimension document/query vectors.
@@ -562,10 +559,10 @@
 
 Причины и последствия:
 
-- Прямое подключение исключает дополнительный Timeweb Gateway, который при
-  smoke-проверке моделей Yandex стабильно возвращал HTTP 503. Парная модель
-  соответствует асимметричному поиску; объективное A/B-сравнение с ранее
-  проверенной `openai/text-embedding-3-large` вынесено в бэклог.
+- Прямые Yandex Text Embeddings v2 проверены и отклонены как текущий вариант:
+  все доступные API принимают только один текст на запрос. Для массовой
+  индексации vault отсутствие batch считается значительным минусом. Возможное
+  A/B-сравнение качества и цены сохранено в бэклоге с этим ограничением.
 - Этап 10.5 хранит document model и dimension рядом с float32 vector, а query
   model включает в профиль индекса. Смена любой модели или dimension потребует
   пересчёта embeddings, но не chunks и не FTS5.

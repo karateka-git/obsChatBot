@@ -13,8 +13,8 @@
    - `OPENAI_MODEL` заполнен, даже если провайдер игнорирует это поле;
    - если включены embeddings, одновременно заданы `EMBEDDING_BASE_URL`,
      `EMBEDDING_API_KEY`, `EMBEDDING_DOCUMENT_MODEL` и
-     `EMBEDDING_QUERY_MODEL`; ключ Yandex AI Studio не должен совпадать или
-     смешиваться с ключом AI-агента, а model URI должны содержать ID каталога;
+     `EMBEDDING_QUERY_MODEL`; ключ AI Gateway не должен совпадать или
+     смешиваться с ключом AI-агента;
    - если включён GitHub connector, одновременно заданы `GITHUB_APP_ID`,
      `GITHUB_CLIENT_ID`, `GITHUB_APP_SLUG`, `GITHUB_PRIVATE_KEY_PATH`, а PEM
      доступен только процессу приложения;

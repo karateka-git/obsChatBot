@@ -726,25 +726,20 @@ policy и правила переиндексации зафиксированы
    - выдача ограничена `app_user_id`, vault и текущей `index_signature`, поэтому
      stale или частично построенное поколение не используется.
 4. **10.4 — завершено.** Добавлены embeddings port и OpenAI-compatible adapter
-   для прямого Yandex AI Studio API:
-   - base URL `https://ai.api.cloud.yandex.net/v1`;
+   для Timeweb AI Gateway:
+   - base URL `https://api.timeweb.ai/v1`;
    - отдельный API key;
-   - парные model URI `text-embeddings-v2-doc` для corpus и
-     `text-embeddings-v2-query` для search query, привязанные к Yandex Folder;
+   - модель `openai/text-embedding-3-large` для corpus и search query;
    - port и конфигурация отдельно задают document/query режимы;
-   - adapter учитывает ограничение Yandex: один текст на HTTP-запрос, сохраняет
-     порядок, проверяет indices, конечность и совместимую dimension
-     document/query vectors;
+   - adapter выполняет batch-запросы, сохраняет порядок, проверяет количество,
+     indices, конечность и совместимую dimension vectors;
    - пустой набор chunks не создаёт внешний запрос, а ошибки не включают API key
      или исходный текст;
    - отдельная all-or-none группа `EMBEDDING_*` проверяется healthcheck без
      платного сетевого запроса.
 5. **10.5 — следующий подэтап.** Хранить embeddings в SQLite как
    float32-векторы вместе с document model, dimension и content hash; профиль
-   индекса также должен учитывать query model. Массовую индексацию выполнять
-   ограниченно параллельными одиночными запросами с сохранением порядка и
-   безопасным retry, поскольку прямой OpenAI-compatible API Yandex не принимает
-   несколько текстов в одном запросе.
+   индекса также должен учитывать query model.
 6. Строить запрос к поиску из заголовка и сохранённой LLM-сводки статьи.
 7. Независимо выполнять FTS5 и vector similarity search, объединять результаты
    через Reciprocal Rank Fusion и передавать лучшие chunks в recommendation
@@ -904,6 +899,14 @@ Recall@5 и MRR, отдельно разобрать русские запрос
 технические термины и близкие по теме заметки. Учитывать качество, latency,
 стоимость переиндексации и размер vectors. Менять production-пару только с
 полным пересчётом embeddings; chunks и FTS5 при этом не перестраивать.
+
+Перед началом сравнения повторно оценить его целесообразность: прямой
+OpenAI-compatible, нативный REST и gRPC API Yandex принимают только один текст на
+embedding-запрос, тогда как текущая OpenAI-модель поддерживает batch. Для этого
+проекта отсутствие настоящего batch — значительный эксплуатационный минус
+Yandex: массовая индексация создаёт по одному HTTP-запросу на каждый chunk и
+требует отдельного bounded concurrency. Не переходить на Yandex только из-за
+равного качества или меньшей цены; выигрыш должен компенсировать это ограничение.
 
 ### Оценить необходимость хеша URL
 
