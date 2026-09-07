@@ -111,6 +111,75 @@ class SQLiteVaultChunkIndexRepository(VaultChunkIndexRepository):
                 (app_user_id, vault_id),
             )
 
+    def list_stale_note_ids(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        index_signature: str,
+    ) -> set[int]:
+        """Находит заметки, чьи blob SHA ещё не отражены в текущих chunks."""
+        if not index_signature.strip():
+            raise ValueError("index_signature must not be empty")
+        rows = self._connection.execute(
+            """
+            SELECT note.id
+            FROM obsidian_notes AS note
+            LEFT JOIN obsidian_note_chunk_index_states AS state
+              ON state.note_id = note.id
+             AND state.app_user_id = note.app_user_id
+             AND state.vault_id = note.vault_id
+            WHERE note.app_user_id = ? AND note.vault_id = ?
+              AND (
+                  state.note_id IS NULL
+                  OR state.source_blob_sha <> note.blob_sha
+                  OR state.index_signature <> ?
+              )
+            """,
+            (app_user_id, vault_id, index_signature),
+        ).fetchall()
+        return {row["id"] for row in rows}
+
+    def mark_note_current(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        note_id: int,
+        source_blob_sha: str,
+        index_signature: str,
+    ) -> None:
+        """Публикует source revision chunks одной заметки после её diff."""
+        if not source_blob_sha.strip() or not index_signature.strip():
+            raise ValueError("note index state values must not be empty")
+        with self._connection:
+            self._require_note_scope(
+                app_user_id=app_user_id,
+                vault_id=vault_id,
+                note_id=note_id,
+            )
+            self._connection.execute(
+                """
+                INSERT INTO obsidian_note_chunk_index_states (
+                    app_user_id, vault_id, note_id, source_blob_sha,
+                    index_signature
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(note_id) DO UPDATE SET
+                    app_user_id = excluded.app_user_id,
+                    vault_id = excluded.vault_id,
+                    source_blob_sha = excluded.source_blob_sha,
+                    index_signature = excluded.index_signature,
+                    indexed_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    app_user_id,
+                    vault_id,
+                    note_id,
+                    source_blob_sha,
+                    index_signature,
+                ),
+            )
+
     def replace_for_note(
         self,
         *,
@@ -233,6 +302,13 @@ class SQLiteVaultChunkIndexRepository(VaultChunkIndexRepository):
                 app_user_id=app_user_id,
                 vault_id=vault_id,
             )
+            note_rows = self._connection.execute(
+                """
+                SELECT id, blob_sha FROM obsidian_notes
+                WHERE app_user_id = ? AND vault_id = ?
+                """,
+                (app_user_id, vault_id),
+            ).fetchall()
             self._require_vault_scope(app_user_id=app_user_id, vault_id=vault_id)
             _validate_chunk_set(
                 chunks,
@@ -257,6 +333,31 @@ class SQLiteVaultChunkIndexRepository(VaultChunkIndexRepository):
             )
             for chunk in sorted(chunks, key=lambda item: (item.note_path, item.position)):
                 self._insert_chunk(chunk)
+            self._connection.execute(
+                """
+                DELETE FROM obsidian_note_chunk_index_states
+                WHERE app_user_id = ? AND vault_id = ?
+                """,
+                (app_user_id, vault_id),
+            )
+            self._connection.executemany(
+                """
+                INSERT INTO obsidian_note_chunk_index_states (
+                    app_user_id, vault_id, note_id, source_blob_sha,
+                    index_signature
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        app_user_id,
+                        vault_id,
+                        row["id"],
+                        row["blob_sha"],
+                        index_signature,
+                    )
+                    for row in note_rows
+                ),
+            )
             self._upsert_state(
                 app_user_id=app_user_id,
                 vault_id=vault_id,
@@ -276,6 +377,12 @@ class SQLiteVaultChunkIndexRepository(VaultChunkIndexRepository):
             raise ValueError("index_signature must not be empty")
         with self._connection:
             self._require_vault_scope(app_user_id=app_user_id, vault_id=vault_id)
+            if self.list_stale_note_ids(
+                app_user_id=app_user_id,
+                vault_id=vault_id,
+                index_signature=index_signature,
+            ):
+                raise ValueError("all vault notes must be indexed before publishing")
             self._upsert_state(
                 app_user_id=app_user_id,
                 vault_id=vault_id,

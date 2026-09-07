@@ -180,6 +180,8 @@ con.close()
 - `obsidian_note_chunks` — структурные chunks текущей локальной копии;
 - `obsidian_note_chunks_fts` — автоматически обновляемая FTS5-проекция chunks;
 - `obsidian_chunk_index_states` — marker согласованного поколения parser/policy.
+- `obsidian_note_chunk_index_states` — source blob SHA и signature chunks каждой
+  заметки; по ним stale global marker восстанавливается без полного rebuild.
 - `obsidian_proposals` — pending и завершённая история решений `add`/`update`/
   `skip`, исходные SHA и commit успешного write-back.
 

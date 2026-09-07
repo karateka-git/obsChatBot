@@ -97,8 +97,12 @@ class UrllibArticleHtmlFetcherTest(unittest.TestCase):
                 fetcher.fetch("https://example.com/article")
 
     def test_fetch_wraps_http_error(self) -> None:
-        """Исключение HTTP-клиента превращается в application-ошибку."""
-        fetcher = UrllibArticleHtmlFetcher(timeout_seconds=1)
+        """HTTP-ошибка не повторяется и превращается в application-ошибку."""
+        delays: list[float] = []
+        fetcher = UrllibArticleHtmlFetcher(
+            timeout_seconds=1,
+            sleeper=delays.append,
+        )
 
         with patch(
             "obs_chat_bot.data.http.article_html_fetcher.urlopen",
@@ -109,20 +113,50 @@ class UrllibArticleHtmlFetcherTest(unittest.TestCase):
                 hdrs=None,
                 fp=None,
             ),
-        ):
+        ) as opener:
             with self.assertRaises(ArticleFetchError):
                 fetcher.fetch("https://example.com/article")
 
+        opener.assert_called_once()
+        self.assertEqual(delays, [])
+
     def test_fetch_wraps_network_error(self) -> None:
-        """Сетевая ошибка превращается в application-ошибку."""
-        fetcher = UrllibArticleHtmlFetcher(timeout_seconds=1)
+        """Сетевая ошибка после исчерпания попыток становится application-ошибкой."""
+        delays: list[float] = []
+        fetcher = UrllibArticleHtmlFetcher(
+            timeout_seconds=1,
+            retry_base_delay_seconds=0.5,
+            sleeper=delays.append,
+        )
 
         with patch(
             "obs_chat_bot.data.http.article_html_fetcher.urlopen",
             side_effect=URLError("offline"),
-        ):
+        ) as opener:
             with self.assertRaises(ArticleFetchError):
                 fetcher.fetch("https://example.com/article")
+
+        self.assertEqual(opener.call_count, 3)
+        self.assertEqual(delays, [0.5, 1.0])
+
+    def test_fetch_retries_network_error_and_returns_response(self) -> None:
+        """Временная сетевая ошибка повторяется до успешного HTML-ответа."""
+        delays: list[float] = []
+        fetcher = UrllibArticleHtmlFetcher(
+            timeout_seconds=1,
+            retry_base_delay_seconds=0.5,
+            sleeper=delays.append,
+        )
+
+        with patch(
+            "obs_chat_bot.data.http.article_html_fetcher.urlopen",
+            side_effect=[URLError("temporary"), FakeHttpResponse()],
+        ) as opener:
+            result = fetcher.fetch("https://example.com/article")
+
+        self.assertEqual(result.content, "<html><body>Article</body></html>")
+        self.assertEqual(opener.call_count, 2)
+        self.assertEqual(delays, [0.5])
 
     def test_fetch_rejects_localhost_without_request(self) -> None:
         """Локальный URL отклоняется до HTTP-запроса."""
@@ -149,6 +183,13 @@ class UrllibArticleHtmlFetcherTest(unittest.TestCase):
         """Неположительный timeout отклоняется сразу."""
         with self.assertRaises(ValueError):
             UrllibArticleHtmlFetcher(timeout_seconds=0)
+
+    def test_fetch_validates_retry_settings(self) -> None:
+        """Некорректные параметры retry отклоняются при создании fetcher."""
+        with self.assertRaises(ValueError):
+            UrllibArticleHtmlFetcher(max_attempts=0)
+        with self.assertRaises(ValueError):
+            UrllibArticleHtmlFetcher(retry_base_delay_seconds=-0.1)
 
 
 if __name__ == "__main__":

@@ -443,10 +443,16 @@ def format_incoming_message_result(result: ProcessIncomingMessageResult) -> str:
                 return "Предложение применено."
             if proposal.action is ObsidianProposalAction.SKIP:
                 return "Review завершён без изменений Obsidian vault."
-            return (
+            response = (
                 f"Изменение применено к `{proposal.target_path}` прямым commit.\n"
                 f"Commit: `{proposal.applied_commit_sha}`"
             )
+            if result.error is not None:
+                response += (
+                    "\n\nЗаметка сохранена, но поисковый индекс пока не "
+                    "обновлён. Повтори позже `/github_sync`."
+                )
+            return response
         case IncomingMessageResultType.ARTICLE_REVIEW_CONFLICT:
             return (
                 "Vault изменился после подготовки предложения. Ничего не "
@@ -522,6 +528,11 @@ def _with_vault_sync_warning(
         reason = (
             "Vault сейчас синхронизируется в другом связанном канале, "
             "поэтому использована текущая локальная копия."
+        )
+    elif warning.reason is VaultSyncWarningReason.EMBEDDING_UPDATE_FAILED:
+        reason = (
+            "Заметки и полнотекстовый индекс актуальны, но embeddings временно "
+            "недоступны. Поиск выполнен через FTS fallback."
         )
     else:
         reason = (
@@ -688,24 +699,31 @@ def _format_vault_sync(result: ProcessIncomingMessageResult) -> str:
     if sync.status is VaultSyncStatus.IN_PROGRESS:
         return "Этот vault уже синхронизируется. Дождись завершения."
     if sync.status is VaultSyncStatus.FRESH:
-        return (
+        reply = (
             "Vault недавно проверен, повторный запрос к GitHub не требуется.\n"
             f"Локально заметок: {sync.total_notes}. "
             f"Файлов правил: {sync.instruction_files}."
         )
-    if sync.status is VaultSyncStatus.UNCHANGED:
-        return (
+    elif sync.status is VaultSyncStatus.UNCHANGED:
+        reply = (
             "Vault проверен: изменений нет.\n"
             f"Локально заметок: {sync.total_notes}. "
             f"Файлов правил: {sync.instruction_files}."
         )
-    return (
-        "Vault синхронизирован.\n"
-        f"Заметок: {sync.total_notes}; скачано: {sync.downloaded_notes}; "
-        f"добавлено: {sync.added_notes}; обновлено: {sync.updated_notes}; "
-        f"удалено: {sync.deleted_notes}.\n"
-        f"Файлов правил: {sync.instruction_files}."
-    )
+    else:
+        reply = (
+            "Vault синхронизирован.\n"
+            f"Заметок: {sync.total_notes}; скачано: {sync.downloaded_notes}; "
+            f"добавлено: {sync.added_notes}; обновлено: {sync.updated_notes}; "
+            f"удалено: {sync.deleted_notes}.\n"
+            f"Файлов правил: {sync.instruction_files}."
+        )
+    if sync.embedding_update_failed:
+        reply += (
+            "\n\n⚠️ Markdown и FTS сохранены, но embeddings обновить не "
+            "удалось. Semantic search временно использует FTS fallback."
+        )
+    return reply
 
 
 def _format_vault_configuration_error(error: VaultConfigurationError) -> str:

@@ -74,6 +74,26 @@ class VaultChunkIndexRepository(Protocol):
     def invalidate(self, *, app_user_id: int, vault_id: int) -> None:
         """Удаляет marker согласованности до потенциально частичной записи."""
 
+    def list_stale_note_ids(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        index_signature: str,
+    ) -> set[int]:
+        """Возвращает заметки без chunks для текущих blob SHA и signature."""
+
+    def mark_note_current(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        note_id: int,
+        source_blob_sha: str,
+        index_signature: str,
+    ) -> None:
+        """Фиксирует готовность chunks одной исходной заметки."""
+
     def replace_for_note(
         self,
         *,

@@ -268,7 +268,17 @@ class ProcessIncomingMessageUseCase:
         vault_sync_warning = (
             auto_sync_result
             if isinstance(auto_sync_result, VaultSyncWarning)
-            else None
+            else (
+                self._vault_sync_warning(
+                    app_user_result.id,
+                    VaultSyncWarningReason.EMBEDDING_UPDATE_FAILED,
+                )
+                if (
+                    isinstance(auto_sync_result, VaultSyncResult)
+                    and auto_sync_result.embedding_update_failed
+                )
+                else None
+            )
         )
         vault_sync_result = (
             auto_sync_result
@@ -466,14 +476,23 @@ class ProcessIncomingMessageUseCase:
             )
         except (GitHubGatewayError, OSError, ValueError, RuntimeError) as error:
             LOGGER.warning(
-                "Automatic vault check failed, using local copy: "
+                "Automatic vault check failed: "
                 "app_user_id=%s error_type=%s",
                 app_user.id,
                 type(error).__name__,
             )
+            status = self._get_vault_status_safe(app_user.id)
+            if not _has_usable_local_snapshot(status):
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.GITHUB_SYNC_FAILED,
+                    app_user=app_user,
+                    vault_status=status,
+                    error=error,
+                )
             return self._vault_sync_warning(
                 app_user.id,
                 VaultSyncWarningReason.UPDATE_FAILED,
+                status=status,
             )
         LOGGER.debug(
             "Automatic vault check completed: app_user_id=%s status=%s "
@@ -489,9 +508,20 @@ class ProcessIncomingMessageUseCase:
                 app_user=app_user,
             )
         if sync_result.status is VaultSyncStatus.IN_PROGRESS:
+            status = self._get_vault_status_safe(app_user.id)
+            if not _has_usable_local_snapshot(status):
+                return ProcessIncomingMessageResult(
+                    type=IncomingMessageResultType.GITHUB_SYNC_FAILED,
+                    app_user=app_user,
+                    vault_status=status,
+                    error=RuntimeError(
+                        "Vault synchronization is in progress without a usable snapshot"
+                    ),
+                )
             return self._vault_sync_warning(
                 app_user.id,
                 VaultSyncWarningReason.IN_PROGRESS,
+                status=status,
             )
         return sync_result
 
@@ -499,13 +529,12 @@ class ProcessIncomingMessageUseCase:
         self,
         app_user_id: int,
         reason: VaultSyncWarningReason,
+        *,
+        status: VaultStatus | None = None,
     ) -> VaultSyncWarning:
         """Дополняет fallback доступным состоянием локальной копии."""
-        if self._vault_sync_manager is None:
-            return VaultSyncWarning(reason=reason)
-        try:
-            status = self._vault_sync_manager.get_status(app_user_id)
-        except (OSError, ValueError, RuntimeError):
+        status = status or self._get_vault_status_safe(app_user_id)
+        if status is None:
             return VaultSyncWarning(reason=reason)
         return VaultSyncWarning(
             reason=reason,
@@ -516,6 +545,15 @@ class ProcessIncomingMessageUseCase:
                 else None
             ),
         )
+
+    def _get_vault_status_safe(self, app_user_id: int) -> VaultStatus | None:
+        """Читает readiness локального vault без подмены исходной sync-ошибки."""
+        if self._vault_sync_manager is None:
+            return None
+        try:
+            return self._vault_sync_manager.get_status(app_user_id)
+        except (OSError, ValueError, RuntimeError):
+            return None
 
     def _resolve_app_user(
         self,
@@ -1399,6 +1437,17 @@ def _with_app_user(incoming_message: IncomingMessage, app_user: AppUser) -> Inco
         external_user_id=incoming_message.external_user_id,
         username=incoming_message.username,
         display_name=incoming_message.display_name,
+    )
+
+
+def _has_usable_local_snapshot(status: VaultStatus | None) -> bool:
+    """Проверяет readiness локального source/FTS до платного article pipeline."""
+    if status is None or status.vault is None:
+        return False
+    return bool(
+        status.vault.head_commit_sha
+        and status.vault.tree_sha
+        and status.chunk_index_current
     )
 
 

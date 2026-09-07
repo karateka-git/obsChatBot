@@ -313,6 +313,7 @@ def create_obsidian_proposal_confirmation_service(
     connection: sqlite3.Connection,
     *,
     github_gateway: GitHubVaultWriteGateway,
+    vault_sync_manager: VaultSyncManager | None = None,
 ) -> ObsidianProposalConfirmationService:
     """Собирает подтверждение proposal, SHA preflight и GitHub write-back."""
     return ObsidianProposalConfirmationService(
@@ -320,6 +321,7 @@ def create_obsidian_proposal_confirmation_service(
         vault_repository=SQLiteObsidianVaultRepository(connection),
         lease_repository=SQLiteVaultSyncLeaseRepository(connection),
         github_gateway=github_gateway,
+        vault_sync_manager=vault_sync_manager,
         error_recorder=SQLiteProcessingErrorRecorder(connection),
     )
 

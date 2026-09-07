@@ -707,6 +707,19 @@ def process_channel_incoming_message(
                 openai_model=openai_model,
             )
         )
+        vault_sync_manager = (
+            create_vault_sync_manager(
+                database_path=database_path,
+                github_gateway=github_repository_gateway,
+                chunking_config=chunking_config,
+                embedding_config=embedding_config,
+            )
+            if (
+                github_repository_gateway is not None
+                and hasattr(github_repository_gateway, "fetch_vault_snapshot")
+            )
+            else None
+        )
         incoming_message_use_case = create_process_incoming_message_use_case(
             article_url_use_case=article_url_use_case,
             article_analysis_use_case=article_analysis_use_case,
@@ -721,19 +734,7 @@ def process_channel_incoming_message(
                 if github_repository_gateway is not None
                 else None
             ),
-            vault_sync_manager=(
-                create_vault_sync_manager(
-                    database_path=database_path,
-                    github_gateway=github_repository_gateway,
-                    chunking_config=chunking_config,
-                    embedding_config=embedding_config,
-                )
-                if (
-                    github_repository_gateway is not None
-                    and hasattr(github_repository_gateway, "fetch_vault_snapshot")
-                )
-                else None
-            ),
+            vault_sync_manager=vault_sync_manager,
             obsidian_review_use_case=create_prepare_obsidian_review_use_case(
                 connection,
                 openai_base_url=openai_base_url,
@@ -746,6 +747,7 @@ def process_channel_incoming_message(
                 create_obsidian_proposal_confirmation_service(
                     connection,
                     github_gateway=github_repository_gateway,
+                    vault_sync_manager=vault_sync_manager,
                 )
                 if (
                     github_repository_gateway is not None

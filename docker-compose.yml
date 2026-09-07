@@ -6,6 +6,8 @@ x-catcher-base: &catcher-base
     - .env
   environment:
     APP_DEBUG: ${APP_DEBUG:-false}
+    # Один AI Gateway key используется для LLM и embeddings.
+    OPENAI_API_KEY: ${EMBEDDING_API_KEY}
   volumes:
     - ./data:/app/data
   healthcheck:

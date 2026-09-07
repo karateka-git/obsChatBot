@@ -20,3 +20,5 @@ class ProcessingStage(StrEnum):
     OBSIDIAN_REVIEW = "obsidian_review"
     # Проверка SHA и подтверждённая запись Markdown в GitHub vault.
     OBSIDIAN_WRITE = "obsidian_write"
+    # Обновление локальных chunks и embeddings после успешной записи в vault.
+    OBSIDIAN_INDEX = "obsidian_index"

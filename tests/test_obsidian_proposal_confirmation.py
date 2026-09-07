@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 import unittest
 
 from obs_chat_bot.application.reviews.confirmation import (
@@ -52,13 +53,29 @@ class ObsidianProposalConfirmationTests(unittest.TestCase):
     def test_exact_snapshot_creates_commit_and_completes_locally(self) -> None:
         repository = ProposalRepositoryFake(_proposal(ObsidianProposalAction.ADD))
         gateway = GitHubGatewayFake(_state())
+        sync = VaultSyncManagerFake()
 
-        result = _service(repository, self.vault, gateway).confirm(3)
+        result = _service(repository, self.vault, gateway, sync=sync).confirm(3)
 
         self.assertEqual(result.status, ObsidianConfirmationStatus.APPLIED)
         self.assertEqual(gateway.commit_calls, 1)
         self.assertEqual(repository.note.path, "Tech/New.md")
         self.assertEqual(repository.note.blob_sha, "new-blob")
+        self.assertEqual(sync.calls, [3])
+
+    def test_embedding_failure_does_not_undo_successful_commit(self) -> None:
+        """Post-commit индексация оставляет proposal применённым при сбое API."""
+        repository = ProposalRepositoryFake(_proposal(ObsidianProposalAction.ADD))
+        gateway = GitHubGatewayFake(_state())
+        sync = VaultSyncManagerFake(error=RuntimeError("embedding unavailable"))
+
+        result = _service(repository, self.vault, gateway, sync=sync).confirm(3)
+
+        self.assertEqual(result.status, ObsidianConfirmationStatus.APPLIED)
+        self.assertIsInstance(result.error, RuntimeError)
+        self.assertEqual(repository.pending.status, ObsidianProposalStatus.APPLIED)
+        self.assertEqual(gateway.commit_calls, 1)
+        self.assertEqual(sync.calls, [3])
 
     def test_changed_head_closes_stale_proposal_without_commit(self) -> None:
         repository = ProposalRepositoryFake(_proposal(ObsidianProposalAction.ADD))
@@ -217,12 +234,33 @@ class GitHubGatewayFake:
         )
 
 
-def _service(repository, vault, gateway) -> ObsidianProposalConfirmationService:
+class VaultSyncManagerFake:
+    """Имитирует немедленное локальное обновление индексов после commit."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[int] = []
+
+    def sync_if_stale(self, app_user_id: int):
+        self.calls.append(app_user_id)
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(embedding_update_failed=False)
+
+
+def _service(
+    repository,
+    vault,
+    gateway,
+    *,
+    sync: VaultSyncManagerFake | None = None,
+) -> ObsidianProposalConfirmationService:
     return ObsidianProposalConfirmationService(
         proposal_repository=repository,
         vault_repository=VaultRepositoryFake(vault),
         lease_repository=LeaseRepositoryFake(),
         github_gateway=gateway,
+        vault_sync_manager=sync,
     )
 
 

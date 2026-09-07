@@ -13,6 +13,7 @@ from obs_chat_bot.application.search.indexing import (
     VaultChunkIndexer,
     VaultEmbeddingIndexer,
 )
+from obs_chat_bot.application.search.errors import EmbeddingProviderError
 from obs_chat_bot.application.search.models import (
     ChunkIndexUpdate,
     EmbeddingIndexUpdate,
@@ -54,6 +55,7 @@ class VaultSyncWarningReason(StrEnum):
 
     UPDATE_FAILED = "update_failed"  # Автоматическое обновление завершилось ошибкой.
     IN_PROGRESS = "in_progress"  # Vault синхронизируется в другом процессе.
+    EMBEDDING_UPDATE_FAILED = "embedding_update_failed"  # Доступен только FTS.
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +79,7 @@ class VaultSyncResult:
     deleted_embeddings: int = 0
     unchanged_embeddings: int = 0
     embedding_dimension: int | None = None
+    embedding_update_failed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +104,8 @@ class VaultStatus:
     vault: ObsidianVault | None
     note_count: int = 0
     instruction_count: int = 0
+    chunk_index_current: bool = False
+    embedding_index_current: bool | None = None
 
 
 class VaultSyncManager(Protocol):
@@ -181,7 +186,7 @@ class VaultSyncService:
             vault.last_checked_at is not None
             and now - vault.last_checked_at < max_age
         ):
-            if not self._indexes_current(
+            if not self._chunk_indexer.is_current(
                 app_user_id=app_user_id,
                 vault_id=vault.id,
             ):
@@ -197,10 +202,19 @@ class VaultSyncService:
                 app_user_id=app_user_id,
                 vault_id=vault.id,
             )
+            embedding_stale = (
+                self._embedding_indexer is not None
+                and not self._embedding_indexer.is_current(
+                    app_user_id=app_user_id,
+                    vault_id=vault.id,
+                    chunk_index_signature=self._chunk_indexer.index_signature,
+                )
+            )
             return VaultSyncResult(
                 status=VaultSyncStatus.FRESH,
                 vault=vault,
                 total_notes=len(notes),
+                embedding_update_failed=embedding_stale,
             )
         return self._sync_vault(vault, now=now)
 
@@ -268,6 +282,19 @@ class VaultSyncService:
             vault=vault,
             note_count=len(notes),
             instruction_count=len(instructions),
+            chunk_index_current=self._chunk_indexer.is_current(
+                app_user_id=app_user_id,
+                vault_id=vault.id,
+            ),
+            embedding_index_current=(
+                self._embedding_indexer.is_current(
+                    app_user_id=app_user_id,
+                    vault_id=vault.id,
+                    chunk_index_signature=self._chunk_indexer.index_signature,
+                )
+                if self._embedding_indexer is not None
+                else None
+            ),
         )
 
     def _sync_locked(
@@ -340,7 +367,9 @@ class VaultSyncService:
                 index_current=index_current,
             )
             updated = self._update_state(vault, snapshot, now=now, synced=False)
-            embedding_update = self._update_embedding_index(vault)
+            embedding_update, embedding_failed = self._try_update_embedding_index(
+                vault
+            )
             return VaultSyncResult(
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
@@ -348,6 +377,7 @@ class VaultSyncService:
                 instruction_files=len(local_instructions),
                 **_chunk_result_fields(chunk_update, rebuilt=not index_current),
                 **_embedding_result_fields(embedding_update),
+                embedding_update_failed=embedding_failed,
             )
         if snapshot.status is GitHubVaultSnapshotStatus.TREE_UNCHANGED:
             chunk_update = self._ensure_current_index(
@@ -356,7 +386,9 @@ class VaultSyncService:
                 index_current=index_current,
             )
             updated = self._update_state(vault, snapshot, now=now, synced=False)
-            embedding_update = self._update_embedding_index(vault)
+            embedding_update, embedding_failed = self._try_update_embedding_index(
+                vault
+            )
             return VaultSyncResult(
                 status=VaultSyncStatus.UNCHANGED,
                 vault=updated,
@@ -364,6 +396,7 @@ class VaultSyncService:
                 instruction_files=len(local_instructions),
                 **_chunk_result_fields(chunk_update, rebuilt=not index_current),
                 **_embedding_result_fields(embedding_update),
+                embedding_update_failed=embedding_failed,
             )
 
         pending_instructions: list[VaultInstruction] = []
@@ -484,9 +517,13 @@ class VaultSyncService:
                     app_user_id=vault.app_user_id,
                     vault_id=vault.id,
                 )
-            embedding_update = self._update_embedding_index(vault)
-            # Source SHA фиксируется только после успешной записи всех данных.
+            # GitHub source и FTS публикуются до необязательного semantic index.
+            # Сбой provider не должен обесценивать уже согласованные Markdown,
+            # instruction-файлы и chunks.
             updated_vault = self._update_state(vault, snapshot, now=now, synced=True)
+            embedding_update, embedding_failed = self._try_update_embedding_index(
+                updated_vault
+            )
         except Exception:
             LOGGER.exception(
                 "Vault SQLite write failed: app_user_id=%s vault_id=%s "
@@ -514,6 +551,7 @@ class VaultSyncService:
             instruction_files=len(pending_instructions),
             **_chunk_result_fields(chunk_update, rebuilt=not index_current),
             **_embedding_result_fields(embedding_update),
+            embedding_update_failed=embedding_failed,
         )
 
     def _ensure_current_index(
@@ -550,7 +588,7 @@ class VaultSyncService:
             if chunk_current
             else self._rebuild_index(vault, notes=tuple(notes))
         )
-        embedding_update = self._update_embedding_index(vault)
+        embedding_update, embedding_failed = self._try_update_embedding_index(vault)
         instructions = self._instruction_repository.list_for_vault(
             app_user_id=vault.app_user_id,
             vault_id=vault.id,
@@ -562,20 +600,34 @@ class VaultSyncService:
             instruction_files=len(instructions),
             **_chunk_result_fields(update, rebuilt=not chunk_current),
             **_embedding_result_fields(embedding_update),
+            embedding_update_failed=embedding_failed,
         )
 
-    def _indexes_current(self, *, app_user_id: int, vault_id: int) -> bool:
-        """Проверяет chunk index и включённый embedding profile как единое целое."""
-        if not self._chunk_indexer.is_current(
-            app_user_id=app_user_id,
-            vault_id=vault_id,
-        ):
-            return False
-        return self._embedding_indexer is None or self._embedding_indexer.is_current(
-            app_user_id=app_user_id,
-            vault_id=vault_id,
-            chunk_index_signature=self._chunk_indexer.index_signature,
-        )
+    def _try_update_embedding_index(
+        self,
+        vault: ObsidianVault,
+    ) -> tuple[EmbeddingIndexUpdate, bool]:
+        """Обновляет optional semantic index, сохраняя готовый source/FTS.
+
+        Returns:
+            Счётчики semantic-обновления и признак временного сбоя provider.
+
+        Raises:
+            ValueError: Нарушены локальные invariants chunk/embedding index.
+            RuntimeError: Возникла неожиданная локальная ошибка, которую нельзя
+                безопасно выдать за недоступность внешнего provider.
+        """
+        try:
+            return self._update_embedding_index(vault), False
+        except EmbeddingProviderError as error:
+            LOGGER.warning(
+                "Vault embedding index remains unavailable: app_user_id=%s "
+                "vault_id=%s error_type=%s",
+                vault.app_user_id,
+                vault.id,
+                type(error).__name__,
+            )
+            return EmbeddingIndexUpdate(), True
 
     def _update_embedding_index(
         self,
@@ -619,12 +671,12 @@ class VaultSyncService:
         *,
         notes: tuple[VaultNote, ...],
     ) -> ChunkIndexUpdate:
-        """Атомарно заменяет полное поколение chunks текущей signature."""
+        """Восстанавливает все dirty notes и публикует global marker."""
         if vault.id is None:
             raise ValueError("vault must be saved before indexing")
         started_at = time.monotonic()
         LOGGER.info(
-            "Vault chunk index rebuild started: app_user_id=%s vault_id=%s "
+            "Vault chunk index reconciliation started: app_user_id=%s vault_id=%s "
             "note_count=%s index_signature=%s",
             vault.app_user_id,
             vault.id,
@@ -646,11 +698,15 @@ class VaultSyncService:
             notes=notes,
         )
         LOGGER.info(
-            "Vault chunk index rebuild completed: app_user_id=%s vault_id=%s "
-            "chunk_count=%s duration_seconds=%.3f",
+            "Vault chunk index reconciliation completed: app_user_id=%s "
+            "vault_id=%s created=%s updated=%s deleted=%s unchanged=%s "
+            "duration_seconds=%.3f",
             vault.app_user_id,
             vault.id,
             update.created,
+            update.updated,
+            update.deleted,
+            update.unchanged,
             time.monotonic() - started_at,
         )
         return update

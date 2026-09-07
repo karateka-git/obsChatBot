@@ -99,6 +99,59 @@ class VaultChunkIndexRepositoryTest(unittest.TestCase):
             self.assertTrue(all(before_ids[key] == after_ids[key] for key in common_keys))
             self.assertGreater(update.updated + update.created + update.deleted, 0)
 
+    def test_missing_global_marker_reconciles_only_dirty_note(self) -> None:
+        """Recovery использует per-note state и сохраняет чужие chunk IDs."""
+        with self._database() as connection:
+            vault = _prepare_vault(connection)
+            notes = SQLiteVaultNoteRepository(connection)
+            first = notes.upsert(_note(vault.id, path="first.md"))
+            second = notes.upsert(_note(vault.id, path="second.md"))
+            repository = SQLiteVaultChunkIndexRepository(connection)
+            indexer = VaultChunkIndexer(chunker=_chunker(), repository=repository)
+            indexer.rebuild(
+                app_user_id=1,
+                vault_id=vault.id,
+                notes=(first, second),
+            )
+            second_before = repository.list_for_note(
+                app_user_id=1,
+                vault_id=vault.id,
+                note_id=second.id,
+            )
+            changed = notes.upsert(
+                _note(
+                    vault.id,
+                    path="first.md",
+                    markdown="# Note\nПолностью новый текст первой заметки.",
+                    blob_sha="changed-blob",
+                )
+            )
+            indexer.invalidate(app_user_id=1, vault_id=vault.id)
+
+            stale = repository.list_stale_note_ids(
+                app_user_id=1,
+                vault_id=vault.id,
+                index_signature=indexer.index_signature,
+            )
+            update = indexer.reconcile(
+                app_user_id=1,
+                vault_id=vault.id,
+                notes=(changed, second),
+            )
+            second_after = repository.list_for_note(
+                app_user_id=1,
+                vault_id=vault.id,
+                note_id=second.id,
+            )
+
+            self.assertEqual(stale, {changed.id})
+            self.assertGreater(update.updated + update.created + update.deleted, 0)
+            self.assertEqual(
+                [chunk.id for chunk in second_after],
+                [chunk.id for chunk in second_before],
+            )
+            self.assertTrue(indexer.is_current(app_user_id=1, vault_id=vault.id))
+
     def test_invalidation_hides_stale_generation(self) -> None:
         """Удаление marker заставляет следующий sync выполнить полный rebuild."""
         with self._database() as connection:
@@ -207,6 +260,7 @@ def _note(
     app_user_id: int = 1,
     path: str = "note.md",
     markdown: str = "# Note\nТекст заметки.",
+    blob_sha: str = "blob-sha",
 ) -> VaultNote:
     """Создаёт тестовую Markdown-заметку одного vault."""
     if vault_id is None:
@@ -215,7 +269,7 @@ def _note(
         app_user_id=app_user_id,
         vault_id=vault_id,
         path=path,
-        blob_sha="blob-sha",
+        blob_sha=blob_sha,
         markdown=markdown,
     )
 

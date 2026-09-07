@@ -1,5 +1,6 @@
 """Тесты общего application-flow входящих сообщений."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from datetime import UTC, datetime
 import unittest
@@ -519,9 +520,13 @@ class FakeVaultSyncManager:
         *,
         error: Exception | None = None,
         status: VaultSyncStatus = VaultSyncStatus.FRESH,
+        usable_local_snapshot: bool = True,
+        embedding_update_failed: bool = False,
     ) -> None:
         self.error = error
         self.status = status
+        self.usable_local_snapshot = usable_local_snapshot
+        self.embedding_update_failed = embedding_update_failed
         self.auto_calls: list[int] = []
 
     def sync(self, app_user_id: int) -> VaultSyncResult:
@@ -540,11 +545,28 @@ class FakeVaultSyncManager:
             status=self.status,
             vault=_test_vault(app_user_id),
             total_notes=3,
+            embedding_update_failed=self.embedding_update_failed,
         )
 
     def get_status(self, app_user_id: int) -> VaultStatus:
         """Возвращает тестовый статус подключённого vault."""
-        return VaultStatus(vault=_test_vault(app_user_id), note_count=3)
+        vault = _test_vault(app_user_id)
+        if self.usable_local_snapshot:
+            vault = replace(
+                vault,
+                head_commit_sha="commit-sha",
+                tree_sha="tree-sha",
+            )
+        return VaultStatus(
+            vault=vault,
+            note_count=3,
+            chunk_index_current=self.usable_local_snapshot,
+            embedding_index_current=(
+                not self.embedding_update_failed
+                if self.usable_local_snapshot
+                else False
+            ),
+        )
 
 
 class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
@@ -680,6 +702,47 @@ class ProcessIncomingMessageUseCaseTest(unittest.TestCase):
             VaultSyncWarningReason.UPDATE_FAILED,
         )
         self.assertEqual(result.vault_sync_warning.note_count, 3)
+
+    def test_execute_stops_before_paid_pipeline_without_usable_snapshot(self) -> None:
+        """Нет HEAD/tree или chunk marker — URL и LLM не запускаются."""
+        article_use_case = FakeArticleUrlUseCase()
+        analysis_use_case = FakeAnalysisUseCase()
+        sync_manager = FakeVaultSyncManager(
+            error=GitHubGatewayError("GitHub unavailable"),
+            usable_local_snapshot=False,
+        )
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            article_analysis_use_case=analysis_use_case,
+            user_identity_service=FakeUserIdentityService(),
+            vault_sync_manager=sync_manager,
+        )
+
+        result = use_case.execute(_telegram_message("https://example.com/article"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.GITHUB_SYNC_FAILED)
+        self.assertEqual(article_use_case.commands, [])
+        self.assertEqual(analysis_use_case.commands, [])
+        self.assertIsNotNone(result.error)
+
+    def test_embedding_warning_continues_with_ready_fts_snapshot(self) -> None:
+        """Semantic-сбой не блокирует статью при готовых source SHA и FTS."""
+        article_use_case = FakeArticleUrlUseCase()
+        sync_manager = FakeVaultSyncManager(embedding_update_failed=True)
+        use_case = ProcessIncomingMessageUseCase(
+            article_url_use_case=article_use_case,
+            user_identity_service=FakeUserIdentityService(),
+            vault_sync_manager=sync_manager,
+        )
+
+        result = use_case.execute(_telegram_message("https://example.com/article"))
+
+        self.assertEqual(result.type, IncomingMessageResultType.ARTICLE_PROCESSED)
+        self.assertEqual(len(article_use_case.commands), 1)
+        self.assertEqual(
+            result.vault_sync_warning.reason,
+            VaultSyncWarningReason.EMBEDDING_UPDATE_FAILED,
+        )
 
     def test_execute_stops_article_when_vault_configuration_is_missing(
         self,

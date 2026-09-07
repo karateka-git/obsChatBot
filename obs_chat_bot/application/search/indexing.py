@@ -56,12 +56,46 @@ class VaultChunkIndexer:
         if note.id is None:
             raise ValueError("note must be saved before indexing")
         chunks = self._chunker.split(note)
-        return self._repository.replace_for_note(
+        update = self._repository.replace_for_note(
             app_user_id=note.app_user_id,
             vault_id=note.vault_id,
             note_id=note.id,
             chunks=chunks,
         )
+        self._repository.mark_note_current(
+            app_user_id=note.app_user_id,
+            vault_id=note.vault_id,
+            note_id=note.id,
+            source_blob_sha=note.blob_sha,
+            index_signature=self.index_signature,
+        )
+        return update
+
+    def reconcile(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        notes: tuple[VaultNote, ...],
+    ) -> ChunkIndexUpdate:
+        """Обновляет только заметки с новым blob SHA или другой signature.
+
+        Global marker намеренно публикуется лишь после обработки всех dirty
+        notes. Его отсутствие поэтому не требует удаления корректных chunks.
+        """
+        stale_ids = self._repository.list_stale_note_ids(
+            app_user_id=app_user_id,
+            vault_id=vault_id,
+            index_signature=self.index_signature,
+        )
+        update = ChunkIndexUpdate()
+        for note in notes:
+            if note.app_user_id != app_user_id or note.vault_id != vault_id:
+                raise ValueError("all notes must belong to requested user and vault")
+            if note.id in stale_ids:
+                update = update.merge(self.index_note(note))
+        self.mark_current(app_user_id=app_user_id, vault_id=vault_id)
+        return update
 
     def delete_notes(self, notes: tuple[VaultNote, ...]) -> int:
         """Удаляет chunks заметок перед каскадным удалением source rows."""
@@ -89,17 +123,11 @@ class VaultChunkIndexer:
         vault_id: int,
         notes: tuple[VaultNote, ...],
     ) -> ChunkIndexUpdate:
-        """Полностью перестраивает vault при новой или изменённой signature."""
-        chunks = []
-        for note in notes:
-            if note.app_user_id != app_user_id or note.vault_id != vault_id:
-                raise ValueError("all notes must belong to requested user and vault")
-            chunks.extend(self._chunker.split(note))
-        return self._repository.replace_for_vault(
+        """Логически переиндексирует vault, сохраняя совместимые chunk IDs."""
+        return self.reconcile(
             app_user_id=app_user_id,
             vault_id=vault_id,
-            chunks=tuple(chunks),
-            index_signature=self.index_signature,
+            notes=notes,
         )
 
     def mark_current(self, *, app_user_id: int, vault_id: int) -> None:

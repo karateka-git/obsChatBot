@@ -357,6 +357,23 @@ CREATE TABLE obsidian_chunk_index_states (
     CHECK (length(trim(index_signature)) > 0)
 );
 
+CREATE TABLE obsidian_note_chunk_index_states (
+    app_user_id INTEGER NOT NULL,
+    vault_id INTEGER NOT NULL,
+    note_id INTEGER NOT NULL,
+    source_blob_sha TEXT NOT NULL,
+    index_signature TEXT NOT NULL,
+    indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (note_id),
+    FOREIGN KEY (app_user_id, vault_id, note_id)
+        REFERENCES obsidian_notes (app_user_id, vault_id, id) ON DELETE CASCADE,
+    CHECK (length(trim(source_blob_sha)) > 0),
+    CHECK (length(trim(index_signature)) > 0)
+);
+
+CREATE INDEX idx_obsidian_note_chunk_states_app_user_vault
+    ON obsidian_note_chunk_index_states (app_user_id, vault_id);
+
 CREATE TABLE obsidian_chunk_embeddings (
     chunk_id INTEGER PRIMARY KEY,
     app_user_id INTEGER NOT NULL,

@@ -780,6 +780,82 @@
 - GitHub остаётся source of truth заметок, но завершение article/review workflow
   атомарно фиксируется в SQLite и пригодно для безопасного повтора после сбоя.
 
+## 2026-08-23. Per-note source state и global markers поискового индекса
+
+Решение:
+
+- Сохранить global chunk/embedding markers как быстрый признак того, что всё
+  поколение vault полностью готово и разрешено для FTS/semantic search.
+- Не использовать отсутствие global marker как причину безусловно удалять все
+  chunks. Рядом с каждой заметкой хранить проиндексированные `source_blob_sha`
+  и `index_signature`; их расхождение точно определяет dirty notes.
+- После подтверждённого GitHub write-back немедленно запускать общий локальный
+  indexing workflow после освобождения lease. Поскольку commit уже обновил
+  `last_checked_at`, workflow восстанавливает stale index из SQLite без нового
+  GitHub-запроса.
+- Для dirty note применять стабильный `chunk_key` diff: сохранять IDs
+  неизменившихся chunks, обновлять изменившиеся, добавлять новые и удалять
+  исчезнувшие. Embeddings переиспользовать по `chunk_id`, document model и
+  `content_hash`.
+- Публиковать chunk marker только при отсутствии dirty notes, embedding marker —
+  только при полном совместимом наборе vectors. При сбое provider считать
+  commit успешным, оставить FTS доступным и повторять только недостающую
+  semantic-работу при следующем sync/preflight.
+
+Причины:
+
+- GitHub commit нельзя откатывать или выдавать за неуспешный из-за отдельного
+  платного embedding API.
+- Прежняя invalidation не сохраняла причину stale-состояния. Добавление одной
+  статьи превращалось в полный rebuild, меняло все SQLite `chunk_id`, каскадно
+  удаляло совместимые vectors и повторно оплачивало весь corpus.
+- Per-note state отвечает на вопрос «что изменить», а global marker — «готово ли
+  всё поколение». Такое разделение сохраняет fail-closed поиск без отказа от
+  инкрементальности Этапов 10.2 и 10.5.
+
+Последствия:
+
+- Обычный `add`/`update` индексирует только затронутую заметку и её изменённые
+  chunks; смена parser/policy логически затрагивает все заметки.
+- Ошибка semantic-индексации показывается как post-commit предупреждение и
+  записывается на этапе `obsidian_index`, не меняя применённый proposal обратно
+  в pending.
+- Начальная development-схема получает таблицу per-note states; отдельная
+  накопительная миграция до MVP не создаётся, локальная БД пересоздаётся.
+
+## 2026-08-23. Source/FTS readiness не зависит от optional embeddings
+
+Решение:
+
+- Считать GitHub source snapshot готовым после успешной записи Markdown,
+  обязательных instruction-файлов, chunks и chunk global marker. После этого
+  публиковать commit/tree SHA и только затем обращаться к embedding provider.
+- Перехватывать только типизированный `EmbeddingProviderError` как degraded
+  semantic mode. Оставлять embedding marker отсутствующим и возвращать
+  структурированное предупреждение, сохраняя source/FTS результат успешным.
+- Не маскировать локальные invariants, ошибки SQLite и неизвестные runtime
+  failures semantic fallback-ом.
+- Перед fetch/extraction/LLM статьи разрешать fallback после sync-ошибки или
+  занятого lease только при одновременном наличии HEAD SHA, tree SHA и
+  актуального chunk marker. Иначе останавливать incoming-flow до платных стадий.
+- Не повторять полную сбойную embedding-индексацию из article preflight внутри
+  шестичасового freshness-window. Повторять её по явному `/github_sync`, при
+  post-commit обновлении dirty chunks или очередной плановой GitHub-проверке.
+
+Причины и последствия:
+
+- Embeddings — восстанавливаемая платная проекция, а не часть GitHub source of
+  truth. Их недоступность ухудшает поиск до FTS, но не делает Markdown
+  несинхронизированным.
+- Наличие строк `obsidian_notes` само по себе не доказывает готовность локальной
+  копии: sync мог оборваться между source, chunks и публикацией markers.
+- Первая незавершённая синхронизация больше не расходует LLM-токены статьи,
+  которая всё равно не сможет пройти safe review; ранее сохранённый проверенный
+  snapshot по-прежнему поддерживает offline/failure fallback Этапа 9.10.
+- Недоступный embedding provider не умножает стоимость при каждой входящей
+  статье: до следующей осмысленной точки повтора semantic search деградирует до
+  FTS, а пользователь получает явное предупреждение.
+
 ## 2026-08-04. FAISS не входит в Этап 10
 
 Решение:

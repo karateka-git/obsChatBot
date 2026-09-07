@@ -15,6 +15,10 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageResult,
 )
 from obs_chat_bot.application.incoming.commands import ChatCommand
+from obs_chat_bot.application.reviews.confirmation import (
+    ObsidianConfirmationResult,
+    ObsidianConfirmationStatus,
+)
 from obs_chat_bot.application.vaults.github_models import (
     GitHubConnectionCompletion,
     GitHubConnectionCompletionStatus,
@@ -33,6 +37,8 @@ from obs_chat_bot.application.vaults.vault_configuration import (
     VaultConfigurationErrorCode,
 )
 from obs_chat_bot.application.vaults.vault_sync import (
+    VaultSyncResult,
+    VaultSyncStatus,
     VaultSyncWarning,
     VaultSyncWarningReason,
 )
@@ -40,6 +46,11 @@ from obs_chat_bot.application.users.identity import CreatedLinkCode
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.articles.entities import Article
 from obs_chat_bot.domain.articles.statuses import ArticleStatus
+from obs_chat_bot.domain.reviews.entities import (
+    ObsidianProposal,
+    ObsidianProposalAction,
+    ObsidianProposalStatus,
+)
 from obs_chat_bot.domain.users.entities import AppUser
 from obs_chat_bot.domain.vaults.entities import ObsidianVault
 from obs_chat_bot.presentation.shared.responses import (
@@ -97,6 +108,23 @@ class TelegramResponsesTest(unittest.TestCase):
         )
 
         self.assertIn("memory-bank/docs/workflows.md.txt", reply)
+
+    def test_format_sync_reports_optional_embedding_failure(self) -> None:
+        """Готовый Markdown/FTS не выдаётся за полностью упавший sync."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_SYNC_COMPLETED,
+                vault_sync_result=VaultSyncResult(
+                    status=VaultSyncStatus.SYNCED,
+                    total_notes=173,
+                    embedding_update_failed=True,
+                ),
+            )
+        )
+
+        self.assertIn("Vault синхронизирован", reply)
+        self.assertIn("Markdown и FTS сохранены", reply)
+        self.assertIn("embeddings обновить не удалось", reply)
 
     def test_format_article_processing_result_reports_created_article(self) -> None:
         """Новая статья получает понятный текст с названием, статусом, ID и длиной."""
@@ -323,6 +351,42 @@ class TelegramResponsesTest(unittest.TestCase):
         )
 
         self.assertIn("Не удалось загрузить страницу", reply)
+
+    def test_applied_commit_reports_post_commit_index_warning(self) -> None:
+        """Сбой embeddings не выдаётся за ошибку уже успешного GitHub commit."""
+        proposal = ObsidianProposal(
+            id=1,
+            app_user_id=1,
+            article_id=1,
+            analysis_id=1,
+            vault_id=1,
+            action=ObsidianProposalAction.ADD,
+            reasoning="Создать заметку.",
+            base_commit_sha="base",
+            base_tree_sha="tree",
+            target_path="note.md",
+            proposed_markdown="# Note",
+            status=ObsidianProposalStatus.APPLIED,
+            applied_commit_sha="commit",
+            completed_at=datetime.now(UTC),
+        )
+        error = RuntimeError("embedding unavailable")
+
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.ARTICLE_REVIEW_APPLIED,
+                obsidian_confirmation=ObsidianConfirmationResult(
+                    status=ObsidianConfirmationStatus.APPLIED,
+                    proposal=proposal,
+                    error=error,
+                ),
+                error=error,
+            )
+        )
+
+        self.assertIn("Изменение применено", reply)
+        self.assertIn("поисковый индекс пока не обновлён", reply)
+        self.assertIn("/github_sync", reply)
 
     def test_format_incoming_message_result_reports_status(self) -> None:
         """Команда статуса сообщает имя и состояние vault без внутреннего ID."""

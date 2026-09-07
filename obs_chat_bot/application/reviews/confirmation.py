@@ -11,6 +11,7 @@ from uuid import uuid4
 from obs_chat_bot.application.articles.ports import ProcessingErrorRecorder
 from obs_chat_bot.application.articles.stages import ProcessingStage
 from obs_chat_bot.application.reviews.ports import ObsidianProposalRepository
+from obs_chat_bot.application.search.errors import EmbeddingProviderError
 from obs_chat_bot.application.vaults.github_models import (
     GitHubGatewayError,
     GitHubVaultCommitResult,
@@ -21,6 +22,7 @@ from obs_chat_bot.application.vaults.ports import (
     ObsidianVaultRepository,
     VaultSyncLeaseRepository,
 )
+from obs_chat_bot.application.vaults.vault_sync import VaultSyncManager
 from obs_chat_bot.domain.reviews.entities import (
     ObsidianProposal,
     ObsidianProposalAction,
@@ -62,6 +64,7 @@ class ObsidianProposalConfirmationService:
         vault_repository: ObsidianVaultRepository,
         lease_repository: VaultSyncLeaseRepository,
         github_gateway: GitHubVaultWriteGateway,
+        vault_sync_manager: VaultSyncManager | None = None,
         error_recorder: ProcessingErrorRecorder | None = None,
         lease_duration: timedelta = timedelta(minutes=5),
     ) -> None:
@@ -69,6 +72,7 @@ class ObsidianProposalConfirmationService:
         self._vault_repository = vault_repository
         self._lease_repository = lease_repository
         self._github_gateway = github_gateway
+        self._vault_sync_manager = vault_sync_manager
         self._error_recorder = error_recorder
         self._lease_duration = lease_duration
 
@@ -159,12 +163,64 @@ class ObsidianProposalConfirmationService:
                 proposal=pending,
             )
         try:
-            return self._commit_pending(pending, vault)
+            result = self._commit_pending(pending, vault)
         finally:
             self._lease_repository.release(
                 app_user_id=app_user_id,
                 vault_id=vault.id,
                 owner=owner,
+            )
+        if result.status is not ObsidianConfirmationStatus.APPLIED:
+            return result
+        return self._refresh_applied_indexes(result)
+
+    def _refresh_applied_indexes(
+        self,
+        result: ObsidianConfirmationResult,
+    ) -> ObsidianConfirmationResult:
+        """Сразу достраивает локальные индексы, не меняя итог GitHub commit.
+
+        Ошибка внешнего embedding provider не превращает уже записанную
+        заметку в failed proposal. Удалённый embedding marker оставляет
+        semantic search в безопасном FTS fallback до следующего retry.
+        """
+        if self._vault_sync_manager is None or result.proposal is None:
+            return result
+        try:
+            sync_result = self._vault_sync_manager.sync_if_stale(
+                result.proposal.app_user_id
+            )
+            if sync_result.embedding_update_failed:
+                return ObsidianConfirmationResult(
+                    status=ObsidianConfirmationStatus.APPLIED,
+                    proposal=result.proposal,
+                    error=EmbeddingProviderError(
+                        "Embedding index update failed after successful commit"
+                    ),
+                )
+            return result
+        except Exception as error:
+            LOGGER.exception(
+                "Obsidian post-commit index update failed: proposal_id=%s "
+                "app_user_id=%s article_id=%s error_type=%s",
+                result.proposal.id,
+                result.proposal.app_user_id,
+                result.proposal.article_id,
+                type(error).__name__,
+            )
+            if self._error_recorder is not None:
+                self._error_recorder.record(
+                    article_id=result.proposal.article_id,
+                    app_user_id=result.proposal.app_user_id,
+                    incoming_message_id=None,
+                    stage=ProcessingStage.OBSIDIAN_INDEX,
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
+            return ObsidianConfirmationResult(
+                status=ObsidianConfirmationStatus.APPLIED,
+                proposal=result.proposal,
+                error=error,
             )
 
     def _commit_pending(

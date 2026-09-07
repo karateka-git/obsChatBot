@@ -10,6 +10,7 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubVaultSnapshot,
     GitHubVaultSnapshotStatus,
 )
+from obs_chat_bot.application.search.errors import EmbeddingProviderError
 from obs_chat_bot.application.search.models import ChunkIndexUpdate
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncService,
@@ -171,6 +172,23 @@ class MemoryChunkIndexer:
         self.current = True
 
 
+class FailingEmbeddingIndexer:
+    """Имитирует недоступный provider при готовом локальном chunk index."""
+
+    def __init__(self):
+        self.update_calls = 0
+
+    def is_current(self, **_values):
+        return False
+
+    def invalidate(self, **_values):
+        return None
+
+    def update(self, **_values):
+        self.update_calls += 1
+        raise EmbeddingProviderError("provider unavailable")
+
+
 class VaultSyncTest(unittest.TestCase):
     """Проверяет добавление, изменение, удаление и фиксацию source SHA."""
 
@@ -288,6 +306,41 @@ class VaultSyncTest(unittest.TestCase):
         self.assertEqual(vaults.vault.head_commit_sha, "commit-1")
         self.assertTrue(leases.released)
 
+    def test_embedding_failure_keeps_published_source_and_chunk_snapshot(self) -> None:
+        """Optional semantic-сбой не отменяет готовые Markdown и FTS."""
+        vaults = MemoryVaultRepository(_vault())
+        chunk_indexer = MemoryChunkIndexer()
+        result = VaultSyncService(
+            vault_repository=vaults,
+            note_repository=MemoryNoteRepository([]),
+            instruction_repository=MemoryInstructionRepository(),
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=SnapshotGateway(
+                GitHubVaultSnapshot(
+                    status=GitHubVaultSnapshotStatus.CHANGED,
+                    head_commit_sha="commit-2",
+                    tree_sha="tree-2",
+                    files=(
+                        GitHubMarkdownFile(
+                            path="new.md",
+                            blob_sha="new-sha",
+                            markdown="# New",
+                        ),
+                    ),
+                )
+            ),
+            chunk_indexer=chunk_indexer,
+            embedding_indexer=FailingEmbeddingIndexer(),
+            clock=lambda: NOW,
+        ).sync(1)
+
+        self.assertEqual(result.status, VaultSyncStatus.SYNCED)
+        self.assertTrue(result.embedding_update_failed)
+        self.assertEqual(vaults.vault.head_commit_sha, "commit-2")
+        self.assertEqual(vaults.vault.tree_sha, "tree-2")
+        self.assertEqual(vaults.vault.last_synced_at, NOW)
+        self.assertTrue(chunk_indexer.current)
+
     def test_sync_reuses_unchanged_instruction_content_by_blob_sha(self) -> None:
         """Неизменённый instruction blob не требует повторного содержимого."""
         local_instruction = VaultInstruction(
@@ -357,6 +410,32 @@ class VaultSyncTest(unittest.TestCase):
         result = service.sync_if_stale(1)
 
         self.assertEqual(result.status, VaultSyncStatus.FRESH)
+        self.assertIsNone(gateway.known_blobs)
+
+    def test_fresh_vault_does_not_retry_full_embedding_index(self) -> None:
+        """Статья внутри окна не повторяет сбойную индексацию всего vault."""
+        gateway = SnapshotGateway(
+            GitHubVaultSnapshot(status=GitHubVaultSnapshotStatus.NOT_MODIFIED)
+        )
+        embedding_indexer = FailingEmbeddingIndexer()
+        service = VaultSyncService(
+            vault_repository=MemoryVaultRepository(
+                replace(_vault(), last_checked_at=NOW - timedelta(minutes=5))
+            ),
+            note_repository=MemoryNoteRepository([]),
+            instruction_repository=MemoryInstructionRepository(),
+            lease_repository=MemoryLeaseRepository(),
+            github_gateway=gateway,
+            chunk_indexer=MemoryChunkIndexer(),
+            embedding_indexer=embedding_indexer,
+            clock=lambda: NOW,
+        )
+
+        result = service.sync_if_stale(1)
+
+        self.assertEqual(result.status, VaultSyncStatus.FRESH)
+        self.assertTrue(result.embedding_update_failed)
+        self.assertEqual(embedding_indexer.update_calls, 0)
         self.assertIsNone(gateway.known_blobs)
 
     def test_sync_if_stale_checks_github_at_six_hour_boundary(self) -> None:
