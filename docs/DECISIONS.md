@@ -510,7 +510,7 @@
   шестичасового freshness-window это происходит без обращения к GitHub.
 - FTS5, embeddings, hybrid retrieval, review workflow и GitHub write-back не
   меняют функциональных контрактов; они получают chunks из project storage.
-- Automation Этапа 11 должна вызывать общий indexing use case, а не parser или
+- Automation из бэклога должна вызывать общий indexing use case, а не parser или
   SQLite adapters напрямую.
 
 Полная спецификация: [`docs/DOCUMENT_CHUNKER.md`](DOCUMENT_CHUNKER.md).
