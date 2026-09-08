@@ -16,6 +16,7 @@ from obs_chat_bot.application.search.indexing import (
 from obs_chat_bot.application.search.errors import EmbeddingProviderError
 from obs_chat_bot.application.search.models import (
     ChunkIndexUpdate,
+    EmbeddingIndexCoverage,
     EmbeddingIndexUpdate,
 )
 from obs_chat_bot.application.vaults.github_models import (
@@ -80,6 +81,7 @@ class VaultSyncResult:
     unchanged_embeddings: int = 0
     embedding_dimension: int | None = None
     embedding_update_failed: bool = False
+    embedding_coverage: EmbeddingIndexCoverage | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +108,7 @@ class VaultStatus:
     instruction_count: int = 0
     chunk_index_current: bool = False
     embedding_index_current: bool | None = None
+    embedding_coverage: EmbeddingIndexCoverage | None = None
 
 
 class VaultSyncManager(Protocol):
@@ -146,6 +149,7 @@ class VaultSyncService:
         self._embedding_indexer = embedding_indexer
         self._clock = clock
         self._lease_duration = lease_duration
+        self._embedding_write_guard: Callable[[], None] | None = None
 
     def sync(self, app_user_id: int) -> VaultSyncResult:
         """Обновляет локальную копию, скачивая только изменённые Markdown blobs."""
@@ -215,6 +219,7 @@ class VaultSyncService:
                 vault=vault,
                 total_notes=len(notes),
                 embedding_update_failed=embedding_stale,
+                embedding_coverage=self._embedding_coverage(vault),
             )
         return self._sync_vault(vault, now=now)
 
@@ -256,9 +261,24 @@ class VaultSyncService:
                 status=VaultSyncStatus.IN_PROGRESS,
                 vault=vault,
             )
+
+        def check_lease() -> None:
+            """Проверяет владельца и срок lease перед checkpoint и marker."""
+            current = self._lease_repository.get(
+                app_user_id=vault.app_user_id, vault_id=vault.id,
+            )
+            if (
+                current is None
+                or current.owner != owner
+                or current.expires_at <= self._clock()
+            ):
+                raise RuntimeError("Vault sync lease expired or changed during embedding")
+
+        self._embedding_write_guard = check_lease
         try:
             return operation()
         finally:
+            self._embedding_write_guard = None
             self._lease_repository.release(
                 app_user_id=vault.app_user_id,
                 vault_id=vault.id,
@@ -295,6 +315,7 @@ class VaultSyncService:
                 if self._embedding_indexer is not None
                 else None
             ),
+            embedding_coverage=self._embedding_coverage(vault),
         )
 
     def _sync_locked(
@@ -378,6 +399,7 @@ class VaultSyncService:
                 **_chunk_result_fields(chunk_update, rebuilt=not index_current),
                 **_embedding_result_fields(embedding_update),
                 embedding_update_failed=embedding_failed,
+                embedding_coverage=self._embedding_coverage(vault),
             )
         if snapshot.status is GitHubVaultSnapshotStatus.TREE_UNCHANGED:
             chunk_update = self._ensure_current_index(
@@ -397,6 +419,7 @@ class VaultSyncService:
                 **_chunk_result_fields(chunk_update, rebuilt=not index_current),
                 **_embedding_result_fields(embedding_update),
                 embedding_update_failed=embedding_failed,
+                embedding_coverage=self._embedding_coverage(vault),
             )
 
         pending_instructions: list[VaultInstruction] = []
@@ -552,6 +575,7 @@ class VaultSyncService:
             **_chunk_result_fields(chunk_update, rebuilt=not index_current),
             **_embedding_result_fields(embedding_update),
             embedding_update_failed=embedding_failed,
+            embedding_coverage=self._embedding_coverage(vault),
         )
 
     def _ensure_current_index(
@@ -601,6 +625,19 @@ class VaultSyncService:
             **_chunk_result_fields(update, rebuilt=not chunk_current),
             **_embedding_result_fields(embedding_update),
             embedding_update_failed=embedding_failed,
+            embedding_coverage=self._embedding_coverage(vault),
+        )
+
+    def _embedding_coverage(
+        self,
+        vault: ObsidianVault,
+    ) -> EmbeddingIndexCoverage | None:
+        """Возвращает точное покрытие или None, когда semantic index выключен."""
+        if self._embedding_indexer is None or vault.id is None:
+            return None
+        return self._embedding_indexer.get_coverage(
+            app_user_id=vault.app_user_id,
+            vault_id=vault.id,
         )
 
     def _try_update_embedding_index(
@@ -650,6 +687,7 @@ class VaultSyncService:
             app_user_id=vault.app_user_id,
             vault_id=vault.id,
             chunk_index_signature=self._chunk_indexer.index_signature,
+            before_write=self._embedding_write_guard,
         )
         LOGGER.info(
             "Vault embedding index update completed: app_user_id=%s vault_id=%s "

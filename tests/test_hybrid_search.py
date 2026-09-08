@@ -112,7 +112,7 @@ class QueryEmbeddingProvider:
         self.contexts.append(context)
         return EmbeddingVector(model=self.model, values=self.values)
 
-    def embed_documents(self, texts, *, context=None):
+    def iter_document_batches(self, texts, *, context=None):
         """Не используется retrieval-сервисом."""
         raise AssertionError(f"Unexpected document embedding call: {texts}")
 

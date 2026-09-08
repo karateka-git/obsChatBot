@@ -22,7 +22,7 @@ class EmbeddingCallContext:
 
     Контекст не содержит исходный текст, query, API key или vector values и не
     является частью domain-модели embedding. Один `operation_id` объединяет все
-    batches одного вызова `embed_documents` либо один `embed_query`.
+    batches одного вызова `iter_document_batches` либо один `embed_query`.
     """
 
     app_user_id: int
@@ -150,6 +150,30 @@ class EmbeddingIndexUpdate:
             raise ValueError("embedding index counters must not be negative")
         if self.dimension is not None and self.dimension <= 0:
             raise ValueError("dimension must be positive when present")
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingIndexCoverage:
+    """Описывает покрытие текущего набора chunks совместимыми embeddings."""
+
+    total_chunks: int = 0
+    embedded_chunks: int = 0
+
+    def __post_init__(self) -> None:
+        if min(self.total_chunks, self.embedded_chunks) < 0:
+            raise ValueError("embedding coverage counters must not be negative")
+        if self.embedded_chunks > self.total_chunks:
+            raise ValueError("embedded_chunks must not exceed total_chunks")
+
+    @property
+    def missing_chunks(self) -> int:
+        """Возвращает число chunks, которые ещё нужно векторизовать."""
+        return self.total_chunks - self.embedded_chunks
+
+    @property
+    def is_complete(self) -> bool:
+        """Проверяет, покрыты ли embeddings все текущие chunks."""
+        return self.embedded_chunks == self.total_chunks
 
 
 @dataclass(frozen=True, slots=True)

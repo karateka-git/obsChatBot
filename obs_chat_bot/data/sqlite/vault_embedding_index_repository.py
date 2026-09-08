@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from math import isfinite
 import sqlite3
 
@@ -113,9 +114,15 @@ class SQLiteVaultEmbeddingIndexRepository(VaultEmbeddingIndexRepository):
             for row in rows
         ]
 
-    def invalidate(self, *, app_user_id: int, vault_id: int) -> None:
-        """Удаляет только marker, сохраняя vectors для безопасного reuse."""
+    def invalidate(
+        self, *, app_user_id: int, vault_id: int,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
+        """Удаляет только marker, проверяя lease под write lock при наличии guard."""
         with self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            if before_write is not None:
+                before_write()
             self._connection.execute(
                 """
                 DELETE FROM obsidian_embedding_index_states
@@ -124,37 +131,106 @@ class SQLiteVaultEmbeddingIndexRepository(VaultEmbeddingIndexRepository):
                 (app_user_id, vault_id),
             )
 
-    def save_generation(
+    def save_batch(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        embeddings: tuple[VaultChunkEmbeddingDraft, ...],
+        chunk_index_signature: str,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
+        """Фиксирует пакет отдельно, проверяя source и lease под write lock.
+
+        Raises:
+            ValueError: Пакет или текущее поколение chunks несовместимы.
+            RuntimeError: Владелец потерял lease; guard останавливает запись.
+        """
+        if not embeddings:
+            raise ValueError("checkpoint batch must not be empty")
+        model, dimension = embeddings[0].document_model, embeddings[0].dimension
+        self._validate_generation(
+            app_user_id=app_user_id, vault_id=vault_id,
+            current_chunk_ids={item.chunk_id for item in embeddings},
+            embeddings=embeddings, document_model=model, dimension=dimension,
+        )
+        with self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            if before_write is not None:
+                before_write()
+            self._check_chunk_state(app_user_id, vault_id, chunk_index_signature)
+            for item in embeddings:
+                source = self._connection.execute(
+                    """SELECT content_hash FROM obsidian_note_chunks
+                       WHERE app_user_id = ? AND vault_id = ? AND id = ?""",
+                    (app_user_id, vault_id, item.chunk_id),
+                ).fetchone()
+                if source is None or source["content_hash"] != item.content_hash:
+                    raise ValueError("checkpoint source chunk changed")
+            self._connection.execute(
+                "DELETE FROM obsidian_embedding_index_states WHERE app_user_id=? AND vault_id=?",
+                (app_user_id, vault_id),
+            )
+            # Не оставляем смешанную размерность: иначе retry отвергнет и
+            # только что оплаченные checkpoints вместе со старыми vectors.
+            self._connection.execute(
+                """DELETE FROM obsidian_chunk_embeddings
+                   WHERE app_user_id=? AND vault_id=?
+                     AND (document_model<>? OR dimension<>?)""",
+                (app_user_id, vault_id, model, dimension),
+            )
+            for embedding in embeddings:
+                self._upsert_embedding(embedding)
+
+    def complete_generation(
         self,
         *,
         app_user_id: int,
         vault_id: int,
         current_chunk_ids: set[int],
-        embeddings: tuple[VaultChunkEmbeddingDraft, ...],
         chunk_index_signature: str,
         document_model: str,
         query_model: str,
         dimension: int | None,
+        before_write: Callable[[], None] | None = None,
     ) -> int:
-        """Атомарно сохраняет изменения, чистит removed chunks и ставит marker."""
+        """Публикует marker только при полном совместимом покрытии в SQLite.
+
+        Проверка source, hashes, размерности и запись marker атомарны.
+        Частичные checkpoints не считаются доступным semantic-поколением.
+        """
         self._validate_generation(
-            app_user_id=app_user_id,
-            vault_id=vault_id,
-            current_chunk_ids=current_chunk_ids,
-            embeddings=embeddings,
-            document_model=document_model,
-            dimension=dimension,
+            app_user_id=app_user_id, vault_id=vault_id,
+            current_chunk_ids=current_chunk_ids, embeddings=(),
+            document_model=document_model, dimension=dimension,
         )
         if not chunk_index_signature.strip() or not query_model.strip():
             raise ValueError("embedding profile values must not be empty")
         with self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            if before_write is not None:
+                before_write()
+            self._check_chunk_state(app_user_id, vault_id, chunk_index_signature)
+            rows = self._connection.execute(
+                """SELECT c.id, c.content_hash AS source_hash, e.content_hash,
+                          e.document_model, e.dimension
+                   FROM obsidian_note_chunks c
+                   LEFT JOIN obsidian_chunk_embeddings e
+                     ON e.chunk_id=c.id AND e.app_user_id=c.app_user_id
+                     AND e.vault_id=c.vault_id
+                   WHERE c.app_user_id=? AND c.vault_id=?""",
+                (app_user_id, vault_id),
+            ).fetchall()
+            if {row["id"] for row in rows} != current_chunk_ids or any(
+                row["source_hash"] != row["content_hash"]
+                or row["document_model"] != document_model
+                or row["dimension"] != dimension for row in rows
+            ):
+                raise ValueError("embedding generation coverage is incomplete or stale")
             deleted = self._delete_missing(
-                app_user_id=app_user_id,
-                vault_id=vault_id,
+                app_user_id=app_user_id, vault_id=vault_id,
                 current_chunk_ids=current_chunk_ids,
             )
-            for embedding in embeddings:
-                self._upsert_embedding(embedding)
             self._connection.execute(
                 """
                 INSERT INTO obsidian_embedding_index_states (
@@ -183,6 +259,16 @@ class SQLiteVaultEmbeddingIndexRepository(VaultEmbeddingIndexRepository):
                 ),
             )
         return deleted
+
+    def _check_chunk_state(self, app_user_id: int, vault_id: int, signature: str) -> None:
+        """Не допускает checkpoint или marker для stale chunk-поколения."""
+        row = self._connection.execute(
+            """SELECT index_signature FROM obsidian_chunk_index_states
+               WHERE app_user_id=? AND vault_id=?""",
+            (app_user_id, vault_id),
+        ).fetchone()
+        if row is None or row["index_signature"] != signature:
+            raise ValueError("chunk generation changed during embedding")
 
     def _delete_missing(
         self,

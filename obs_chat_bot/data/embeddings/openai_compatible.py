@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
 from decimal import Decimal
 from numbers import Real
@@ -122,19 +124,20 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         """Возвращает URI модели, которой векторизуется поисковый запрос."""
         return self._query_model
 
-    def embed_documents(
+    def iter_document_batches(
         self,
         texts: tuple[str, ...],
         *,
         context: EmbeddingCallContext | None = None,
-    ) -> tuple[EmbeddingVector, ...]:
+    ) -> Generator[tuple[EmbeddingVector, ...], None, None]:
         """Векторизует corpus chunks пакетами, сохраняя исходный порядок.
 
         Args:
             texts: Тексты chunks; пустой tuple не создаёт HTTP-запрос.
 
-        Returns:
-            Векторы той же длины, модели и размерности.
+        Yields:
+            Проверенные пакеты в исходном порядке. Следующий HTTP-запрос
+            выполняется только после обработки пакета вызывающим кодом.
 
         Raises:
             ValueError: Если какой-либо текст пуст.
@@ -142,8 +145,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         """
         _validate_texts(texts)
         if not texts:
-            return ()
-        vectors: list[EmbeddingVector] = []
+            return
         expected_dimension: int | None = None
         operation_id = _operation_id(context)
         batch_count = (len(texts) + self._batch_size - 1) // self._batch_size
@@ -181,7 +183,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
                         raise EmbeddingProviderError(
                             "Embedding response contains inconsistent dimensions"
                         )
-                vectors.extend(batch_vectors)
+                yield batch_vectors
         except Exception as error:
             if isinstance(error, EmbeddingProviderError):
                 error.operation_id = operation_id
@@ -206,7 +208,6 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             dimension=expected_dimension,
             duration=time.monotonic() - operation_started_at,
         )
-        return tuple(vectors)
 
     def embed_query(
         self,
@@ -291,7 +292,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         """Выполняет один HTTP-запрос и проверяет порядок response items."""
         started_at = time.monotonic()
         try:
-            response = self._get_client().embeddings.create(
+            raw_response = self._get_client().embeddings.with_raw_response.create(
                 model=model,
                 input=list(texts),
                 encoding_format="float",
@@ -309,14 +310,22 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
                 input_chars=sum(len(text) for text in texts),
                 latency=latency,
                 error=error,
+                status=("http_error" if getattr(error, "status_code", None) is not None
+                        else "transport_error" if type(error).__name__ in
+                        {"APIConnectionError", "APITimeoutError", "TimeoutError", "ConnectionError"}
+                        else "request_error"),
             )
             raise EmbeddingProviderError(
                 f"Embedding request failed: {type(error).__name__}",
                 operation_id=operation_id,
             ) from error
         latency = time.monotonic() - started_at
-        telemetry = _response_telemetry(response)
+        http_response = raw_response.http_response
+        response = None
+        telemetry = _response_telemetry(response, http_response.headers.get("x-request-id"))
         try:
+            response = http_response.json()
+            telemetry = _response_telemetry(response, http_response.headers.get("x-request-id"))
             items = _response_items(response)
             if len(items) != len(texts):
                 raise ValueError("response item count does not match input count")
@@ -345,6 +354,7 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
             AttributeError,
             TypeError,
             ValueError,
+            OverflowError,
             EmbeddingProviderError,
         ) as error:
             self._log_request_failed(
@@ -360,6 +370,8 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
                 error=error,
                 status="invalid_response",
                 telemetry=telemetry,
+                http_status=http_response.status_code,
+                response_shape=_response_shape(response, expected_count=len(texts)),
             )
             if isinstance(error, EmbeddingProviderError):
                 error.operation_id = operation_id
@@ -469,25 +481,28 @@ class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
         error: Exception,
         status: str = "failed",
         telemetry: _ResponseTelemetry | None = None,
+        http_status: int | None = None,
+        response_shape: str = "",
         **values: Any,
     ) -> None:
         """Логирует финальный batch failure после внутренних retries SDK."""
         LOGGER.error(
             "Embedding request failed: event=embedding_request_failed %s "
             "latency_seconds=%.3f status=%s http_status=%s request_id=%s "
-            "error_type=%s cause_type=%s sdk_max_retries=%s",
+            "error_type=%s cause_type=%s sdk_max_retries=%s %s",
             self._request_fields(**values),
             latency,
             status,
-            getattr(error, "status_code", None) or "none",
+            http_status or getattr(error, "status_code", None) or "none",
             (
                 telemetry.request_id
                 if telemetry is not None and telemetry.request_id is not None
-                else getattr(error, "request_id", None) or "none"
+                else _safe_request_id(getattr(error, "request_id", None)) or "none"
             ),
             type(error).__name__,
             _root_cause_type(error),
             self._max_retries,
+            response_shape,
         )
 
     def _operation_fields(
@@ -633,30 +648,44 @@ def _add_telemetry(
     totals.total_tokens += telemetry.total_tokens or 0
 
 
-def _response_telemetry(response: Any) -> _ResponseTelemetry:
-    """Безопасно извлекает usage и request ID из разных SDK-подобных ответов."""
-    usage = getattr(response, "usage", None)
-    input_tokens = _non_negative_int(
-        getattr(usage, "prompt_tokens", None)
-        if usage is not None
-        else None
-    )
-    if input_tokens is None and usage is not None:
-        input_tokens = _non_negative_int(getattr(usage, "input_tokens", None))
-    total_tokens = _non_negative_int(
-        getattr(usage, "total_tokens", None)
-        if usage is not None
-        else None
-    )
-    request_id = getattr(response, "_request_id", None)
-    if not isinstance(request_id, str) or not request_id.strip():
-        request_id = getattr(response, "request_id", None)
-    if not isinstance(request_id, str) or not request_id.strip():
-        request_id = None
+def _safe_request_id(value: Any) -> str | None:
+    """Ограничивает metadata request ID одной безопасной строкой."""
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:/-]{1,128}", value):
+        return value
+    return None
+
+
+def _response_telemetry(response: Any, request_id: Any) -> _ResponseTelemetry:
+    """Читает только валидные usage counters и request ID из HTTP metadata."""
+    usage = response.get("usage") if isinstance(response, dict) else None
+    usage = usage if isinstance(usage, dict) else {}
+    input_tokens = _non_negative_int(usage.get("prompt_tokens"))
+    if input_tokens is None:
+        input_tokens = _non_negative_int(usage.get("input_tokens"))
     return _ResponseTelemetry(
         input_tokens=input_tokens,
-        total_tokens=total_tokens,
-        request_id=request_id,
+        total_tokens=_non_negative_int(usage.get("total_tokens")),
+        request_id=_safe_request_id(request_id),
+    )
+
+
+def _response_shape(response: Any, *, expected_count: int) -> str:
+    """Описывает форму JSON фиксированными полями без значений и исходных ключей."""
+    data = response.get("data") if isinstance(response, dict) else None
+    items = data if isinstance(data, list) else []
+    def types(values: Any) -> str:
+        """Сводит JSON-типы к ограниченному набору имён без значений."""
+        return ",".join(sorted({type(value).__name__ for value in values})) or "none"
+    return (
+        f"expected_vectors={expected_count} actual_vectors={len(items) if isinstance(data, list) else 'unknown'} "
+        f"response_type={type(response).__name__} "
+        f"data_present={int(isinstance(response, dict) and 'data' in response)} "
+        f"data_type={type(data).__name__} item_types={types(items)} "
+        f"index_present_count={sum(isinstance(item, dict) and 'index' in item for item in items)} "
+        f"embedding_present_count={sum(isinstance(item, dict) and 'embedding' in item for item in items)} "
+        f"index_types={types(item.get('index') for item in items if isinstance(item, dict))} "
+        f"embedding_types={types(item.get('embedding') for item in items if isinstance(item, dict))} "
+        f"value_types={types(value for item in items if isinstance(item, dict) and isinstance(item.get('embedding'), list) for value in item['embedding'])}"
     )
 
 
@@ -690,11 +719,15 @@ def _root_cause_type(error: BaseException) -> str:
 
 def _response_items(response: Any) -> tuple[EmbeddingResponseItemDto, ...]:
     """Извлекает и типизирует items SDK-ответа без утечки исходных текстов."""
-    raw_items = response.data
+    if not isinstance(response, dict) or not isinstance(response.get("data"), list):
+        raise ValueError("embedding data must be an array")
+    raw_items = response["data"]
     items: list[EmbeddingResponseItemDto] = []
     for raw_item in raw_items:
-        index = raw_item.index
-        raw_values = raw_item.embedding
+        if not isinstance(raw_item, dict):
+            raise ValueError("embedding item must be an object")
+        index = raw_item.get("index")
+        raw_values = raw_item.get("embedding")
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             raise ValueError("embedding index must be a non-negative integer")
         if not isinstance(raw_values, (list, tuple)) or not raw_values:

@@ -64,18 +64,18 @@ class RecordingEmbeddingProvider:
         self.document_contexts = []
         self.query_calls: list[str] = []
 
-    def embed_documents(
+    def iter_document_batches(
         self,
         texts: tuple[str, ...],
         *,
         context=None,
-    ) -> tuple[EmbeddingVector, ...]:
+    ):
         """Возвращает трёхмерные vectors с координатой по длине текста."""
         self.document_calls.append(texts)
         self.document_contexts.append(context)
         if self.fail:
             raise EmbeddingProviderError("provider unavailable")
-        return tuple(
+        yield tuple(
             EmbeddingVector(
                 model=self.document_model,
                 values=(float(len(text)), 0.25, -0.5),

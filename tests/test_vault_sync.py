@@ -11,7 +11,10 @@ from obs_chat_bot.application.vaults.github_models import (
     GitHubVaultSnapshotStatus,
 )
 from obs_chat_bot.application.search.errors import EmbeddingProviderError
-from obs_chat_bot.application.search.models import ChunkIndexUpdate
+from obs_chat_bot.application.search.models import (
+    ChunkIndexUpdate,
+    EmbeddingIndexCoverage,
+)
 from obs_chat_bot.application.vaults.vault_sync import (
     VaultSyncService,
     VaultSyncStatus,
@@ -180,6 +183,9 @@ class FailingEmbeddingIndexer:
 
     def is_current(self, **_values):
         return False
+
+    def get_coverage(self, **_values):
+        return EmbeddingIndexCoverage(total_chunks=3)
 
     def invalidate(self, **_values):
         return None

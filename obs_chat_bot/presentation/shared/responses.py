@@ -10,6 +10,7 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageResult,
 )
 from obs_chat_bot.application.incoming.commands import ChatCommand, CommandSection
+from obs_chat_bot.application.search.models import EmbeddingIndexCoverage
 from obs_chat_bot.application.vaults.github_models import GitHubConnectionCompletionStatus
 from obs_chat_bot.application.vaults.vault_configuration import (
     VAULT_CONFIGURATION_PATH,
@@ -719,10 +720,20 @@ def _format_vault_sync(result: ProcessIncomingMessageResult) -> str:
             f"Файлов правил: {sync.instruction_files}."
         )
     if sync.embedding_update_failed:
+        return f"{reply}\n\n{_format_embedding_coverage(sync.embedding_coverage)}"
+    if sync.embedding_coverage is not None:
         reply += (
-            "\n\n⚠️ Markdown и FTS сохранены, но embeddings обновить не "
-            "удалось. Semantic search временно использует FTS fallback."
+            "\n"
+            f"Semantic index: готов (embeddings: "
+            f"{sync.embedding_coverage.embedded_chunks} из "
+            f"{sync.embedding_coverage.total_chunks})."
         )
+        if sync.embedded_chunks or sync.unchanged_embeddings:
+            reply += (
+                "\nEmbeddings: добавлено: "
+                f"{sync.embedded_chunks}; переиспользовано: "
+                f"{sync.unchanged_embeddings}."
+            )
     return reply
 
 
@@ -761,7 +772,7 @@ def _format_github_status(result: ProcessIncomingMessageResult) -> str:
         if vault.last_synced_at is not None
         else "ещё не синхронизировался"
     )
-    return (
+    reply = (
         f"Obsidian vault: `{vault.owner}/{vault.repository}`\n"
         f"Ветка: `{vault.branch}`\n"
         f"Vault path: `{root}`\n"
@@ -769,6 +780,27 @@ def _format_github_status(result: ProcessIncomingMessageResult) -> str:
         f"Файлов правил: {status.instruction_count}\n"
         f"Последняя проверка: {checked}\n"
         f"Последняя успешная синхронизация: {synced}"
+    )
+    if status.embedding_coverage is None:
+        return f"{reply}\nSemantic index: не настроен."
+    if status.embedding_index_current and status.embedding_coverage.is_complete:
+        return (
+            f"{reply}\nSemantic index: готов (embeddings: "
+            f"{status.embedding_coverage.embedded_chunks} из "
+            f"{status.embedding_coverage.total_chunks})."
+        )
+    return f"{reply}\n{_format_embedding_coverage(status.embedding_coverage)}"
+
+
+def _format_embedding_coverage(coverage: EmbeddingIndexCoverage | None) -> str:
+    """Форматирует частичное покрытие semantic index без ложного обобщения."""
+    if coverage is None:
+        return "Semantic index: не настроен."
+    return (
+        "⚠️ Semantic index пока не готов: сохранено embeddings "
+        f"{coverage.embedded_chunks} из {coverage.total_chunks}.\n"
+        f"Осталось обработать {coverage.missing_chunks} chunks. "
+        "Пока поиск работает через FTS fallback."
     )
 
 

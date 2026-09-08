@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from decimal import Decimal
 import unittest
+import json
 
 from obs_chat_bot.application.search.errors import EmbeddingProviderError
 from obs_chat_bot.application.search.models import EmbeddingCallContext
@@ -20,7 +21,18 @@ class _FakeEmbeddingsResource:
 
     def create(self, **values):
         self.calls.append(values)
-        return self._responder(values)
+        response = self._responder(values)
+        payload = json.loads(json.dumps(response, default=lambda value: vars(value)))
+        return SimpleNamespace(http_response=SimpleNamespace(
+            status_code=200,
+            headers={"x-request-id": getattr(response, "_request_id", None)},
+            json=lambda: payload,
+        ))
+
+    @property
+    def with_raw_response(self):
+        """Имитирует SDK raw-response resource без выполнения сети."""
+        return self
 
     @staticmethod
     def _default_response(values):
@@ -46,7 +58,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
             client=SimpleNamespace(embeddings=resource),
         )
 
-        provider.embed_documents(("one", "two"))
+        _collect(provider, ("one", "two"))
 
         self.assertEqual(
             [call["input"] for call in resource.calls],
@@ -72,7 +84,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
         )
         provider = _provider(resource, batch_size=2)
 
-        vectors = provider.embed_documents(("one", "four", "five"))
+        vectors = _collect(provider, ("one", "four", "five"))
 
         self.assertEqual(len(resource.calls), 2)
         self.assertEqual([vector.values[0] for vector in vectors], [3.0, 4.0, 4.0])
@@ -110,7 +122,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
         )
         provider = _provider(resource)
 
-        provider.embed_documents(("document",))
+        _collect(provider, ("document",))
 
         with self.assertRaisesRegex(EmbeddingProviderError, "incompatible"):
             provider.embed_query("query")
@@ -120,7 +132,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
         resource = _FakeEmbeddingsResource()
         provider = _provider(resource)
 
-        self.assertEqual(provider.embed_documents(()), ())
+        self.assertEqual(_collect(provider, ()), ())
         self.assertEqual(resource.calls, [])
 
     def test_empty_text_is_rejected_before_request(self) -> None:
@@ -129,7 +141,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
         provider = _provider(resource)
 
         with self.assertRaises(ValueError):
-            provider.embed_documents(("valid", "  "))
+            _collect(provider, ("valid", "  "))
         with self.assertRaises(ValueError):
             provider.embed_query("")
 
@@ -158,7 +170,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(EmbeddingProviderError, "inconsistent"):
-            _provider(resource).embed_documents(("one", "two"))
+            _collect(_provider(resource), ("one", "two"))
 
     def test_network_error_exposes_only_error_type(self) -> None:
         """Application error не содержит исходные тексты или credentials."""
@@ -252,7 +264,7 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
             "obs_chat_bot.data.embeddings.openai_compatible",
             level="INFO",
         ) as captured:
-            provider.embed_documents(("one", "two", "three"))
+            _collect(provider, ("one", "two", "three"))
 
         completed = next(
             line
@@ -312,6 +324,11 @@ class OpenAICompatibleEmbeddingProviderTest(unittest.TestCase):
         self.assertIn("request_id=failed-request-42", logs)
         self.assertNotIn(private_text, logs)
         self.assertNotIn(provider_detail, logs)
+
+
+def _collect(provider, texts):
+    """Собирает пакетный результат только для проверок всего corpus в тестах."""
+    return tuple(vector for batch in provider.iter_document_batches(texts) for vector in batch)
 
 
 def _provider(

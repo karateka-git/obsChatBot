@@ -8,13 +8,15 @@
 2. Проверить `.env`:
    - `TELEGRAM_BOT_TOKEN` задан;
    - `VK_BOT_TOKEN` и `VK_GROUP_ID` заданы, если запускается VK adapter;
-   - `OPENAI_BASE_URL` указывает на базовый URL AI-агента;
-   - `OPENAI_API_KEY` содержит только токен, без `Bearer`;
-   - `OPENAI_MODEL` заполнен, даже если провайдер игнорирует это поле;
+   - `OPENAI_BASE_URL=https://api.timeweb.ai/v1`;
+   - `OPENAI_MODEL=dashscope/qwen3.5-flash`;
+   - `EMBEDDING_API_KEY` содержит общий ключ Timeweb AI Gateway без `Bearer`:
+     Compose использует его также как `OPENAI_API_KEY` обоих контейнеров;
+     для запуска Python напрямую задать `OPENAI_API_KEY` тем же значением;
    - если включены embeddings, одновременно заданы `EMBEDDING_BASE_URL`,
      `EMBEDDING_API_KEY`, `EMBEDDING_DOCUMENT_MODEL` и
-     `EMBEDDING_QUERY_MODEL`; ключ AI Gateway не должен совпадать или
-     смешиваться с ключом AI-агента;
+     `EMBEDDING_QUERY_MODEL`; текущие значения — `https://api.timeweb.ai/v1`
+     и `openai/text-embedding-3-large` для обеих моделей;
    - если включён GitHub connector, одновременно заданы `GITHUB_APP_ID`,
      `GITHUB_CLIENT_ID`, `GITHUB_APP_SLUG`, `GITHUB_PRIVATE_KEY_PATH`, а PEM
      доступен только процессу приложения;
@@ -29,6 +31,20 @@ Get-CimInstance Win32_Process |
 ```
 
 Если старое окно Telegram-бота открыто, закрыть его перед новым запуском.
+
+## Development-БД перед новым запуском
+
+Этот порядок временный: после этапа разработки разрешение на пересоздание
+без подтверждения прекращается. Далее схема обновляется миграциями с сохранением
+данных; удаление БД требует отдельного явного разрешения пользователя.
+
+При изменении схемы пересоздать локальную БД по
+[порядку в RUN.md](RUN.md#пересоздание-базы-после-изменения-схемы): остановить
+использующие её процессы, удалить только файлы SQLite и запустить приложение.
+Пользователь разрешил это для стадии разработки без дополнительного
+подтверждения и переноса данных. Подключение vault и индексы можно создать
+заново. Обычные изменения данных не требуют очистки; автоматического удаления
+или определения несовместимости в скриптах запуска нет.
 
 ## Проверки перед работой
 
@@ -150,6 +166,22 @@ OpenAI SDK сохраняет штатный `max_retries=2`: один логи�
 окончательный результат, но не выдумывает недоступные ему детали каждой
 внутренней попытки. `response.usage` и provider request ID выводятся только при
 наличии. API keys, тексты chunks, compact query и vector values не логируются.
+
+Каждый успешный embedding batch сохраняется в SQLite до следующего запроса.
+После сбоя или перезапуска `/github_sync` продолжает только недостающую работу;
+частичные vectors не доступны semantic search до публикации полного marker.
+Истечение или смена владельца sync lease останавливает запросы и запись,
+сохраняя прежние checkpoints для следующей синхронизации.
+
+В `event=embedding_request_failed` различаются `status=invalid_response`
+(например, malformed `200 OK`), `status=http_error`, `status=transport_error`
+и `status=request_error` для прочих ошибок вызова SDK. Для malformed-ответов
+сохраняются `http_status`, `request_id`, `batch_index`, `batch_size`,
+`expected_vectors`, `actual_vectors`, `response_type`, `data_present`,
+`data_type`, `item_types`, `index_present_count`, `embedding_present_count`,
+`index_types`, `embedding_types`, `value_types`. При отсутствии массива `data`
+фактическое число vectors равно `unknown`, а не вымышленному нулю.
+В логах есть только количества и типы полей, без значений vectors и полного JSON.
 
 Если бот отвечает ошибкой, посмотреть последние диагностические записи:
 

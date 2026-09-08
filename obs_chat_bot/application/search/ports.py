@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Generator
 from typing import Protocol
 
 from obs_chat_bot.application.search.models import (
@@ -185,20 +186,22 @@ class EmbeddingProvider(Protocol):
     def query_model(self) -> str:
         """Возвращает ID совместимой модели поисковых запросов."""
 
-    def embed_documents(
+    def iter_document_batches(
         self,
         texts: tuple[str, ...],
         *,
         context: EmbeddingCallContext | None = None,
-    ) -> tuple[EmbeddingVector, ...]:
+    ) -> Generator[tuple[EmbeddingVector, ...], None, None]:
         """Векторизует corpus chunks, сохраняя порядок входных текстов.
 
         Args:
             texts: Непустые тексты документов; пустой tuple разрешён.
             context: Безопасный application scope для корреляции логов.
 
-        Returns:
-            Векторы той же длины и в том же порядке, что `texts`.
+        Yields:
+            Непустые проверенные пакеты в порядке `texts`. Следующий запрос
+            начинается только после возобновления итератора. При сбое ранее
+            выданные пакеты остаются пригодными для checkpoint-сохранения.
 
         Raises:
             ValueError: Если один из переданных текстов пуст.
@@ -253,22 +256,41 @@ class VaultEmbeddingIndexRepository(Protocol):
     ) -> list[VaultChunkEmbeddingMetadata]:
         """Возвращает metadata без чтения и декодирования vector BLOB."""
 
-    def invalidate(self, *, app_user_id: int, vault_id: int) -> None:
+    def invalidate(
+        self, *, app_user_id: int, vault_id: int,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
         """Удаляет marker до внешних запросов и потенциально частичной записи."""
 
-    def save_generation(
+    def save_batch(
+        self,
+        *,
+        app_user_id: int,
+        vault_id: int,
+        embeddings: tuple[VaultChunkEmbeddingDraft, ...],
+        chunk_index_signature: str,
+        before_write: Callable[[], None] | None = None,
+    ) -> None:
+        """Сохраняет проверенный пакет без marker короткой транзакцией.
+
+        Проверяет актуальность chunks и вызывает before_write под write lock.
+        Несовместимые модель/размерность прежних vectors удаляются атомарно.
+        Локальные нарушения контракта пробрасываются, не становясь fallback.
+        """
+
+    def complete_generation(
         self,
         *,
         app_user_id: int,
         vault_id: int,
         current_chunk_ids: set[int],
-        embeddings: tuple[VaultChunkEmbeddingDraft, ...],
         chunk_index_signature: str,
         document_model: str,
         query_model: str,
         dimension: int | None,
+        before_write: Callable[[], None] | None = None,
     ) -> int:
-        """Атомарно upsert-ит изменения, удаляет лишнее и ставит marker.
+        """Проверяет полное покрытие под write lock и публикует marker.
 
         Returns:
             Число удалённых embeddings отсутствующих chunks.

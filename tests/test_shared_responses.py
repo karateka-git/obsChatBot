@@ -15,6 +15,7 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageResult,
 )
 from obs_chat_bot.application.incoming.commands import ChatCommand
+from obs_chat_bot.application.search.models import EmbeddingIndexCoverage
 from obs_chat_bot.application.reviews.confirmation import (
     ObsidianConfirmationResult,
     ObsidianConfirmationStatus,
@@ -37,6 +38,7 @@ from obs_chat_bot.application.vaults.vault_configuration import (
     VaultConfigurationErrorCode,
 )
 from obs_chat_bot.application.vaults.vault_sync import (
+    VaultStatus,
     VaultSyncResult,
     VaultSyncStatus,
     VaultSyncWarning,
@@ -110,7 +112,7 @@ class TelegramResponsesTest(unittest.TestCase):
         self.assertIn("memory-bank/docs/workflows.md.txt", reply)
 
     def test_format_sync_reports_optional_embedding_failure(self) -> None:
-        """Готовый Markdown/FTS не выдаётся за полностью упавший sync."""
+        """Частичный semantic index показывает точное покрытие и fallback."""
         reply = format_incoming_message_result(
             ProcessIncomingMessageResult(
                 type=IncomingMessageResultType.GITHUB_SYNC_COMPLETED,
@@ -118,13 +120,82 @@ class TelegramResponsesTest(unittest.TestCase):
                     status=VaultSyncStatus.SYNCED,
                     total_notes=173,
                     embedding_update_failed=True,
+                    embedding_coverage=EmbeddingIndexCoverage(
+                        total_chunks=623,
+                        embedded_chunks=576,
+                    ),
                 ),
             )
         )
 
         self.assertIn("Vault синхронизирован", reply)
-        self.assertIn("Markdown и FTS сохранены", reply)
-        self.assertIn("embeddings обновить не удалось", reply)
+        self.assertIn("576 из 623", reply)
+        self.assertIn("Осталось обработать 47 chunks", reply)
+        self.assertIn("FTS fallback", reply)
+
+    def test_format_sync_reports_embedding_retry_counts(self) -> None:
+        """Повторное построение отличает новые embeddings от переиспользованных."""
+        reply = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_SYNC_COMPLETED,
+                vault_sync_result=VaultSyncResult(
+                    status=VaultSyncStatus.UNCHANGED,
+                    total_notes=173,
+                    embedded_chunks=47,
+                    unchanged_embeddings=576,
+                    embedding_coverage=EmbeddingIndexCoverage(
+                        total_chunks=623,
+                        embedded_chunks=623,
+                    ),
+                ),
+            )
+        )
+
+        self.assertIn("Semantic index: готов (embeddings: 623 из 623)", reply)
+        self.assertIn("добавлено: 47; переиспользовано: 576", reply)
+
+    def test_format_github_status_reports_semantic_index_readiness(self) -> None:
+        """Статус показывает готовый и частичный semantic index отдельно."""
+        vault = ObsidianVault(
+            app_user_id=1,
+            installation_id=1,
+            repository_id=1,
+            owner="owner",
+            repository="notes",
+            branch="main",
+            id=1,
+        )
+
+        ready = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_STATUS,
+                vault_status=VaultStatus(
+                    vault=vault,
+                    embedding_index_current=True,
+                    embedding_coverage=EmbeddingIndexCoverage(
+                        total_chunks=623,
+                        embedded_chunks=623,
+                    ),
+                ),
+            )
+        )
+        partial = format_incoming_message_result(
+            ProcessIncomingMessageResult(
+                type=IncomingMessageResultType.GITHUB_STATUS,
+                vault_status=VaultStatus(
+                    vault=vault,
+                    embedding_index_current=False,
+                    embedding_coverage=EmbeddingIndexCoverage(
+                        total_chunks=623,
+                        embedded_chunks=576,
+                    ),
+                ),
+            )
+        )
+
+        self.assertIn("готов (embeddings: 623 из 623)", ready)
+        self.assertIn("сохранено embeddings 576 из 623", partial)
+        self.assertIn("Осталось обработать 47 chunks", partial)
 
     def test_format_article_processing_result_reports_created_article(self) -> None:
         """Новая статья получает понятный текст с названием, статусом, ID и длиной."""
