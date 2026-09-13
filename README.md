@@ -10,11 +10,11 @@ Production-развёртывание на VPS завершено для VK: р�
 
 ## Как это работает для пользователя
 
-1. Отправьте `/register` в доступном канале и пройдите подключение GitHub-аккаунта.
-2. Пришлите ссылку на GitHub-репозиторий с Obsidian vault. Бот проверит права GitHub App и синхронизирует заметки.
+1. Отправьте `/register` в доступном канале и задайте имя профиля.
+2. Подготовьте [обязательные правила vault](docs/GITHUB_APP.md#подготовить-vault), пришлите ссылку на GitHub-репозиторий и пройдите предложенную ботом авторизацию GitHub. Бот проверит права GitHub App и синхронизирует заметки.
 3. Отправьте ссылку на статью. Бот извлечёт текст, подготовит анализ и найдёт связанные заметки vault.
 4. Бот покажет proposal: добавить заметку, обновить существующую или пропустить запись.
-5. Ответьте `да` или `нет`. При `да` бот создаст commit в GitHub; при `нет` vault останется без изменений.
+5. Ответьте `да` или `нет`. При `да` бот запишет предложенное добавление или обновление commit в GitHub; предложение `skip` завершится без записи. При `нет` vault останется без изменений.
 
 Повторная отправка той же статьи использует сохранённый результат, если он уже есть. Для ручной синхронизации vault доступна команда `/github_sync`.
 
@@ -25,11 +25,12 @@ flowchart LR
     Channels[VK / Telegram] --> Presentation[Presentation\nадаптеры каналов и команды]
     Presentation --> Application[Application\nрегистрация, incoming flow,\nsync и review]
     Application --> Domain[Domain\nсущности и правила]
-    Application --> Data[Data\nреализации портов]
+    Application --> Ports[Порты application]
+    Data[Data\nреализации портов] -. реализует .-> Ports
     Data --> SQLite[(SQLite\nпользователи, статьи,\nvault и индексы)]
     Data --> GitHub[GitHub App\nDevice Flow, sync, commit]
     Data --> LLM[LLM и embeddings]
-    Data --> Chunker[Document chunker\nFTS и semantic search]
+    Data --> Chunker[Document chunker\nразбиение Markdown]
     GitHub <--> Vault[Obsidian vault\nв GitHub]
 ```
 
@@ -46,6 +47,7 @@ flowchart LR
 ## Документация
 
 - [Архитектура](docs/ARCHITECTURE.md) — слои, компоненты и потоки данных.
+- [Подготовка](docs/SETUP.md) — установка, `.env`, выбор канала и среда разработки.
 - [Запуск и проверки](docs/RUN.md) — локальный запуск, healthcheck и smoke-сценарии.
 - [Эксплуатация](docs/OPERATIONS.md) — production VPS, обновления, логи и backup.
 - [Production VPS](docs/PRODUCTION.md) — контекст доступа и текущее состояние сервера без секретов.

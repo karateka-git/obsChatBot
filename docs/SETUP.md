@@ -1,70 +1,92 @@
-# Минимальный стартовый набор
+# Подготовка проекта
 
-## На локальной машине
+## Получить код
 
-Обязательный минимум:
+Нужны Git и Docker Engine с Docker Compose (на Windows — Docker Desktop,
+настроенный для Linux-контейнеров). Python на хосте нужен только для запуска
+и тестов вне Docker; образ уже содержит Python 3.12.
 
-- Docker Desktop или Docker Engine с Docker Compose.
-- Git.
-- GitHub account и доступ к репозиторию проекта.
-- Python 3.11 или 3.12 для проекта.
+```powershell
+git clone https://github.com/karateka-git/obsChatBot.git
+cd obsChatBot
+Copy-Item .env.example .env
+```
 
-Для Windows и Docker Desktop нужен WSL2, чтобы запускать Linux-контейнеры вроде `python:3.12-slim`.
+В Linux/macOS вместо последней команды используйте `cp .env.example .env`.
+Все дальнейшие команды выполняются из корня клонированного репозитория.
+Для чтения публичного репозитория доступ на push не требуется.
 
-Python 3.14 может быть установлен параллельно, но проектную среду лучше держать на 3.12, пока ключевые зависимости не подтверждены на 3.14.
+## Заполнить конфигурацию
 
-Проверка после установки:
+`.env.example` — шаблон, который нужно заполнить: с `replace-me` и пустым
+embedding key приложение не готово к запуску. Переменные читает
+[`config.py`](../obs_chat_bot/data/config.py).
 
-- `docker --version`;
-- `docker compose version`;
-- `wsl --status` на Windows;
-- `git --version`;
-- `python --version` или `py --version`.
-- `py -3.12 --version`, если на машине установлено несколько версий Python.
+| Переменные | Назначение и обязательность |
+| --- | --- |
+| `APP_ENV`, `DATABASE_PATH` | Обязательны; в шаблоне `local` и `data/app.db`. Путь отсчитывается от рабочей папки процесса; в Docker она `/app`. |
+| `APP_DEBUG` | Необязателен, по умолчанию `false`. |
+| `TELEGRAM_BOT_TOKEN` | Токен от BotFather. Сейчас общий загрузчик требует его даже в режиме VK; healthcheck также проверяет его формат. |
+| `VK_BOT_TOKEN`, `VK_GROUP_ID` | Токен сообщества и положительный ID группы для VK. Для бота нужно настроить сообщения сообщества и Bots Long Poll. |
+| `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` | Обязательная конфигурация OpenAI-compatible LLM. Значения провайдера и моделей в шаблоне — настройки проекта, доступность нужно проверять у своего провайдера. |
+| `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_DOCUMENT_MODEL`, `EMBEDDING_QUERY_MODEL` | Для semantic search заполнить все четыре. Частично заполненная группа вызывает ошибку. |
+| `EMBEDDING_PRICE_PER_MILLION_TOKENS`, `EMBEDDING_PRICE_CURRENCY`, `EMBEDDING_TARIFF_VERSION` | Необязательная группа оценки стоимости: заполнить все три или оставить все пустыми. Цена конечная и неотрицательная, валюта — три заглавные латинские буквы. |
+| `CHUNK_MINIMUM_SIZE_CHARS`, `CHUNK_TARGET_SIZE_CHARS`, `CHUNK_MAXIMUM_SIZE_CHARS` | Необязательные положительные целые, по умолчанию `300`, `3000`, `6000`; требуется `minimum <= target <= maximum`. |
+| `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_APP_SLUG`, `GITHUB_PRIVATE_KEY_PATH` | Заполнить все четыре для работы с vault или оставить всю группу пустой. Для полного сценария бота GitHub App необходима. |
 
-## GitHub для версионирования
+**Особенность текущего Compose:** `docker-compose.yml` переопределяет
+`OPENAI_API_KEY` значением `EMBEDDING_API_KEY`. Поэтому для штатного Docker-запуска
+заполните `EMBEDDING_API_KEY` общим ключом AI Gateway; значение `OPENAI_API_KEY`
+из `.env` внутри контейнера будет заменено. При прямом запуске Python ключи
+независимы, `OPENAI_API_KEY` нужно заполнить отдельно.
 
-Нужно настроить:
+Для отключения semantic search при прямом Python-запуске очистите все семь
+`EMBEDDING_*` переменных, включая URL и модели из шаблона. Останется FTS-поиск.
+При запуске через текущий Compose сначала потребуется изменить его
+переопределение `OPENAI_API_KEY`, иначе пустой embedding key обнулит ключ LLM.
 
-- GitHub-репозиторий для проекта.
-- Локальный `origin`, указывающий на GitHub-репозиторий.
-- Доступ для push: через GitHub CLI, SSH key или HTTPS token.
+Создание GitHub App и получение PEM описаны в [GITHUB_APP.md](GITHUB_APP.md).
+Поместите PEM в `data/github-app.pem`, а в `.env` задайте
+`GITHUB_PRIVATE_KEY_PATH=data/github-app.pem`: каталог `data/` смонтирован в
+контейнер как `/app/data`. Путь Windows вне этого тома контейнеру недоступен.
+До подключения vault подготовьте обязательные правила по той же инструкции.
 
-Полезные проверки:
+## Запустить нужный канал
 
-- `git remote -v`;
-- `git status`;
-- `git branch --show-current`.
+После запуска Docker Engine:
 
-GitHub CLI не обязателен, но удобен для авторизации и будущих pull request:
+```powershell
+docker compose up --build tg_catcher
+```
 
-- `gh auth status`;
-- `gh repo view`.
+Для VK используйте `docker compose up --build vk_catcher`. Для обоих каналов —
+`docker compose up --build`; оба набора channel credentials должны быть заполнены.
+Compose не отключает сервис автоматически, если его токен отсутствует.
+Каталог `data/` хранит рабочую SQLite и PEM вне образа.
 
-Секреты и настройки, которые понадобятся в `.env`:
+Дальнейшие проверки, пользовательские команды и диагностика — в
+[RUN.md](RUN.md) и [OPERATIONS.md](OPERATIONS.md).
 
-- Telegram bot token от BotFather.
-- VK group token и group id, если запускается VK adapter.
-- OpenAI-compatible API key.
-- OpenAI-compatible base URL.
-- Имя модели.
-- App ID, Client ID, app slug и локальный PEM GitHub App, если включается
-  Obsidian connector. Пошаговая настройка описана в `docs/GITHUB_APP.md`.
+## Разработка без Docker
 
-## Внутри Docker-образа
+Используйте Python 3.12, как в Dockerfile. В Windows:
 
-Может понадобиться установить:
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m obs_chat_bot --sqlite-smoke
+.\.venv\Scripts\python.exe -m obs_chat_bot --pipeline-smoke
+.\.venv\Scripts\python.exe -m obs_chat_bot --analysis-smoke
+```
 
-- Python runtime.
-- Python-зависимости проекта:
-  - `aiogram`;
-  - `trafilatura`;
-  - `openai`;
-  - `PyJWT[crypto]`;
-  - `python-dotenv`.
+В Linux/macOS создайте среду через `python3.12 -m venv .venv` и используйте
+`.venv/bin/python`. Активация среды при таких командах не нужна.
+Тесты используют `unittest`; отдельная установка pytest не требуется.
+Smoke-режимы используют временные базы и fake-зависимости, не требуют `.env`
+и не проверяют реальные API. Боты запускаются той же командой Python с флагом
+`--telegram-bot` или `--vk-bot`, уже с заполненной `.env`.
 
-Версии runtime-зависимостей закреплены в `requirements.txt`, чтобы Docker build
-не менял поведение проекта из-за случайного обновления пакетов.
-- Системные пакеты, если их потребуют зависимости для HTML/XML parsing и article extraction.
-
-SQLite отдельно устанавливать не нужно для MVP: используем Python stdlib `sqlite3`, а файл базы хранится в `data/`.
+Прямые runtime-зависимости закреплены в [requirements.txt](../requirements.txt),
+но транзитивные зависимости отдельным lock-файлом не зафиксированы.
+SQLite входит в Python; сборка SQLite должна поддерживать FTS5.

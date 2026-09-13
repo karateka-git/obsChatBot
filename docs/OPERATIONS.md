@@ -1,8 +1,12 @@
-# Operational checklist локального multi-channel MVP
+# Эксплуатация Knowledge Catcher
 
-Короткий чеклист для ежедневного запуска и проверки Telegram/VK версии.
+Порядок запуска и диагностики локальных Telegram/VK и существующего VPS.
+Подготовка новой рабочей копии описана в [SETUP.md](SETUP.md).
 
 ## Production VPS
+
+Перед работой прочитайте [контекст и правила production](PRODUCTION.md).
+Описанное ниже состояние сервера требует проверки при подключении.
 
 Текущий production развёрнут в `/opt/obs-chat-bot` на H3llo VPS. Конфигурация
 `.env`, PEM GitHub App и SQLite не хранятся в Git. Основной рабочий канал — VK;
@@ -18,6 +22,14 @@ docker compose logs --tail=100 vk_catcher
 ```
 
 После опубликованного обновления проекта выполнить:
+
+Сначала проверьте `git status`, diff обновления и наличие пригодной резервной
+копии. Если меняется схема, заранее подготовьте миграцию с сохранением данных:
+редактирование уже применённого `0001_initial_schema.sql` не обновит production
+SQLite. Migration runner сравнивает версию и имя, но не checksum SQL-файла.
+Удаление production-БД по development-инструкции недопустимо.
+
+Для обновления, совместимого с текущей схемой:
 
 ```bash
 cd /opt/obs-chat-bot
@@ -95,6 +107,11 @@ Get-CimInstance Win32_Process |
 - SQLite migrations и repository;
 - article pipeline без интернета;
 - analysis pipeline без реального LLM.
+
+`check-all` не запускает весь `unittest`-набор. Кроме того, PowerShell-скрипт
+сейчас не проверяет `$LASTEXITCODE` после каждого вызова Docker: ошибка раннего
+шага не гарантирует остановку последующих. Проверяйте результат каждого шага.
+Ограничения healthcheck описаны в [RUN.md](RUN.md#6-выполнить-healthcheck).
 
 Для быстрой проверки без отдельного окна:
 
@@ -239,7 +256,7 @@ con.close()
 '@ | python -
 ```
 
-Ожидаемые таблицы MVP:
+Основные таблицы для диагностики (не полный перечень схемы):
 
 - `articles` — сохранённые статьи и их статус;
 - `incoming_messages` — сообщения внешних каналов со ссылками;

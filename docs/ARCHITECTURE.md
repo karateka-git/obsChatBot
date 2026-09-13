@@ -126,7 +126,8 @@ Semantic-индекс хранит вектор как `float32` BLOB, связ�
 2. `trafilatura` извлекает содержательный текст, статья и входящее сообщение
    сохраняются в SQLite.
 3. OpenAI-compatible LLM создаёт и сохраняет анализ статьи.
-4. Перед review проверяется актуальность vault. Затем hybrid search подбирает
+4. Актуальность vault проверяется общим incoming flow ещё до обработки URL
+   (проверка не чаще раза в шесть часов). После анализа hybrid search подбирает
    релевантные заметки, а LLM с правилами vault готовит `add`, `update` или `skip`.
 5. Пользователь видит preview Markdown и отвечает `да` либо `нет`. До `да` GitHub не
    меняется.
@@ -168,7 +169,7 @@ sequenceDiagram
     U->>C: да
     C->>I: подтверждение
     I->>G: preflight SHA и commit
-    G->>V: записать Markdown в main
+    G->>V: записать Markdown в default branch
     I->>DB: отметить proposal применённым
     I->>G: синхронизировать новый commit
     I-->>C: результат write-back
