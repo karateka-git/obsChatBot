@@ -2,6 +2,43 @@
 
 Короткий чеклист для ежедневного запуска и проверки Telegram/VK версии.
 
+## Production VPS
+
+Текущий production развёрнут в `/opt/obs-chat-bot` на H3llo VPS. Конфигурация
+`.env`, PEM GitHub App и SQLite не хранятся в Git. Основной рабочий канал — VK;
+доступ VPS к Telegram Bot API пока вынесен в [бэклог](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
+
+Проверить сервис и контейнеры:
+
+```bash
+sudo systemctl status obs-chat-bot.service
+cd /opt/obs-chat-bot
+docker compose ps
+docker compose logs --tail=100 vk_catcher
+```
+
+После опубликованного обновления проекта выполнить:
+
+```bash
+cd /opt/obs-chat-bot
+git pull --ff-only
+docker compose up -d --build
+docker compose run --rm tg_catcher python -m obs_chat_bot --healthcheck
+```
+
+`obs-chat-bot.service` включён в systemd и после reboot запускает Compose.
+Проверить ежедневные SQLite-копии и их журнал:
+
+```bash
+sudo systemctl list-timers obs-chat-bot-backup.timer
+sudo journalctl -u obs-chat-bot-backup.service --since today
+sudo ls -l /var/backups/obs-chat-bot
+```
+
+Timer запускает copy в 03:15 UTC, хранит семь последних файлов и выполняет
+backup через SQLite API. Копии лежат на том же диске VPS; защита от потери
+всей VM требует отдельного backup/snapshot у провайдера или внешнего хранилища.
+
 ## Перед запуском
 
 1. Убедиться, что Docker Desktop запущен.
