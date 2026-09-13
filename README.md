@@ -48,6 +48,7 @@ flowchart LR
 - [Архитектура](docs/ARCHITECTURE.md) — слои, компоненты и потоки данных.
 - [Запуск и проверки](docs/RUN.md) — локальный запуск, healthcheck и smoke-сценарии.
 - [Эксплуатация](docs/OPERATIONS.md) — production VPS, обновления, логи и backup.
+- [Production VPS](docs/PRODUCTION.md) — контекст доступа и текущее состояние сервера без секретов.
 - [GitHub App](docs/GITHUB_APP.md) — настройка прав и подключение Obsidian vault.
 - [Дорожная карта](docs/ROADMAP.md) — завершённые этапы и бэклог.
 - [Журнал решений](docs/DECISIONS.md) — архитектурные решения и их причины.
