@@ -9,15 +9,16 @@
 Описанное ниже состояние сервера требует проверки при подключении.
 
 Текущий production развёрнут в `/opt/obs-chat-bot` на H3llo VPS. Конфигурация
-`.env`, PEM GitHub App и SQLite не хранятся в Git. Основной рабочий канал — VK;
-доступ VPS к Telegram Bot API пока вынесен в [бэклог](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
+`.env`, PEM GitHub App и SQLite не хранятся в Git. VK работает напрямую,
+Telegram Bot API доступен через выделенный VPN и прокси. Реальный ответ на
+сообщение Telegram после включения ещё ожидает [проверки](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
 
 Для Telegram подготовлен отдельный WireGuard-интерфейс `wgobs` между H3LLO
 (`10.77.77.2`) и Timeweb (`10.77.77.1`). На Timeweb SOCKS5-прокси Dante
 принимает подключения только по адресу туннеля `10.77.77.1:1080` от H3LLO.
 В серверный `.env` уже добавлено
-`TELEGRAM_PROXY_URL=socks5://10.77.77.1:1080`; до проверки polling и ответа
-Telegram считать неработающим. Прокси применяется только к Bot API, прочие
+`TELEGRAM_PROXY_URL=socks5://10.77.77.1:1080`; получение данных бота и polling
+проверены. Прокси применяется только к Bot API, прочие
 интеграции используют обычный маршрут.
 
 Проверка сетевого пути без токена и без изменений в БД:
@@ -39,6 +40,7 @@ sudo systemctl status obs-chat-bot.service
 cd /opt/obs-chat-bot
 docker compose ps
 docker compose logs --tail=100 vk_catcher
+docker compose logs --tail=100 tg_catcher
 ```
 
 После опубликованного обновления проекта выполнить:
@@ -54,25 +56,25 @@ SQLite. Migration runner сравнивает версию и имя, но не 
 ```bash
 cd /opt/obs-chat-bot
 git pull --ff-only
-docker compose up -d --build vk_catcher
-docker compose run --rm vk_catcher python -m obs_chat_bot --healthcheck
+docker compose up -d --build vk_catcher tg_catcher
+docker compose run --rm tg_catcher python -m obs_chat_bot --healthcheck
 ```
 
-`obs-chat-bot.service` включён в systemd и после reboot запускает только
-`vk_catcher` через override `vk-only.conf`. До восстановления исходящего доступа
-к Telegram Bot API не запускайте `tg_catcher` и не выполняйте
-`docker compose up -d` без имени сервиса на VPS. Для обоих сервисов задано
+`obs-chat-bot.service` включён в systemd и после reboot запускает оба
+контейнера через override `channels.conf`. Для обоих сервисов задано
 `restart: unless-stopped`: Docker перезапускает завершившийся контейнер, если
 его не остановили вручную. Override systemd не запускает контейнер немедленно;
 проверяйте фактическое состояние через `docker compose ps`.
 
-После обновления убедитесь, что VK-контейнер работает и не уходит в цикл
+После обновления убедитесь, что оба контейнера работают и не уходят в цикл
 перезапусков:
 
 ```bash
-docker compose ps vk_catcher
+docker compose ps vk_catcher tg_catcher
 docker compose logs --tail=100 vk_catcher
+docker compose logs --tail=100 tg_catcher
 docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$(docker compose ps -q vk_catcher)"
+docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$(docker compose ps -q tg_catcher)"
 ```
 
 Проверить ежедневные SQLite-копии и их журнал:

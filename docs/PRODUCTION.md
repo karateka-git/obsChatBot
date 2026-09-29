@@ -42,18 +42,17 @@ ssh -i "C:\Users\compadre\Downloads\SSH\H3LLO_CLOUD\karateka" user@91.188.213.14
   не изменён. Конфигурация и закрытые ключи WireGuard хранятся только в
   `/etc/wireguard/` соответствующих серверов.
 - Запуск после reboot: `obs-chat-bot.service` через systemd. Override
-  `/etc/systemd/system/obs-chat-bot.service.d/vk-only.conf` запускает и
-  останавливает только `vk_catcher`; установлен 2026-09-29 и проверен через
-  `systemctl show`. Его применение не запускало контейнеры.
+  `/etc/systemd/system/obs-chat-bot.service.d/channels.conf` запускает и
+  останавливает `vk_catcher` и `tg_catcher`; проверен перезапуском unit.
 - Ночные локальные SQLite-копии: `obs-chat-bot-backup.timer`; запуск в 03:15
   UTC, семь последних файлов в `/var/backups/obs-chat-bot`.
 
-Проверка 2026-09-29: код обновлён до `a41c2dd`, `vk_catcher` пересобран и
-работает (`healthy`, ноль перезапусков); Docker подтвердил
-`restart=unless-stopped`. `tg_catcher` не запущен. `obs-chat-bot.service` и
-backup timer были active. Healthcheck прошёл; старт VK Long Poll подтверждён
-журналом. Новый пользовательский обмен сообщениями VK после обновления пока
-не проверялся.
+Проверка 2026-09-29: код обновлён до `5dc80ca`, оба контейнера работают
+(`healthy`, ноль автоматических перезапусков), Docker подтвердил
+`restart=unless-stopped`. `obs-chat-bot.service` перезапущен и восстановил
+оба канала; backup timer активен. Healthcheck прошёл, Telegram `getMe` через
+прокси успешен, запуск Telegram polling и VK Long Poll подтверждён журналом.
+Пользовательский обмен сообщениями Telegram после обновления ещё не проверялся.
 
 ## Проверенный сценарий
 
@@ -61,12 +60,11 @@ VK работает в production: регистрация, подключени�
 `karateka-git/my_obs_data`, синхронизация, embeddings, обработка статьи и
 подтверждённый GitHub write-back проверены.
 
-Прямое HTTPS-соединение с `api.telegram.org` с H3LLO недоступно. Через
-выделенный WireGuard и SOCKS5 запрос к API проходит даже из Docker-контейнера.
-`TELEGRAM_PROXY_URL` уже добавлен в серверный `.env` с правами `600`.
-Запуск `tg_catcher` требует публикации версии кода с поддержкой этой настройки
-и проверки polling/отправки ответа. До этих шагов Telegram в production не считается
-работающим; задача отслеживается в [бэклоге](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
+Прямое HTTPS-соединение с `api.telegram.org` с H3LLO недоступно. Telegram
+использует выделенный WireGuard и SOCKS5; `TELEGRAM_PROXY_URL` хранится в
+серверном `.env` с правами `600`. Получение данных бота и polling с VPS
+работают. Отправку ответа на реальное входящее сообщение нужно проверить
+отдельно; этот критерий остаётся в [бэклоге](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
 
 ## Базовые команды
 
@@ -76,6 +74,7 @@ cd /opt/obs-chat-bot
 sudo systemctl status obs-chat-bot.service
 docker compose ps
 docker compose logs --tail=100 vk_catcher
+docker compose logs --tail=100 tg_catcher
 ```
 
 После обновления кода:
@@ -83,16 +82,14 @@ docker compose logs --tail=100 vk_catcher
 ```bash
 cd /opt/obs-chat-bot
 git pull --ff-only
-docker compose up -d --build vk_catcher
-docker compose run --rm vk_catcher python -m obs_chat_bot --healthcheck
+docker compose up -d --build vk_catcher tg_catcher
+docker compose run --rm tg_catcher python -m obs_chat_bot --healthcheck
 ```
 
-До настройки исходящего доступа к Telegram Bot API не запускать на VPS
-`tg_catcher`, в том числе через `docker compose up -d` без имени сервиса.
-После следующих обновлений проверить `docker compose ps vk_catcher`, его
-журнал и `RestartPolicy.Name=unless-stopped` через `docker inspect`; не очищать
-production SQLite. Для функциональной проверки отправить сообщение VK-боту и
-проверить ответ.
+После следующих обновлений проверить оба сервиса, журналы и
+`RestartPolicy.Name=unless-stopped` через `docker inspect`; не очищать
+production SQLite. Для функциональной проверки отправить сообщения обоим
+ботам и проверить ответы.
 
 Подробная эксплуатационная инструкция — в [OPERATIONS.md](OPERATIONS.md).
 
