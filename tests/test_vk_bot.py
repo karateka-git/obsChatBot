@@ -11,11 +11,14 @@ from obs_chat_bot.application.incoming.processing import (
     ProcessIncomingMessageResult,
 )
 from obs_chat_bot.presentation.vk.bot import (
+    LongPollServer,
     VkApiClient,
     VkBotError,
     VkTransientError,
     _handle_update,
+    _long_poll_retry_delay,
     _safe_send_vk_message,
+    run_vk_bot,
     split_vk_message,
 )
 
@@ -88,6 +91,34 @@ class FakeHttpResponse:
     def read(self) -> bytes:
         """Возвращает успешный JSON-ответ VK API."""
         return b'{"response": 1}'
+
+
+class LongPollSequenceClient:
+    """Имитирует заданную последовательность вызовов VK Long Poll."""
+
+    def __init__(self, *, servers: list[object], waits: list[object]) -> None:
+        self._servers = list(servers)
+        self._waits = list(waits)
+        self.server_calls = 0
+        self.wait_calls = 0
+
+    def get_long_poll_server(self, *, group_id: int) -> LongPollServer:
+        """Возвращает следующий результат получения Long Poll server."""
+        del group_id
+        self.server_calls += 1
+        return self._next(self._servers)
+
+    def wait_long_poll(self, _long_poll: LongPollServer) -> dict[str, object]:
+        """Возвращает следующий результат ожидания Long Poll."""
+        self.wait_calls += 1
+        return self._next(self._waits)
+
+    @staticmethod
+    def _next(results: list[object]) -> object:
+        result = results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
 
 class VkBotTest(unittest.TestCase):
@@ -263,6 +294,124 @@ class VkBotTest(unittest.TestCase):
         ):
             with self.assertRaises(VkTransientError):
                 client.send_message(peer_id=22, text="hello", random_id=123)
+
+    def test_run_vk_bot_retries_initial_server_after_transient_error(self) -> None:
+        """Временный сбой при первом получении server не завершает VK-бота."""
+        client = LongPollSequenceClient(
+            servers=[
+                _network_transient_error(),
+                VkTransientError("temporary server failure with key=secret"),
+                LongPollServer(server="https://long-poll.example", key="key", ts="1"),
+            ],
+            waits=[KeyboardInterrupt()],
+        )
+        delays: list[float] = []
+        logger = logging.getLogger("test.vk.long_poll.initial")
+
+        with self.assertLogs(logger, level="WARNING") as logs:
+            with self.assertRaises(KeyboardInterrupt):
+                run_vk_bot(
+                    token="token",
+                    group_id=1,
+                    incoming_message_processor=_unused_processor,
+                    logger=logger,
+                    client=client,  # type: ignore[arg-type]
+                    retry_sleeper=delays.append,
+                    retry_jitter=lambda _lower, upper: upper,
+                )
+
+        self.assertEqual(client.server_calls, 3)
+        self.assertEqual(delays, [0.6, 1.2])
+        self.assertIn("stage=initial_server", logs.output[0])
+        logged_text = "\n".join(logs.output)
+        self.assertIn("error_type=VkTransientError", logged_text)
+        self.assertIn("cause_type=URLError", logged_text)
+        self.assertIn("reason_type=ConnectionRefusedError", logged_text)
+        self.assertIn("errno=111", logged_text)
+        self.assertNotIn("secret", logged_text)
+        self.assertNotIn("long-poll.example", logged_text)
+
+    def test_long_poll_retry_delay_is_bounded_for_very_large_attempt(self) -> None:
+        """Длительный outage не вызывает переполнение при вычислении backoff."""
+        delay = _long_poll_retry_delay(
+            10**100,
+            jitter=lambda _lower, upper: upper,
+        )
+
+        self.assertEqual(delay, 30.0)
+
+    def test_run_vk_bot_retries_wait_and_server_refresh_with_reset_delay(self) -> None:
+        """Успех ожидания сбрасывает backoff перед повтором обновления server."""
+        client = LongPollSequenceClient(
+            servers=[
+                LongPollServer(server="https://long-poll.example", key="key", ts="1"),
+                VkTransientError("temporary refresh failure"),
+                LongPollServer(server="https://long-poll.example", key="key-2", ts="2"),
+            ],
+            waits=[
+                VkTransientError("temporary wait failure"),
+                {"failed": 2},
+                KeyboardInterrupt(),
+            ],
+        )
+        delays: list[float] = []
+        logger = logging.getLogger("test.vk.long_poll.refresh")
+
+        with self.assertLogs(logger, level="WARNING") as logs:
+            with self.assertRaises(KeyboardInterrupt):
+                run_vk_bot(
+                    token="token",
+                    group_id=1,
+                    incoming_message_processor=_unused_processor,
+                    logger=logger,
+                    client=client,  # type: ignore[arg-type]
+                    retry_sleeper=delays.append,
+                    retry_jitter=lambda _lower, upper: upper,
+                )
+
+        self.assertEqual(client.wait_calls, 3)
+        self.assertEqual(client.server_calls, 3)
+        self.assertEqual(delays, [0.6, 0.6])
+        self.assertIn("stage=wait", logs.output[0])
+        self.assertIn("stage=refresh_server", logs.output[1])
+
+    def test_run_vk_bot_propagates_permanent_authorization_error(self) -> None:
+        """Постоянная ошибка авторизации завершает VK-бот без повторов."""
+        client = LongPollSequenceClient(
+            servers=[VkBotError("VK API error 15: access denied")],
+            waits=[],
+        )
+        delays: list[float] = []
+
+        with self.assertRaisesRegex(VkBotError, "error 15"):
+            run_vk_bot(
+                token="token",
+                group_id=1,
+                incoming_message_processor=_unused_processor,
+                logger=logging.getLogger("test.vk.long_poll.auth"),
+                client=client,  # type: ignore[arg-type]
+                retry_sleeper=delays.append,
+            )
+
+        self.assertEqual(client.server_calls, 1)
+        self.assertEqual(delays, [])
+
+
+def _unused_processor(
+    _message: IncomingMessage,
+    _completion_handler,
+) -> ProcessIncomingMessageResult:
+    """Возвращает результат для сценариев Long Poll без входящих updates."""
+    return ProcessIncomingMessageResult(type=IncomingMessageResultType.ARTICLE_URL_MISSING)
+
+
+def _network_transient_error() -> VkTransientError:
+    """Создаёт временную ошибку с вложенной причиной и секретным текстом."""
+    error = VkTransientError("temporary error with token=secret")
+    error.__cause__ = URLError(
+        ConnectionRefusedError(111, "https://long-poll.example/?key=secret")
+    )
+    return error
 
 
 if __name__ == "__main__":

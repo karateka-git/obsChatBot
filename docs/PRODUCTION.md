@@ -66,9 +66,12 @@ docker compose logs --tail=100 vk_catcher
 ```bash
 cd /opt/obs-chat-bot
 git pull --ff-only
-docker compose up -d --build
-docker compose run --rm tg_catcher python -m obs_chat_bot --healthcheck
+docker compose up -d --build vk_catcher
+docker compose run --rm vk_catcher python -m obs_chat_bot --healthcheck
 ```
+
+До настройки исходящего доступа к Telegram Bot API не запускать на VPS
+`tg_catcher`, в том числе через `docker compose up -d` без имени сервиса.
 
 Подробная эксплуатационная инструкция — в [OPERATIONS.md](OPERATIONS.md).
 

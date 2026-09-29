@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import time
 from collections.abc import Callable
 from random import randint
-from typing import Any
+from typing import Any, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -31,6 +32,12 @@ VK_API_BASE_URL = "https://api.vk.com/method"
 VK_SAFE_MESSAGE_LIMIT = 3500
 VK_LONG_POLL_WAIT_SECONDS = 25
 VK_TRANSIENT_API_ERROR_CODES = frozenset({1, 6, 9, 10, 29})
+VK_LONG_POLL_RETRY_BASE_SECONDS = 0.5
+VK_LONG_POLL_RETRY_MAX_SECONDS = 30.0
+VK_LONG_POLL_RETRY_JITTER_RATIO = 0.2
+# При большей степени базовая задержка уже превышает ограничение в 30 секунд.
+VK_LONG_POLL_RETRY_MAX_EXPONENT = 6
+RetryResult = TypeVar("RetryResult")
 IncomingMessageProcessor = Callable[
     [IncomingMessage, IncomingCompletionHandler | None],
     ProcessIncomingMessageResult,
@@ -52,31 +59,50 @@ def run_vk_bot(
     incoming_message_processor: IncomingMessageProcessor,
     logger: logging.Logger,
     client: VkApiClient | None = None,
+    retry_sleeper: Callable[[float], None] = time.sleep,
+    retry_jitter: Callable[[float, float], float] = random.uniform,
 ) -> None:
     """Запускает VK Bots Long Poll adapter.
 
     Args:
-        token: VK group access token.
+        token: Токен доступа VK-группы.
         group_id: ID группы VK.
-        incoming_message_processor: Общий processor входящих сообщений.
-        logger: Logger для runtime-событий.
-        client: Optional VK API client для тестов.
+        incoming_message_processor: Общий обработчик входящих сообщений.
+        logger: Логгер runtime-событий.
+        client: Необязательный VK API-клиент для тестов.
+        retry_sleeper: Функция ожидания между повторами.
+        retry_jitter: Генератор случайного смещения задержки.
     """
     api_client = client or VkApiClient(token=token)
-    long_poll = api_client.get_long_poll_server(group_id=group_id)
+    long_poll = _get_long_poll_server_with_retry(
+        api_client,
+        group_id=group_id,
+        logger=logger,
+        stage="initial_server",
+        sleeper=retry_sleeper,
+        jitter=retry_jitter,
+    )
     logger.info("VK bot long polling started for group_id=%s", group_id)
 
     while True:
-        try:
-            payload = api_client.wait_long_poll(long_poll)
-        except VkBotError as error:
-            logger.error("VK long poll request failed: %s", error)
-            time.sleep(1)
-            long_poll = api_client.get_long_poll_server(group_id=group_id)
-            continue
+        payload = _retry_long_poll_request(
+            lambda: api_client.wait_long_poll(long_poll),
+            logger=logger,
+            stage="wait",
+            sleeper=retry_sleeper,
+            jitter=retry_jitter,
+        )
 
         if "failed" in payload:
-            long_poll = _recover_long_poll(payload, long_poll, group_id, api_client)
+            long_poll = _recover_long_poll(
+                payload,
+                long_poll,
+                group_id,
+                api_client,
+                logger=logger,
+                sleeper=retry_sleeper,
+                jitter=retry_jitter,
+            )
             continue
 
         long_poll = LongPollServer(
@@ -209,17 +235,12 @@ class VkApiClient:
                 if isinstance(error_payload, dict)
                 else None
             )
-            error_message = (
-                error_payload.get("error_msg")
-                if isinstance(error_payload, dict)
-                else "unexpected error format"
-            )
             error_type = (
                 VkTransientError
                 if error_code in VK_TRANSIENT_API_ERROR_CODES
                 else VkBotError
             )
-            raise error_type(f"VK API error {error_code}: {error_message}")
+            raise error_type(f"VK API error {error_code}")
         return payload
 
 
@@ -378,7 +399,11 @@ def _recover_long_poll(
     long_poll: LongPollServer,
     group_id: int,
     client: VkApiClient,
+    logger: logging.Logger,
+    sleeper: Callable[[float], None] = time.sleep,
+    jitter: Callable[[float, float], float] = random.uniform,
 ) -> LongPollServer:
+    """Восстанавливает параметры Long Poll после штатного ответа `failed`."""
     failed = payload.get("failed")
     if failed == 1:
         return LongPollServer(
@@ -386,7 +411,148 @@ def _recover_long_poll(
             key=long_poll.key,
             ts=str(payload.get("ts", long_poll.ts)),
         )
-    return client.get_long_poll_server(group_id=group_id)
+    return _get_long_poll_server_with_retry(
+        client,
+        group_id=group_id,
+        logger=logger,
+        stage="refresh_server",
+        sleeper=sleeper,
+        jitter=jitter,
+    )
+
+
+def _get_long_poll_server_with_retry(
+    client: VkApiClient,
+    *,
+    group_id: int,
+    logger: logging.Logger,
+    stage: str,
+    sleeper: Callable[[float], None] = time.sleep,
+    jitter: Callable[[float, float], float] = random.uniform,
+) -> LongPollServer:
+    """Получает параметры Long Poll, повторяя только временные ошибки.
+
+    Args:
+        client: Клиент VK API.
+        group_id: Идентификатор VK-группы.
+        logger: Логгер диагностических событий.
+        stage: Безопасное имя этапа для лога.
+        sleeper: Функция ожидания между повторами.
+        jitter: Генератор случайного смещения задержки.
+
+    Returns:
+        Актуальные параметры Long Poll.
+
+    Raises:
+        VkBotError: Если VK вернул постоянную ошибку.
+    """
+    return _retry_long_poll_request(
+        lambda: client.get_long_poll_server(group_id=group_id),
+        logger=logger,
+        stage=stage,
+        sleeper=sleeper,
+        jitter=jitter,
+    )
+
+
+def _retry_long_poll_request(
+    request: Callable[[], RetryResult],
+    *,
+    logger: logging.Logger,
+    stage: str,
+    sleeper: Callable[[float], None] = time.sleep,
+    jitter: Callable[[float, float], float] = random.uniform,
+) -> RetryResult:
+    """Выполняет запрос Long Poll с повтором временных ошибок.
+
+    Счётчик повторов сбрасывается после успешного ответа. В логи попадают только
+    этап, номер попытки и задержка, поэтому параметры Long Poll и токены не
+    раскрываются даже при ошибке сторонней библиотеки.
+
+    Args:
+        request: Операция VK API или Long Poll.
+        logger: Логгер диагностических событий.
+        stage: Безопасное имя этапа запроса.
+        sleeper: Функция ожидания, заменяемая в тестах.
+        jitter: Генератор jitter в границах задержки.
+
+    Returns:
+        Результат успешного запроса.
+
+    Raises:
+        VkBotError: Если запрос завершился постоянной ошибкой.
+    """
+    failed_attempt = 0
+    while True:
+        try:
+            return request()
+        except VkTransientError as error:
+            failed_attempt += 1
+            delay = _long_poll_retry_delay(failed_attempt, jitter=jitter)
+            logger.warning(
+                "VK long poll transient failure: stage=%s failed_attempt=%s "
+                "delay_seconds=%.3f %s",
+                stage,
+                failed_attempt,
+                delay,
+                _safe_network_error_details(error),
+            )
+            sleeper(delay)
+
+
+def _long_poll_retry_delay(
+    failed_attempt: int,
+    *,
+    jitter: Callable[[float, float], float] = random.uniform,
+) -> float:
+    """Возвращает ограниченную экспоненциальную задержку с jitter.
+
+    Args:
+        failed_attempt: Порядковый номер неуспешной попытки, начиная с единицы.
+        jitter: Генератор случайного смещения задержки.
+
+    Returns:
+        Время ожидания в секундах, не превышающее заданный максимум.
+    """
+    if failed_attempt < 1:
+        raise ValueError("failed_attempt must be positive")
+    exponent = min(failed_attempt - 1, VK_LONG_POLL_RETRY_MAX_EXPONENT)
+    base_delay = min(
+        VK_LONG_POLL_RETRY_BASE_SECONDS * 2**exponent,
+        VK_LONG_POLL_RETRY_MAX_SECONDS,
+    )
+    lower_bound = base_delay * (1 - VK_LONG_POLL_RETRY_JITTER_RATIO)
+    upper_bound = min(
+        VK_LONG_POLL_RETRY_MAX_SECONDS,
+        base_delay * (1 + VK_LONG_POLL_RETRY_JITTER_RATIO),
+    )
+    return jitter(lower_bound, upper_bound)
+
+
+def _safe_network_error_details(error: VkTransientError) -> str:
+    """Возвращает безопасные для лога признаки временной сетевой ошибки.
+
+    Args:
+        error: Типизированная временная ошибка VK-запроса.
+
+    Returns:
+        Строка с типами исключений и числовым `errno`, если он доступен.
+    """
+    details = [f"error_type={type(error).__name__}"]
+    cause = error.__cause__
+    if cause is None:
+        return " ".join(details)
+
+    details.append(f"cause_type={type(cause).__name__}")
+    if not isinstance(cause, URLError):
+        return " ".join(details)
+
+    reason = cause.reason
+    details.append(f"reason_type={type(reason).__name__}")
+    errno = getattr(reason, "errno", None)
+    if isinstance(errno, int) and not isinstance(errno, bool):
+        details.append(f"errno={errno}")
+    return " ".join(details)
 
 
 def _should_send_processing_ack(text: str) -> bool:

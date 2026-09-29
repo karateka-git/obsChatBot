@@ -3,13 +3,29 @@
 import asyncio
 import logging
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from aiogram.exceptions import (
+    TelegramConflictError as AiogramTelegramConflictError,
+    TelegramNetworkError as AiogramTelegramNetworkError,
+    TelegramServerError,
+    TelegramUnauthorizedError as AiogramTelegramUnauthorizedError,
+)
+from aiogram.methods import GetMe
 
 from obs_chat_bot.application.incoming.processing import (
     IncomingMessageResultType,
     ProcessIncomingMessageResult,
 )
 from obs_chat_bot.presentation.telegram.bot import (
+    TelegramBotError,
+    _FatalPollingError,
     _create_telegram_completion_handler,
+    _create_polling_bot,
+    _run_telegram_bot,
+    _start_polling_with_retries,
+    _telegram_polling_retry_delay,
     safe_send_telegram_reply,
     split_telegram_message,
 )
@@ -44,6 +60,81 @@ class TelegramRetryAfter(RuntimeError):
     def __init__(self, retry_after: float) -> None:
         super().__init__("rate limited")
         self.retry_after = retry_after
+
+
+class FakeTelegramSession:
+    """Запоминает закрытие HTTP-сессии fake Telegram Bot."""
+
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def close(self) -> None:
+        """Имитирует штатное закрытие HTTP-сессии."""
+        self.close_calls += 1
+
+
+class FakePollingBot:
+    """Минимальный Bot для проверки обёртки polling без сети."""
+
+    request_error: Exception | None = None
+
+    def __init__(self, *, token: str) -> None:
+        self.token = token
+        self.session = FakeTelegramSession()
+
+    async def __call__(self, _method: object, **_kwargs: object) -> str:
+        """Возвращает ответ или поднимает настроенную ошибку API."""
+        if self.request_error is not None:
+            raise self.request_error
+        return "ok"
+
+
+class FakeRouter:
+    """Поддерживает регистрацию handler'а в тестовом aiogram-модуле."""
+
+    def message(self):  # type: ignore[no-untyped-def]
+        """Возвращает декоратор, оставляющий handler без изменений."""
+        return lambda handler: handler
+
+
+class FakePollingDispatcher:
+    """Сохраняет параметры запуска polling и имитирует его завершение."""
+
+    def __init__(self) -> None:
+        self.included_router: FakeRouter | None = None
+        self.start_arguments: tuple[FakePollingBot, dict[str, object]] | None = None
+
+    def include_router(self, router: FakeRouter) -> None:
+        """Сохраняет зарегистрированный router."""
+        self.included_router = router
+
+    async def start_polling(
+        self,
+        bot: FakePollingBot,
+        **kwargs: object,
+    ) -> None:
+        """Имитирует штатную остановку polling."""
+        self.start_arguments = (bot, kwargs)
+
+
+class FakeAiogram:
+    """Минимальная поверхность aiogram для unit-тестов запуска polling."""
+
+    Bot = FakePollingBot
+    Router = FakeRouter
+    exceptions = SimpleNamespace(
+        TelegramConflictError=AiogramTelegramConflictError,
+        TelegramNetworkError=AiogramTelegramNetworkError,
+        TelegramServerError=TelegramServerError,
+        TelegramUnauthorizedError=AiogramTelegramUnauthorizedError,
+    )
+
+    def __init__(self) -> None:
+        self.dispatcher = FakePollingDispatcher()
+
+    def Dispatcher(self) -> FakePollingDispatcher:
+        """Возвращает контролируемый fake dispatcher."""
+        return self.dispatcher
 
 
 class TelegramMessage:
@@ -180,6 +271,158 @@ class TelegramBotHelpersTest(unittest.TestCase):
         self.assertEqual(message.answers, ["hello"])
         self.assertEqual(message.attempts, 2)
         self.assertEqual(delays, [2.5])
+
+    def test_polling_bot_leaves_temporary_error_for_aiogram_retry(self) -> None:
+        """Сетевая ошибка остаётся обычной, чтобы её повторил aiogram."""
+        FakePollingBot.request_error = AiogramTelegramNetworkError(
+            GetMe(),
+            "temporary failure",
+        )
+        bot = _create_polling_bot(FakeAiogram(), token="token")
+
+        async def run() -> None:
+            with self.assertRaises(AiogramTelegramNetworkError):
+                await bot(object())
+
+        try:
+            asyncio.run(run())
+        finally:
+            FakePollingBot.request_error = None
+
+    def test_polling_bot_interrupts_retry_for_conflict(self) -> None:
+        """Конфликт polling выходит из внутреннего бесконечного retry aiogram."""
+        conflict = AiogramTelegramConflictError(
+            GetMe(),
+            "terminated by other getUpdates request",
+        )
+        FakePollingBot.request_error = conflict
+        bot = _create_polling_bot(FakeAiogram(), token="token")
+
+        async def run() -> None:
+            with self.assertRaises(_FatalPollingError) as raised:
+                await bot(object())
+            self.assertIs(raised.exception.error, conflict)
+
+        try:
+            asyncio.run(run())
+        finally:
+            FakePollingBot.request_error = None
+
+    def test_polling_bot_interrupts_retry_for_bad_token(self) -> None:
+        """Неверный токен не маскируется бесконечными повторными попытками."""
+        unauthorized = AiogramTelegramUnauthorizedError(GetMe(), "Unauthorized")
+        FakePollingBot.request_error = unauthorized
+        bot = _create_polling_bot(FakeAiogram(), token="token")
+
+        async def run() -> None:
+            with self.assertRaises(_FatalPollingError) as raised:
+                await bot(object())
+            self.assertIs(raised.exception.error, unauthorized)
+
+        try:
+            asyncio.run(run())
+        finally:
+            FakePollingBot.request_error = None
+
+    def test_run_polling_closes_session_once_after_graceful_stop(self) -> None:
+        """Штатная остановка закрывает session ровно один раз."""
+        aiogram = FakeAiogram()
+        logger = logging.getLogger("test.telegram.polling_stop")
+
+        async def run() -> None:
+            await _run_telegram_bot(
+                token="token",
+                incoming_message_processor=lambda _message, _handler: None,  # type: ignore[return-value]
+                logger=logger,
+            )
+
+        with patch(
+            "obs_chat_bot.presentation.telegram.bot._load_aiogram",
+            return_value=aiogram,
+        ):
+            asyncio.run(run())
+
+        self.assertIsNotNone(aiogram.dispatcher.start_arguments)
+        bot, kwargs = aiogram.dispatcher.start_arguments
+        self.assertFalse(kwargs["close_bot_session"])
+        self.assertEqual(bot.session.close_calls, 1)
+
+    def test_run_polling_reports_fatal_api_error(self) -> None:
+        """Неустранимая ошибка Telegram API превращается в adapter-ошибку."""
+        aiogram = FakeAiogram()
+        logger = logging.getLogger("test.telegram.polling_fatal")
+
+        async def raise_conflict(
+            bot: FakePollingBot,
+            **_kwargs: object,
+        ) -> None:
+            FakePollingBot.request_error = AiogramTelegramConflictError(
+                GetMe(),
+                "conflict",
+            )
+            try:
+                await bot(object())
+            finally:
+                FakePollingBot.request_error = None
+
+        aiogram.dispatcher.start_polling = raise_conflict  # type: ignore[method-assign]
+
+        async def run() -> None:
+            with self.assertRaisesRegex(TelegramBotError, "TelegramConflictError"):
+                await _run_telegram_bot(
+                    token="token",
+                    incoming_message_processor=lambda _message, _handler: None,  # type: ignore[return-value]
+                    logger=logger,
+                )
+
+        with patch(
+            "obs_chat_bot.presentation.telegram.bot._load_aiogram",
+            return_value=aiogram,
+        ):
+            asyncio.run(run())
+
+    def test_start_polling_retries_many_temporary_errors_then_succeeds(self) -> None:
+        """Временные сбои до цикла обновлений не завершают adapter."""
+        aiogram = FakeAiogram()
+        bot = FakePollingBot(token="token")
+        logger = logging.getLogger("test.telegram.polling_startup_retry")
+        calls = 0
+        delays: list[float] = []
+
+        async def start_with_one_network_failure(
+            _bot: FakePollingBot,
+            **_kwargs: object,
+        ) -> None:
+            nonlocal calls
+            calls += 1
+            if calls <= 8:
+                raise AiogramTelegramNetworkError(GetMe(), "temporary failure")
+
+        async def sleeper(delay: float) -> None:
+            delays.append(delay)
+
+        aiogram.dispatcher.start_polling = start_with_one_network_failure  # type: ignore[method-assign]
+
+        async def run() -> None:
+            await _start_polling_with_retries(
+                aiogram.dispatcher,
+                bot,
+                aiogram=aiogram,
+                logger=logger,
+                sleeper=sleeper,
+            )
+
+        with self.assertLogs(logger, level="WARNING") as logs:
+            asyncio.run(run())
+
+        self.assertEqual(calls, 9)
+        self.assertEqual(delays, [0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0])
+        self.assertIn("error_type=TelegramNetworkError", logs.output[0])
+
+    def test_polling_retry_delay_caps_without_unbounded_exponent(self) -> None:
+        """Большой номер сбоя не увеличивает задержку выше заданного потолка."""
+        self.assertEqual(_telegram_polling_retry_delay(7), 30.0)
+        self.assertEqual(_telegram_polling_retry_delay(10_000), 30.0)
 
     def test_completion_callback_replies_in_telegram_loop(self) -> None:
         """Фоновый результат безопасно возвращается в Telegram event loop."""

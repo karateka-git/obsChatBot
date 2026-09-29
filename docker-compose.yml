@@ -20,8 +20,10 @@ x-catcher-base: &catcher-base
 services:
   tg_catcher:
     <<: *catcher-base
+    restart: unless-stopped
     command: ["python", "-m", "obs_chat_bot", "--telegram-bot"]
 
   vk_catcher:
     <<: *catcher-base
+    restart: unless-stopped
     command: ["python", "-m", "obs_chat_bot", "--vk-bot"]
