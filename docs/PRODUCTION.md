@@ -3,11 +3,10 @@
 Этот документ — контекст для агента, который продолжает эксплуатацию или
 развёртывание проекта. Он не содержит ключи, токены, содержимое `.env` или PEM.
 
-Сведения ниже — зафиксированный контекст предыдущего развёртывания, а не
-результат текущей проверки сервера. Аудит документации 2026-09-13 выполнялся
-по репозиторию без подключения к VPS. Перед эксплуатационными действиями
-проверьте состояние сервиса, timer и сети заново. Unit-файлы systemd и backup
-script в репозитории отсутствуют, поэтому их содержимое по коду не проверено.
+Сведения ниже — контекст развёртывания. Проверка 2026-09-29 подтвердила
+systemd unit, его override и backup timer, но состояние сервиса и сети может
+измениться. Перед эксплуатационными действиями проверяйте их заново.
+Unit-файлы systemd и backup script в репозитории отсутствуют.
 
 ## Доступ
 
@@ -36,9 +35,19 @@ ssh -i "C:\Users\compadre\Downloads\SSH\H3LLO_CLOUD\karateka" user@91.188.213.14
 - GitHub App PEM: `/opt/obs-chat-bot/data/github-app.pem`, права `600`, не
   хранится в Git.
 - Production SQLite: `/opt/obs-chat-bot/data/app.db`.
-- Запуск после reboot: `obs-chat-bot.service` через systemd.
+- Запуск после reboot: `obs-chat-bot.service` через systemd. Override
+  `/etc/systemd/system/obs-chat-bot.service.d/vk-only.conf` запускает и
+  останавливает только `vk_catcher`; установлен 2026-09-29 и проверен через
+  `systemctl show`. Его применение не запускало контейнеры.
 - Ночные локальные SQLite-копии: `obs-chat-bot-backup.timer`; запуск в 03:15
   UTC, семь последних файлов в `/var/backups/obs-chat-bot`.
+
+Проверка 2026-09-29: код обновлён до `a41c2dd`, `vk_catcher` пересобран и
+работает (`healthy`, ноль перезапусков); Docker подтвердил
+`restart=unless-stopped`. `tg_catcher` не запущен. `obs-chat-bot.service` и
+backup timer были active. Healthcheck прошёл; старт VK Long Poll подтверждён
+журналом. Новый пользовательский обмен сообщениями VK после обновления пока
+не проверялся.
 
 ## Проверенный сценарий
 
@@ -72,6 +81,10 @@ docker compose run --rm vk_catcher python -m obs_chat_bot --healthcheck
 
 До настройки исходящего доступа к Telegram Bot API не запускать на VPS
 `tg_catcher`, в том числе через `docker compose up -d` без имени сервиса.
+После следующих обновлений проверить `docker compose ps vk_catcher`, его
+журнал и `RestartPolicy.Name=unless-stopped` через `docker inspect`; не очищать
+production SQLite. Для функциональной проверки отправить сообщение VK-боту и
+проверить ответ.
 
 Подробная эксплуатационная инструкция — в [OPERATIONS.md](OPERATIONS.md).
 

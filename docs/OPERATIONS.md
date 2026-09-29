@@ -34,11 +34,27 @@ SQLite. Migration runner сравнивает версию и имя, но не 
 ```bash
 cd /opt/obs-chat-bot
 git pull --ff-only
-docker compose up -d --build
-docker compose run --rm tg_catcher python -m obs_chat_bot --healthcheck
+docker compose up -d --build vk_catcher
+docker compose run --rm vk_catcher python -m obs_chat_bot --healthcheck
 ```
 
-`obs-chat-bot.service` включён в systemd и после reboot запускает Compose.
+`obs-chat-bot.service` включён в systemd и после reboot запускает только
+`vk_catcher` через override `vk-only.conf`. До восстановления исходящего доступа
+к Telegram Bot API не запускайте `tg_catcher` и не выполняйте
+`docker compose up -d` без имени сервиса на VPS. Для обоих сервисов задано
+`restart: unless-stopped`: Docker перезапускает завершившийся контейнер, если
+его не остановили вручную. Override systemd не запускает контейнер немедленно;
+проверяйте фактическое состояние через `docker compose ps`.
+
+После обновления убедитесь, что VK-контейнер работает и не уходит в цикл
+перезапусков:
+
+```bash
+docker compose ps vk_catcher
+docker compose logs --tail=100 vk_catcher
+docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$(docker compose ps -q vk_catcher)"
+```
+
 Проверить ежедневные SQLite-копии и их журнал:
 
 ```bash
@@ -144,6 +160,22 @@ docker compose run --rm --entrypoint python vk_catcher -m obs_chat_bot --vk-bot
 
 VK использует тот же flow регистрации, привязки каналов, сохранения статей и
 LLM-анализа, что и Telegram.
+
+При временном сбое VK Long Poll adapter повторяет получение сервера, ожидание
+событий или обновление сервера с задержкой до 30 секунд. В журнале записи
+`VK long poll transient failure` показывают этап, номер попытки, задержку и
+безопасные типы вложенной сетевой причины с числовым `errno`, если он есть.
+Текст исключения, URL Long Poll и ключ в такую запись не включаются. Если
+сеть восстановилась, adapter продолжает работу без ручного перезапуска;
+постоянная ошибка доступа VK завершает процесс, после чего Docker применяет
+restart policy. При повторяющихся постоянных ошибках проверяйте настройки
+доступа VK, а не считайте циклический restart успешным восстановлением.
+
+Telegram polling также повторяет временные сетевые ошибки. Внутренний цикл
+aiogram восстанавливает получение updates, а ошибки при запуске polling
+повторяются adapter с задержкой до 30 секунд. Неверный токен и конфликт с
+другим polling-экземпляром завершают процесс; по ним нужно исправить
+конфигурацию или остановить второй экземпляр.
 
 ## Проверка пользовательского сценария
 
