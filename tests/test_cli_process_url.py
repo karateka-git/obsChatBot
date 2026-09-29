@@ -360,6 +360,25 @@ class ProcessUrlCliTest(unittest.TestCase):
         self.assertTrue(callable(processor))
         self.assertEqual(exit_code, 0)
 
+    def test_run_telegram_bot_command_passes_proxy_to_adapter(self) -> None:
+        """CLI передаёт Telegram-прокси только соответствующему adapter."""
+        fake_use_case = FakeProcessArticleUrlUseCase()
+        with patch("obs_chat_bot.presentation.cli.main.run_telegram_bot") as runner:
+            with TemporaryDirectory(prefix="obs-chat-bot-telegram-") as directory:
+                exit_code = run_telegram_bot_command(
+                    database_path=Path(directory) / "test.db",
+                    token="token",
+                    proxy_url="socks5://10.77.77.1:1080",
+                    logger=SilentLogger(),
+                    use_case_factory=lambda _connection: fake_use_case,
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            runner.call_args.kwargs["proxy_url"],
+            "socks5://10.77.77.1:1080",
+        )
+
     def test_run_telegram_bot_builds_one_process_github_coordinator(self) -> None:
         """Telegram runtime не пересоздаёт in-memory Device Flow на сообщение."""
         fake_use_case = FakeProcessArticleUrlUseCase()

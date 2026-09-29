@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     from dotenv import load_dotenv
@@ -130,6 +131,7 @@ class AppConfig:
     openai_base_url: str
     openai_api_key: str
     openai_model: str
+    telegram_proxy_url: str | None = None
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     app_debug: bool = False
     vk_bot_token: str = ""
@@ -146,6 +148,7 @@ class AppConfig:
             "app_env": self.app_env,
             "database_path": str(self.database_path),
             "telegram_bot_token": _presence(self.telegram_bot_token),
+            "telegram_proxy_url": _presence(self.telegram_proxy_url or ""),
             "openai_base_url": self.openai_base_url,
             "openai_api_key": _presence(self.openai_api_key),
             "openai_model": self.openai_model,
@@ -213,6 +216,7 @@ def load_config() -> AppConfig:
         app_env=_get_required("APP_ENV"),
         database_path=Path(_get_required("DATABASE_PATH")),
         telegram_bot_token=_get_required("TELEGRAM_BOT_TOKEN"),
+        telegram_proxy_url=_get_optional_telegram_proxy_url(),
         openai_base_url=_get_required("OPENAI_BASE_URL").rstrip("/"),
         openai_api_key=_get_required("OPENAI_API_KEY"),
         openai_model=_get_required("OPENAI_MODEL"),
@@ -234,6 +238,35 @@ def _get_required(name: str) -> str:
 
 def _presence(value: str) -> str:
     return "set" if value else "missing"
+
+
+def _get_optional_telegram_proxy_url() -> str | None:
+    """Читает адрес Telegram-прокси без включения credentials в сообщения ошибок.
+
+    Returns:
+        Адрес прокси либо `None` для прямого подключения.
+
+    Raises:
+        ConfigError: Если адрес или протокол прокси некорректен.
+    """
+    value = os.getenv("TELEGRAM_PROXY_URL", "").strip()
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigError("TELEGRAM_PROXY_URL has invalid format") from error
+    if (
+        parsed.scheme not in {"socks5", "socks4", "http"}
+        or not parsed.hostname
+        or port is None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ConfigError("TELEGRAM_PROXY_URL has invalid format")
+    return value
 
 
 def _get_bool(name: str, *, default: bool) -> bool:

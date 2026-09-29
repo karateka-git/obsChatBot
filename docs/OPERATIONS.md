@@ -12,6 +12,26 @@
 `.env`, PEM GitHub App и SQLite не хранятся в Git. Основной рабочий канал — VK;
 доступ VPS к Telegram Bot API пока вынесен в [бэклог](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
 
+Для Telegram подготовлен отдельный WireGuard-интерфейс `wgobs` между H3LLO
+(`10.77.77.2`) и Timeweb (`10.77.77.1`). На Timeweb SOCKS5-прокси Dante
+принимает подключения только по адресу туннеля `10.77.77.1:1080` от H3LLO.
+В серверный `.env` уже добавлено
+`TELEGRAM_PROXY_URL=socks5://10.77.77.1:1080`; до проверки polling и ответа
+Telegram считать неработающим. Прокси применяется только к Bot API, прочие
+интеграции используют обычный маршрут.
+
+Проверка сетевого пути без токена и без изменений в БД:
+
+```bash
+sudo systemctl is-active wg-quick@wgobs
+curl --socks5-hostname 10.77.77.1:1080 -I --max-time 10 https://api.telegram.org/
+```
+
+На Timeweb проверить `systemctl is-active wg-quick@wgobs danted`. Если туннель
+или прокси недоступны, проверить `wg show wgobs`, состояние двух systemd-сервисов
+и доступность UDP `51831` между VPS. Закрытые ключи и содержимое `.env` в
+журналы и отчёты не копировать.
+
 Проверить сервис и контейнеры:
 
 ```bash

@@ -162,6 +162,7 @@ def main() -> int:
         return run_telegram_bot_command(
             database_path=config.database_path,
             token=config.telegram_bot_token,
+            proxy_url=config.telegram_proxy_url,
             openai_base_url=config.openai_base_url,
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
@@ -491,6 +492,7 @@ def run_telegram_bot_command(
     *,
     database_path: Path,
     token: str,
+    proxy_url: str | None = None,
     openai_base_url: str = "",
     openai_api_key: str = "",
     openai_model: str = "",
@@ -507,6 +509,7 @@ def run_telegram_bot_command(
     Args:
         database_path: Путь к рабочему файлу SQLite.
         token: Telegram Bot API token.
+        proxy_url: Необязательный адрес прокси только для Telegram Bot API.
         openai_base_url: Базовый URL OpenAI-compatible API.
         openai_api_key: API key провайдера LLM.
         openai_model: Имя модели для анализа статей.
@@ -538,6 +541,7 @@ def run_telegram_bot_command(
             )
         run_telegram_bot(
             token=token,
+            proxy_url=proxy_url,
             incoming_message_processor=lambda incoming_message, completion_handler: (
                 process_channel_incoming_message(
                     database_path=database_path,

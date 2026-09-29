@@ -78,9 +78,9 @@ class FakePollingBot:
 
     request_error: Exception | None = None
 
-    def __init__(self, *, token: str) -> None:
+    def __init__(self, *, token: str, session: FakeTelegramSession | None = None) -> None:
         self.token = token
-        self.session = FakeTelegramSession()
+        self.session = session or FakeTelegramSession()
 
     async def __call__(self, _method: object, **_kwargs: object) -> str:
         """Возвращает ответ или поднимает настроенную ошибку API."""
@@ -288,6 +288,24 @@ class TelegramBotHelpersTest(unittest.TestCase):
             asyncio.run(run())
         finally:
             FakePollingBot.request_error = None
+
+    def test_polling_bot_uses_proxy_only_when_configured(self) -> None:
+        """SOCKS-сессия создаётся только для явно настроенного Telegram-прокси."""
+        proxy_session = FakeTelegramSession()
+        with patch(
+            "aiogram.client.session.aiohttp.AiohttpSession",
+            return_value=proxy_session,
+        ) as session_factory:
+            direct_bot = _create_polling_bot(FakeAiogram(), token="token")
+            proxied_bot = _create_polling_bot(
+                FakeAiogram(),
+                token="token",
+                proxy_url="socks5://10.77.77.1:1080",
+            )
+
+        self.assertIsNot(direct_bot.session, proxy_session)
+        self.assertIs(proxied_bot.session, proxy_session)
+        session_factory.assert_called_once_with(proxy="socks5://10.77.77.1:1080")
 
     def test_polling_bot_interrupts_retry_for_conflict(self) -> None:
         """Конфликт polling выходит из внутреннего бесконечного retry aiogram."""

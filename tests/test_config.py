@@ -31,6 +31,32 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.vk_group_id, 123)
         self.assertEqual(config.safe_summary()["vk_bot_token"], "set")
 
+    def test_load_config_reads_telegram_proxy_without_logging_address(self) -> None:
+        """Прокси настраивается отдельно и не раскрывается в safe summary."""
+        proxy_url = "socks5://user:secret@10.77.77.1:1080"
+        with patch.dict(
+            os.environ,
+            _env(TELEGRAM_PROXY_URL=proxy_url),
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertEqual(config.telegram_proxy_url, proxy_url)
+        self.assertEqual(config.safe_summary()["telegram_proxy_url"], "set")
+        self.assertNotIn(proxy_url, config.safe_summary().values())
+
+    def test_load_config_rejects_invalid_telegram_proxy_without_echoing_it(self) -> None:
+        """Ошибочный URL прокси не выводит учётные данные в исключении."""
+        with patch.dict(
+            os.environ,
+            _env(TELEGRAM_PROXY_URL="ftp://user:secret@example.com:1080"),
+            clear=True,
+        ):
+            with self.assertRaises(ConfigError) as raised:
+                load_config()
+
+        self.assertNotIn("secret", str(raised.exception))
+
     def test_load_config_defaults_debug_to_false(self) -> None:
         """Без APP_DEBUG приложение работает в обычном logging-режиме."""
         with patch.dict(os.environ, _env(), clear=True):

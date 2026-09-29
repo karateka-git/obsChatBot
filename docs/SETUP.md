@@ -27,6 +27,7 @@ embedding key приложение не готово к запуску. Пере
 | `APP_ENV`, `DATABASE_PATH` | Обязательны; в шаблоне `local` и `data/app.db`. Путь отсчитывается от рабочей папки процесса; в Docker она `/app`. |
 | `APP_DEBUG` | Необязателен, по умолчанию `false`. |
 | `TELEGRAM_BOT_TOKEN` | Токен от BotFather. Сейчас общий загрузчик требует его даже в режиме VK; healthcheck также проверяет его формат. |
+| `TELEGRAM_PROXY_URL` | Необязательный URL SOCKS5/SOCKS4/HTTP-прокси для запросов Telegram Bot API, например `socks5://10.77.77.1:1080`. Пустое значение сохраняет прямой доступ; VK, GitHub и AI Gateway эту настройку не используют. Если прокси требует пароль, храните URL только в `.env`, вне Git. |
 | `VK_BOT_TOKEN`, `VK_GROUP_ID` | Токен сообщества и положительный ID группы для VK. Для бота нужно настроить сообщения сообщества и Bots Long Poll. |
 | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` | Обязательная конфигурация OpenAI-compatible LLM. Значения провайдера и моделей в шаблоне — настройки проекта, доступность нужно проверять у своего провайдера. |
 | `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_DOCUMENT_MODEL`, `EMBEDDING_QUERY_MODEL` | Для semantic search заполнить все четыре. Частично заполненная группа вызывает ошибку. |

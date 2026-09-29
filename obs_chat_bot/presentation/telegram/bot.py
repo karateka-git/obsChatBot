@@ -56,14 +56,23 @@ class _FatalPollingError(BaseException):
 def run_telegram_bot(
     *,
     token: str,
+    proxy_url: str | None = None,
     incoming_message_processor: IncomingMessageProcessor,
     logger: logging.Logger,
 ) -> None:
-    """Запускает Telegram-бота в polling-режиме."""
+    """Запускает Telegram-бота в polling-режиме.
+
+    Args:
+        token: Токен Telegram Bot API.
+        proxy_url: Адрес прокси для Bot API или `None` для прямого подключения.
+        incoming_message_processor: Обработчик входящих сообщений.
+        logger: Логгер безопасных runtime-событий.
+    """
     try:
         asyncio.run(
             _run_telegram_bot(
                 token=token,
+                proxy_url=proxy_url,
                 incoming_message_processor=incoming_message_processor,
                 logger=logger,
             )
@@ -79,12 +88,13 @@ def run_telegram_bot(
 async def _run_telegram_bot(
     *,
     token: str,
+    proxy_url: str | None = None,
     incoming_message_processor: IncomingMessageProcessor,
     logger: logging.Logger,
 ) -> None:
     """Асинхронно запускает polling Telegram-бота."""
     aiogram = _load_aiogram()
-    bot = _create_polling_bot(aiogram, token=token)
+    bot = _create_polling_bot(aiogram, token=token, proxy_url=proxy_url)
     dispatcher = aiogram.Dispatcher()
 
     _register_handlers(
@@ -111,7 +121,12 @@ async def _run_telegram_bot(
         await bot.session.close()
 
 
-def _create_polling_bot(aiogram: Any, *, token: str) -> Any:
+def _create_polling_bot(
+    aiogram: Any,
+    *,
+    token: str,
+    proxy_url: str | None = None,
+) -> Any:
     """Создаёт Bot, который не повторяет неустранимые polling-ошибки.
 
     Временные ошибки намеренно остаются обычными исключениями: их retry и
@@ -120,6 +135,7 @@ def _create_polling_bot(aiogram: Any, *, token: str) -> Any:
     Args:
         aiogram: Загруженный модуль aiogram.
         token: Токен Telegram Bot API.
+        proxy_url: Адрес SOCKS/HTTP-прокси либо `None`.
 
     Returns:
         Экземпляр совместимого с aiogram `Bot`.
@@ -138,7 +154,12 @@ def _create_polling_bot(aiogram: Any, *, token: str) -> Any:
             ) as error:
                 raise _FatalPollingError(error) from error
 
-    return PollingBot(token=token)
+    if proxy_url is None:
+        return PollingBot(token=token)
+
+    from aiogram.client.session.aiohttp import AiohttpSession
+
+    return PollingBot(token=token, session=AiohttpSession(proxy=proxy_url))
 
 
 async def _start_polling_with_retries(
