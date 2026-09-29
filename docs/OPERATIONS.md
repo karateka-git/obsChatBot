@@ -10,8 +10,8 @@
 
 Текущий production развёрнут в `/opt/obs-chat-bot` на H3llo VPS. Конфигурация
 `.env`, PEM GitHub App и SQLite не хранятся в Git. VK работает напрямую,
-Telegram Bot API доступен через выделенный VPN и прокси. Реальный ответ на
-сообщение Telegram после включения ещё ожидает [проверки](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
+Telegram Bot API доступен через выделенный VPN и прокси. Пользовательский
+ответ на `/status` подтверждён после включения.
 
 Для Telegram подготовлен отдельный WireGuard-интерфейс `wgobs` между H3LLO
 (`10.77.77.2`) и Timeweb (`10.77.77.1`). На Timeweb SOCKS5-прокси Dante

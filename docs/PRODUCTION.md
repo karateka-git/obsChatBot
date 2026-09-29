@@ -52,7 +52,8 @@ ssh -i "C:\Users\compadre\Downloads\SSH\H3LLO_CLOUD\karateka" user@91.188.213.14
 `restart=unless-stopped`. `obs-chat-bot.service` перезапущен и восстановил
 оба канала; backup timer активен. Healthcheck прошёл, Telegram `getMe` через
 прокси успешен, запуск Telegram polling и VK Long Poll подтверждён журналом.
-Пользовательский обмен сообщениями Telegram после обновления ещё не проверялся.
+Пользователь подтвердил ответ Telegram-бота на `/status`; обработка update
+подтверждена журналом контейнера.
 
 ## Проверенный сценарий
 
@@ -63,8 +64,8 @@ VK работает в production: регистрация, подключени�
 Прямое HTTPS-соединение с `api.telegram.org` с H3LLO недоступно. Telegram
 использует выделенный WireGuard и SOCKS5; `TELEGRAM_PROXY_URL` хранится в
 серверном `.env` с правами `600`. Получение данных бота и polling с VPS
-работают. Отправку ответа на реальное входящее сообщение нужно проверить
-отдельно; этот критерий остаётся в [бэклоге](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
+работают. Ответ на реальную команду `/status` проверен пользователем;
+результат отмечен в [roadmap](ROADMAP.md#доступ-telegram-bot-api-с-российских-vps).
 
 ## Базовые команды
 
