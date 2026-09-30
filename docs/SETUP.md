@@ -33,6 +33,7 @@ embedding key приложение не готово к запуску. Пере
 | `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_DOCUMENT_MODEL`, `EMBEDDING_QUERY_MODEL` | Для semantic search заполнить все четыре. Частично заполненная группа вызывает ошибку. |
 | `EMBEDDING_PRICE_PER_MILLION_TOKENS`, `EMBEDDING_PRICE_CURRENCY`, `EMBEDDING_TARIFF_VERSION` | Необязательная группа оценки стоимости: заполнить все три или оставить все пустыми. Цена конечная и неотрицательная, валюта — три заглавные латинские буквы. |
 | `CHUNK_MINIMUM_SIZE_CHARS`, `CHUNK_TARGET_SIZE_CHARS`, `CHUNK_MAXIMUM_SIZE_CHARS` | Необязательные положительные целые, по умолчанию `300`, `3000`, `6000`; требуется `minimum <= target <= maximum`. |
+| `OBSIDIAN_CREATED_NOTE_TAG` | Необязательное имя служебного Obsidian-тега без `#`. Если переменная отсутствует, используется `knowledge-catcher`; значение `off` без учёта регистра отключает маркировку. Пустое или некорректное заданное значение вызывает ошибку конфигурации. |
 | `GITHUB_APP_ID`, `GITHUB_CLIENT_ID`, `GITHUB_APP_SLUG`, `GITHUB_PRIVATE_KEY_PATH` | Заполнить все четыре для работы с vault или оставить всю группу пустой. Для полного сценария бота GitHub App необходима. |
 
 **Особенность текущего Compose:** `docker-compose.yml` переопределяет
@@ -51,6 +52,14 @@ embedding key приложение не готово к запуску. Пере
 `GITHUB_PRIVATE_KEY_PATH=data/github-app.pem`: каталог `data/` смонтирован в
 контейнер как `/app/data`. Путь Windows вне этого тома контейнеру недоступен.
 До подключения vault подготовьте обязательные правила по той же инструкции.
+
+Служебный тег добавляется только новым заметкам из предложений `add` и только в
+YAML frontmatter; при отсутствии frontmatter приложение создаёт его. `update`
+не маркирует пользовательские заметки задним числом и сохраняет исходные
+frontmatter tags уже существующей заметки. Изменение настройки не выполняет
+массовую маркировку старых файлов. При `OBSIDIAN_CREATED_NOTE_TAG=off` приложение
+не добавляет marker; для безопасного `update` оно также не принимает новые tags
+от LLM, поскольку прежнее имя marker определить невозможно.
 
 ## Запустить нужный канал
 

@@ -64,6 +64,74 @@ class ConfigTest(unittest.TestCase):
 
         self.assertFalse(config.app_debug)
 
+    def test_load_config_defaults_created_note_tag(self) -> None:
+        """Без env-настройки заметки бота получают согласованный тег."""
+        with patch.dict(os.environ, _env(), clear=True):
+            config = load_config()
+
+        self.assertEqual(config.obsidian_created_note_tag, "knowledge-catcher")
+        self.assertEqual(
+            config.safe_summary()["obsidian_created_note_tag"],
+            "knowledge-catcher",
+        )
+
+    def test_load_config_reads_hierarchical_created_note_tag(self) -> None:
+        """Тег может использовать поддерживаемую Obsidian иерархию через `/`."""
+        with patch.dict(
+            os.environ,
+            _env(OBSIDIAN_CREATED_NOTE_TAG="topic/ai"),
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertEqual(config.obsidian_created_note_tag, "topic/ai")
+
+    def test_load_config_disables_created_note_tag_case_insensitively(self) -> None:
+        """Специальное значение `off` отключает маркер без учёта регистра."""
+        with patch.dict(
+            os.environ,
+            _env(OBSIDIAN_CREATED_NOTE_TAG="OfF"),
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertIsNone(config.obsidian_created_note_tag)
+        self.assertEqual(
+            config.safe_summary()["obsidian_created_note_tag"],
+            "disabled",
+        )
+
+    def test_load_config_rejects_empty_created_note_tag(self) -> None:
+        """Явно заданная пустая строка не интерпретируется как отключение."""
+        with patch.dict(
+            os.environ,
+            _env(OBSIDIAN_CREATED_NOTE_TAG=""),
+            clear=True,
+        ):
+            with self.assertRaises(ConfigError):
+                load_config()
+
+    def test_load_config_rejects_invalid_created_note_tags(self) -> None:
+        """Маркер соответствует синтаксису Obsidian и текущего parser Markdown."""
+        invalid_values = (
+            "#knowledge-catcher",
+            "knowledge catcher",
+            "topic//ai",
+            "/topic",
+            "topic/",
+            "123",
+        )
+
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with patch.dict(
+                    os.environ,
+                    _env(OBSIDIAN_CREATED_NOTE_TAG=value),
+                    clear=True,
+                ):
+                    with self.assertRaises(ConfigError):
+                        load_config()
+
     def test_load_config_reads_optional_chunking_settings(self) -> None:
         """Технические размеры chunks читаются отдельно от правил vault."""
         with patch.dict(

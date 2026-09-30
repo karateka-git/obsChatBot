@@ -266,6 +266,7 @@ def create_prepare_obsidian_review_use_case(
     openai_model: str,
     embedding_config: EmbeddingConfig | None,
     chunking_config: ChunkingConfig = ChunkingConfig(),
+    created_note_tag: str | None = "knowledge-catcher",
 ) -> PrepareObsidianReviewUseCase:
     """Собирает retrieval, preflight и двухфазную LLM-генерацию 10.9.
 
@@ -276,6 +277,7 @@ def create_prepare_obsidian_review_use_case(
         openai_model: Модель планирования и написания Markdown.
         embedding_config: Semantic provider либо `None` для явного FTS fallback.
         chunking_config: Ожидаемая signature локального chunk index.
+        created_note_tag: Служебный тег новых заметок или `None` для отключения.
 
     Returns:
         Полностью собранный use case подготовки Obsidian review.
@@ -306,6 +308,7 @@ def create_prepare_obsidian_review_use_case(
         ),
         proposal_repository=SQLiteObsidianProposalRepository(connection),
         error_recorder=SQLiteProcessingErrorRecorder(connection),
+        created_note_tag=created_note_tag,
     )
 
 

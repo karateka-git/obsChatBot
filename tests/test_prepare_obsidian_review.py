@@ -99,6 +99,10 @@ class PrepareObsidianReviewTests(unittest.TestCase):
         self.assertEqual(result.proposal.base_commit_sha, "commit-sha")
         self.assertIsNone(result.proposal.target_blob_sha)
         self.assertEqual(
+            result.proposal.proposed_markdown,
+            "---\ntags:\n  - knowledge-catcher\n---\n# Docker volumes\nКонспект",
+        )
+        self.assertEqual(
             [note.path for note in generator.writing_context.neighboring_notes],
             ["Tech/A.md", "Tech/C.md"],
         )
@@ -124,6 +128,128 @@ class PrepareObsidianReviewTests(unittest.TestCase):
         self.assertIn("--- a/Tech/Docker.md", result.markdown_diff)
         self.assertIn("+++ b/Tech/Docker.md", result.markdown_diff)
         self.assertIn("+Обновлённый конспект", result.markdown_diff)
+        self.assertNotIn("knowledge-catcher", result.proposal.proposed_markdown)
+
+    def test_update_preserves_bot_marker_in_pending_and_preview(self) -> None:
+        """Pending и diff используют Markdown с восстановленным marker бота."""
+        target = _note(
+            2,
+            "Tech/Bot.md",
+            blob_sha="target-sha",
+            markdown="---\ntags: [knowledge-catcher, docker]\n---\n# Было",
+        )
+        generator = RecordingGenerator(
+            plan=ObsidianReviewPlan(
+                action=ObsidianProposalAction.UPDATE,
+                target_path=target.path,
+                reasoning="Дополнение ботской заметки.",
+            ),
+            markdown="# Стало\nОбновлённый текст",
+        )
+
+        result = self._use_case(notes=[target], generator=generator).execute(
+            self._command()
+        )
+
+        self.assertIn("knowledge-catcher", result.proposal.proposed_markdown)
+        self.assertIn("docker", result.proposal.proposed_markdown)
+        self.assertIn("+tags:", result.markdown_diff)
+        self.assertIn("+# Стало", result.markdown_diff)
+
+    def test_update_rejects_marker_added_to_user_note(self) -> None:
+        """Пользовательская заметка не получает marker из LLM update."""
+        target = _note(2, "Tech/User.md", blob_sha="target-sha")
+        repository = ArticleRepositoryFake(self.article)
+        generator = RecordingGenerator(
+            plan=ObsidianReviewPlan(
+                action=ObsidianProposalAction.UPDATE,
+                target_path=target.path,
+                reasoning="Обновление пользовательской заметки.",
+            ),
+            markdown=(
+                "---\ntags: [knowledge-catcher]\n---\n"
+                "# Пользовательская заметка\nОбновление"
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            PrepareObsidianReviewError,
+            "invalid updated-note marker placement",
+        ):
+            self._use_case(
+                article_repository=repository,
+                notes=[target],
+                generator=generator,
+            ).execute(self._command())
+
+        self.assertEqual(repository.article.status, ArticleStatus.ANALYZED)
+
+    def test_update_preserves_existing_tags_when_marker_is_disabled(self) -> None:
+        """Режим `off` сохраняет marker через общую защиту исходных tags."""
+        target = _note(
+            2,
+            "Tech/Bot.md",
+            blob_sha="target-sha",
+            markdown="---\ntags: [knowledge-catcher, docker]\n---\n# Было",
+        )
+        generator = RecordingGenerator(
+            plan=ObsidianReviewPlan(
+                action=ObsidianProposalAction.UPDATE,
+                target_path=target.path,
+                reasoning="Дополнение ботской заметки.",
+            ),
+            markdown="# Стало",
+        )
+
+        result = self._use_case(
+            notes=[target],
+            generator=generator,
+            created_note_tag=None,
+        ).execute(self._command())
+
+        self.assertIn("knowledge-catcher", result.proposal.proposed_markdown)
+        self.assertIn("docker", result.proposal.proposed_markdown)
+
+    def test_add_keeps_markdown_unchanged_when_marker_is_disabled(self) -> None:
+        """Отключённая настройка не создаёт frontmatter в add proposal."""
+        generator = RecordingGenerator(
+            plan=ObsidianReviewPlan(
+                action=ObsidianProposalAction.ADD,
+                target_path="Tech/New.md",
+                reasoning="Новая заметка.",
+            ),
+            markdown="# Новая заметка\nТекст",
+        )
+
+        result = self._use_case(
+            generator=generator,
+            created_note_tag=None,
+        ).execute(self._command())
+
+        self.assertEqual(result.proposal.proposed_markdown, "# Новая заметка\nТекст")
+
+    def test_add_rejects_inline_created_note_marker_before_save(self) -> None:
+        """Inline-маркер LLM останавливает add до сохранения pending proposal."""
+        repository = ArticleRepositoryFake(self.article)
+        generator = RecordingGenerator(
+            plan=ObsidianReviewPlan(
+                action=ObsidianProposalAction.ADD,
+                target_path="Tech/New.md",
+                reasoning="Новая заметка.",
+            ),
+            markdown="# Новая заметка\n#knowledge-catcher",
+        )
+
+        with self.assertRaisesRegex(
+            PrepareObsidianReviewError,
+            "invalid created-note marker placement",
+        ):
+            self._use_case(
+                article_repository=repository,
+                generator=generator,
+            ).execute(self._command())
+
+        self.assertEqual(repository.article.status, ArticleStatus.ANALYZED)
 
     def test_skip_does_not_call_markdown_writer(self) -> None:
         """Skip формирует предложение без фиктивного Markdown или target path."""
@@ -188,6 +314,7 @@ class PrepareObsidianReviewTests(unittest.TestCase):
         search=None,
         generator=None,
         error_recorder=None,
+        created_note_tag="knowledge-catcher",
     ) -> PrepareObsidianReviewUseCase:
         article_repository = article_repository or ArticleRepositoryFake(self.article)
         return PrepareObsidianReviewUseCase(
@@ -207,6 +334,7 @@ class PrepareObsidianReviewTests(unittest.TestCase):
             ),
             proposal_repository=ProposalRepositoryFake(article_repository),
             error_recorder=error_recorder,
+            created_note_tag=created_note_tag,
         )
 
 
@@ -318,7 +446,13 @@ class ErrorRecorderFake:
         self.records.append(kwargs)
 
 
-def _note(note_id: int, path: str, *, blob_sha: str | None = None) -> VaultNote:
+def _note(
+    note_id: int,
+    path: str,
+    *,
+    blob_sha: str | None = None,
+    markdown: str | None = None,
+) -> VaultNote:
     """Создаёт сохранённую заметку для preflight-тестов."""
     return VaultNote(
         id=note_id,
@@ -326,7 +460,7 @@ def _note(note_id: int, path: str, *, blob_sha: str | None = None) -> VaultNote:
         vault_id=4,
         path=path,
         blob_sha=blob_sha or f"sha-{note_id}",
-        markdown=f"# {path}\nСодержимое",
+        markdown=markdown or f"# {path}\nСодержимое",
         title=path.rsplit("/", 1)[-1].removesuffix(".md"),
     )
 

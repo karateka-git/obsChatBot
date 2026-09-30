@@ -26,6 +26,10 @@ from obs_chat_bot.application.vaults.ports import (
     VaultInstructionRepository,
     VaultNoteRepository,
 )
+from obs_chat_bot.application.vaults.markdown import (
+    ensure_frontmatter_tag,
+    normalize_updated_markdown,
+)
 from obs_chat_bot.domain.articles.analysis import ArticleAnalysisResult
 from obs_chat_bot.domain.reviews.entities import (
     ObsidianProposal,
@@ -83,6 +87,7 @@ class PrepareObsidianReviewUseCase:
         proposal_repository: ObsidianProposalRepository,
         query_builder: ArticleSearchQueryBuilder | None = None,
         error_recorder: ProcessingErrorRecorder | None = None,
+        created_note_tag: str | None = "knowledge-catcher",
     ) -> None:
         self._article_repository = article_repository
         self._vault_repository = vault_repository
@@ -93,6 +98,7 @@ class PrepareObsidianReviewUseCase:
         self._proposal_repository = proposal_repository
         self._query_builder = query_builder or ArticleSearchQueryBuilder()
         self._error_recorder = error_recorder
+        self._created_note_tag = created_note_tag
 
     def execute(
         self,
@@ -211,6 +217,30 @@ class PrepareObsidianReviewUseCase:
             ).strip()
             if not proposed_markdown:
                 raise PrepareObsidianReviewError("Generator returned empty Markdown")
+            if plan.action is ObsidianProposalAction.ADD:
+                try:
+                    proposed_markdown = ensure_frontmatter_tag(
+                        proposed_markdown,
+                        self._created_note_tag,
+                    )
+                except ValueError as error:
+                    raise PrepareObsidianReviewError(
+                        "Generator returned invalid created-note marker placement"
+                    ) from error
+            elif (
+                plan.action is ObsidianProposalAction.UPDATE
+                and target_note is not None
+            ):
+                try:
+                    proposed_markdown = normalize_updated_markdown(
+                        target_note.markdown,
+                        proposed_markdown,
+                        self._created_note_tag,
+                    )
+                except ValueError as error:
+                    raise PrepareObsidianReviewError(
+                        "Generator returned invalid updated-note marker placement"
+                    ) from error
 
         proposal = ObsidianProposal(
             app_user_id=article.app_user_id,

@@ -22,6 +22,12 @@ REQUIRED_ENV_VARS = (
     "OPENAI_MODEL",
 )
 
+_DEFAULT_OBSIDIAN_CREATED_NOTE_TAG = "knowledge-catcher"
+_OBSIDIAN_TAG_PATTERN = re.compile(
+    r"(?=.*[^\d/])[\w-]+(?:/[\w-]+)*",
+    re.UNICODE,
+)
+
 
 class ConfigError(ValueError):
     """Raised when required application configuration is missing."""
@@ -125,6 +131,8 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
+    """Содержит настройки приложения, подготовленные для composition root."""
+
     app_env: str
     database_path: Path
     telegram_bot_token: str
@@ -138,6 +146,7 @@ class AppConfig:
     vk_group_id: int | None = None
     github_app: GitHubAppConfig | None = None
     embedding: EmbeddingConfig | None = None
+    obsidian_created_note_tag: str | None = _DEFAULT_OBSIDIAN_CREATED_NOTE_TAG
 
     @property
     def data_dir(self) -> Path:
@@ -200,6 +209,11 @@ class AppConfig:
                 and self.embedding.tariff_version is not None
                 else "missing"
             ),
+            "obsidian_created_note_tag": (
+                self.obsidian_created_note_tag
+                if self.obsidian_created_note_tag is not None
+                else "disabled"
+            ),
         }
 
 
@@ -226,6 +240,7 @@ def load_config() -> AppConfig:
         vk_group_id=_get_optional_int("VK_GROUP_ID"),
         github_app=_load_github_app_config(),
         embedding=_load_embedding_config(),
+        obsidian_created_note_tag=_get_obsidian_created_note_tag(),
     )
 
 
@@ -293,6 +308,28 @@ def _get_optional_int(name: str) -> int | None:
     if parsed <= 0:
         raise ConfigError(f"Environment variable {name} must be positive")
     return parsed
+
+
+def _get_obsidian_created_note_tag() -> str | None:
+    """Читает тег заметок бота и проверяет поддерживаемый Obsidian-синтаксис.
+
+    Returns:
+        Имя тега без `#` или `None`, если маркер явно отключён значением `off`.
+
+    Raises:
+        ConfigError: Если задано пустое или некорректное имя тега.
+    """
+    value = os.getenv("OBSIDIAN_CREATED_NOTE_TAG")
+    if value is None:
+        return _DEFAULT_OBSIDIAN_CREATED_NOTE_TAG
+    if value.casefold() == "off":
+        return None
+    if not value or _OBSIDIAN_TAG_PATTERN.fullmatch(value) is None:
+        raise ConfigError(
+            "Environment variable OBSIDIAN_CREATED_NOTE_TAG must be a valid "
+            "Obsidian tag name without #"
+        )
+    return value
 
 
 def _get_positive_int(name: str, *, default: int) -> int:

@@ -53,6 +53,8 @@ class OpenAIObsidianProposalGeneratorTests(unittest.TestCase):
         prompt = client.calls[0]["messages"][1]["content"]
         self.assertIn("--- Tech/A.md ---", prompt)
         self.assertIn("Соседний стиль", prompt)
+        system_prompt = client.calls[0]["messages"][0]["content"]
+        self.assertIn("Не добавляй служебный тег", system_prompt)
 
     def test_invalid_plan_is_rejected(self) -> None:
         """Свободный текст LLM не превращается в невалидное изменение vault."""

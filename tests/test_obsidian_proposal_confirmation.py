@@ -63,6 +63,29 @@ class ObsidianProposalConfirmationTests(unittest.TestCase):
         self.assertEqual(repository.note.blob_sha, "new-blob")
         self.assertEqual(sync.calls, [3])
 
+    def test_update_commits_pending_markdown_and_indexes_marker_metadata(self) -> None:
+        """Confirmation коммитит финальный pending и индексирует его frontmatter."""
+        markdown = (
+            "---\ntags: [knowledge-catcher, docker]\n---\n"
+            "# Updated\nНовый текст"
+        )
+        proposal = replace(
+            _proposal(ObsidianProposalAction.UPDATE),
+            proposed_markdown=markdown,
+        )
+        repository = ProposalRepositoryFake(proposal)
+        gateway = GitHubGatewayFake(
+            _state(target_blob_sha="old-blob", target_markdown="# Old")
+        )
+
+        result = _service(repository, self.vault, gateway).confirm(3)
+
+        self.assertEqual(result.status, ObsidianConfirmationStatus.APPLIED)
+        self.assertEqual(gateway.committed_markdown, markdown)
+        self.assertEqual(repository.note.markdown, markdown)
+        self.assertEqual(repository.note.tags, ("knowledge-catcher", "docker"))
+        self.assertIn("tags:", repository.note.frontmatter)
+
     def test_embedding_failure_does_not_undo_successful_commit(self) -> None:
         """Post-commit индексация оставляет proposal применённым при сбое API."""
         repository = ProposalRepositoryFake(_proposal(ObsidianProposalAction.ADD))
@@ -218,13 +241,15 @@ class GitHubGatewayFake:
         self.error = error
         self.inspect_calls = 0
         self.commit_calls = 0
+        self.committed_markdown: str | None = None
 
     def inspect_vault_target(self, vault, *, target_path):
         self.inspect_calls += 1
         return self.state
 
-    def commit_vault_markdown(self, vault, **_kwargs):
+    def commit_vault_markdown(self, vault, **kwargs):
         self.commit_calls += 1
+        self.committed_markdown = kwargs["markdown"]
         if self.error is not None:
             raise self.error
         return GitHubVaultCommitResult(

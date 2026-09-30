@@ -169,6 +169,7 @@ def main() -> int:
             github_app_config=config.github_app,
             chunking_config=config.chunking,
             embedding_config=config.embedding,
+            obsidian_created_note_tag=config.obsidian_created_note_tag,
             logger=logger,
         )
 
@@ -183,6 +184,7 @@ def main() -> int:
             github_app_config=config.github_app,
             chunking_config=config.chunking,
             embedding_config=config.embedding,
+            obsidian_created_note_tag=config.obsidian_created_note_tag,
             logger=logger,
         )
 
@@ -499,6 +501,7 @@ def run_telegram_bot_command(
     github_app_config: GitHubAppConfig | None = None,
     chunking_config: ChunkingConfig = ChunkingConfig(),
     embedding_config: EmbeddingConfig | None = None,
+    obsidian_created_note_tag: str | None = "knowledge-catcher",
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
@@ -516,6 +519,7 @@ def run_telegram_bot_command(
         github_app_config: Настройки GitHub App или `None`.
         chunking_config: Policy разбиения заметок на chunks.
         embedding_config: Настройки semantic index либо `None`.
+        obsidian_created_note_tag: Служебный тег новых заметок или `None`.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case, полезная для тестов без polling.
         analysis_use_case_factory: Factory use case анализа, полезная для тестов.
@@ -555,6 +559,7 @@ def run_telegram_bot_command(
                     github_repository_gateway=github_gateway,
                     chunking_config=chunking_config,
                     embedding_config=embedding_config,
+                    obsidian_created_note_tag=obsidian_created_note_tag,
                     completion_handler=completion_handler,
                 )
             ),
@@ -584,6 +589,7 @@ def run_vk_bot_command(
     github_app_config: GitHubAppConfig | None = None,
     chunking_config: ChunkingConfig = ChunkingConfig(),
     embedding_config: EmbeddingConfig | None = None,
+    obsidian_created_note_tag: str | None = "knowledge-catcher",
     logger: logging.Logger,
     use_case_factory: ProcessArticleUrlUseCaseFactory | None = None,
     analysis_use_case_factory: AnalyzeArticleUseCaseFactory | None = None,
@@ -601,6 +607,7 @@ def run_vk_bot_command(
         github_app_config: Настройки GitHub App или `None`.
         chunking_config: Policy разбиения заметок на chunks.
         embedding_config: Настройки semantic index либо `None`.
+        obsidian_created_note_tag: Служебный тег новых заметок или `None`.
         logger: Logger для результата запуска.
         use_case_factory: Factory use case для тестов.
         analysis_use_case_factory: Factory analysis use case для тестов.
@@ -643,6 +650,7 @@ def run_vk_bot_command(
                     github_repository_gateway=github_gateway,
                     chunking_config=chunking_config,
                     embedding_config=embedding_config,
+                    obsidian_created_note_tag=obsidian_created_note_tag,
                     completion_handler=completion_handler,
                 )
             ),
@@ -674,6 +682,7 @@ def process_channel_incoming_message(
     github_repository_gateway: GitHubRepositoryGateway | None = None,
     chunking_config: ChunkingConfig = ChunkingConfig(),
     embedding_config: EmbeddingConfig | None = None,
+    obsidian_created_note_tag: str | None = "knowledge-catcher",
     completion_handler: IncomingCompletionHandler | None = None,
 ) -> ProcessIncomingMessageResult:
     """Обрабатывает одно сообщение внешнего канала внутри worker thread.
@@ -690,6 +699,7 @@ def process_channel_incoming_message(
         github_repository_gateway: GitHub App gateway чтения repository.
         chunking_config: Policy разбиения заметок на chunks.
         embedding_config: Настройки semantic index либо `None`.
+        obsidian_created_note_tag: Служебный тег новых заметок или `None`.
         completion_handler: Callback итогового ответа в исходный чат.
 
     Returns:
@@ -746,6 +756,7 @@ def process_channel_incoming_message(
                 openai_model=openai_model,
                 embedding_config=embedding_config,
                 chunking_config=chunking_config,
+                created_note_tag=obsidian_created_note_tag,
             ),
             obsidian_confirmation_service=(
                 create_obsidian_proposal_confirmation_service(
